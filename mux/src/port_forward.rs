@@ -222,6 +222,27 @@ impl PortForwardManager {
             .filter(|e| matches!(e.state, ForwardState::Active { .. }))
             .count()
     }
+
+    /// Clean up all state on session close or reconnection.
+    /// Stops all active forwards and clears detected ports.
+    pub fn cleanup(&mut self) {
+        for (port, entry) in self.entries.drain() {
+            if matches!(entry.state, ForwardState::Active { .. }) {
+                let _ = self
+                    .event_tx
+                    .try_send(PortForwardEvent::PortStopped { remote_port: port });
+            }
+        }
+        log::info!("Port forward manager: cleaned up all entries");
+    }
+
+    /// Re-detect ports after reconnection.
+    /// Clears all entries but preserves exclusions and auto-forward setting.
+    pub fn reset_for_reconnect(&mut self) {
+        self.cleanup();
+        // Exclusions and auto_forward settings are preserved
+        log::info!("Port forward manager: reset for reconnection");
+    }
 }
 
 /// Run the /proc/net/tcp port detection loop on a remote host.
@@ -457,6 +478,39 @@ mod test {
         assert_eq!(entries[0].remote_port, 3000);
         assert_eq!(entries[1].remote_port, 5432);
         assert_eq!(entries[2].remote_port, 8080);
+    }
+
+    #[test]
+    fn test_cleanup() {
+        let mut mgr = PortForwardManager::new(true, HashSet::new());
+        let rx = mgr.event_receiver();
+
+        mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
+        mgr.mark_forwarded(3000, 3000);
+        mgr.port_detected(8080, "0.0.0.0".into(), DetectionSource::ProcNetTcp);
+
+        // Drain existing events
+        while rx.try_recv().is_ok() {}
+
+        mgr.cleanup();
+        assert_eq!(mgr.entries().len(), 0);
+
+        // Should get a PortStopped event for the forwarded port
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(event, PortForwardEvent::PortStopped { remote_port: 3000 }));
+    }
+
+    #[test]
+    fn test_reset_preserves_exclusions() {
+        let mut mgr = PortForwardManager::new(true, [22].into_iter().collect());
+        mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
+
+        mgr.reset_for_reconnect();
+        assert_eq!(mgr.entries().len(), 0);
+        assert!(mgr.excluded_ports().contains(&22));
+
+        // Port 22 should still be excluded after reset
+        assert!(mgr.port_detected(22, "0.0.0.0".into(), DetectionSource::ProcNetTcp).is_none());
     }
 
     #[test]

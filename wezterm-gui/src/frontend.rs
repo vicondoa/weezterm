@@ -150,11 +150,16 @@ impl GuiFrontEnd {
                         &format!("Opened {} in browser", url),
                     );
                 }
+                // --- weezterm remote features ---
                 MuxNotification::Alert {
                     pane_id: _,
-                    alert: Alert::PortDetected { .. },
+                    alert: Alert::PortDetected { port, url },
                 } => {
-                    // Port detection handling will be implemented in a later phase
+                    log::info!("Port detected in terminal output: {} ({})", port, url);
+                    persistent_toast_notification(
+                        "Port Detected",
+                        &format!("Detected port {} — auto-forwarding enabled", port),
+                    );
                 }
                 MuxNotification::Alert {
                     pane_id: _,

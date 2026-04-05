@@ -1247,7 +1247,10 @@ impl TermWindow {
                     window.invalidate();
                 }
                 MuxNotification::Alert {
-                    alert: Alert::ToastNotification { .. },
+                    alert:
+                        Alert::ToastNotification { .. }
+                        | Alert::PortDetected { .. }
+                        | Alert::OpenUrl(_),
                     ..
                 } => {}
                 MuxNotification::TabAddedToWindow {
@@ -1516,7 +1519,10 @@ impl TermWindow {
                 }
             }
             MuxNotification::Alert {
-                alert: Alert::ToastNotification { .. },
+                alert:
+                    Alert::ToastNotification { .. }
+                    | Alert::PortDetected { .. }
+                    | Alert::OpenUrl(_),
                 ..
             }
             | MuxNotification::AssignClipboard { .. }

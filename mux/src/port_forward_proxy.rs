@@ -97,6 +97,16 @@ impl PortForwardProxy {
     pub fn is_stopped(&self) -> bool {
         self.stop_flag.load(Ordering::SeqCst)
     }
+
+    /// Check if the proxy had to fall back to a different local port.
+    /// Returns Some(preferred) if there was a conflict, None if the preferred port was used.
+    pub fn port_conflict(&self, preferred: u16) -> Option<u16> {
+        if self.local_port != preferred {
+            Some(preferred)
+        } else {
+            None
+        }
+    }
 }
 
 /// Copy data between a local TCP stream and an SSH channel (via FileDescriptors).
