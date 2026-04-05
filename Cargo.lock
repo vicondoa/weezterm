@@ -6755,6 +6755,7 @@ dependencies = [
  "umask",
  "url",
  "wezterm-dynamic",
+ "wezterm-open-url",
  "wezterm-ssh",
  "wezterm-term",
  "wezterm-uds",

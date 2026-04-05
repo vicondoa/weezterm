@@ -5,7 +5,9 @@
 //!
 //! --- weezterm remote features ---
 
+use crate::port_detect::{ProcNetTcpScanner, TerminalOutputPortScanner};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 /// How a port was detected
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,6 +224,112 @@ impl PortForwardManager {
     }
 }
 
+/// Run the /proc/net/tcp port detection loop on a remote host.
+///
+/// This periodically executes `cat /proc/net/tcp /proc/net/tcp6` on the remote
+/// via SSH exec, parses the output, and feeds new ports to the manager.
+///
+/// Designed to be spawned as an async task.
+pub async fn run_proc_net_tcp_detection(
+    session: wezterm_ssh::Session,
+    manager: std::sync::Arc<std::sync::Mutex<PortForwardManager>>,
+    poll_interval: Duration,
+    stop_rx: smol::channel::Receiver<()>,
+) {
+    let mut scanner = ProcNetTcpScanner::new(
+        manager.lock().unwrap().excluded_ports().clone(),
+    );
+
+    loop {
+        // Check for stop signal
+        if stop_rx.try_recv().is_ok() {
+            log::debug!("Port detection loop: stop signal received");
+            break;
+        }
+
+        // Execute remote command to read /proc/net/tcp
+        match session
+            .exec("cat /proc/net/tcp /proc/net/tcp6 2>/dev/null", None)
+            .await
+        {
+            Ok(exec_result) => {
+                let mut buf = Vec::new();
+                let mut reader = exec_result.stdout;
+                let mut tmp = [0u8; 4096];
+                loop {
+                    match std::io::Read::read(&mut reader, &mut tmp) {
+                        Ok(0) => break,
+                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                        Err(_) => break,
+                    }
+                }
+
+                let content = String::from_utf8_lossy(&buf);
+
+                // Split output into tcp and tcp6 sections.
+                // Both sections start with a header containing "sl  local_address".
+                // We split on this header to separate the two concatenated outputs.
+                let sections: Vec<&str> =
+                    content.split("  sl  local_address").collect();
+
+                let tcp_content = if sections.len() > 1 {
+                    format!(
+                        "  sl  local_address{}",
+                        sections[1]
+                            .split("  sl  local_address")
+                            .next()
+                            .unwrap_or("")
+                    )
+                } else {
+                    String::new()
+                };
+
+                let tcp6_content = if sections.len() > 2 {
+                    format!("  sl  local_address{}", sections[2])
+                } else {
+                    String::new()
+                };
+
+                let new_ports = scanner.scan(&tcp_content, &tcp6_content);
+                if !new_ports.is_empty() {
+                    let mut mgr = manager.lock().unwrap();
+                    for port in &new_ports {
+                        let host = port.local_address.to_string();
+                        mgr.port_detected(port.port, host, DetectionSource::ProcNetTcp);
+                    }
+                    log::info!(
+                        "Port detection: found {} new port(s): {:?}",
+                        new_ports.len(),
+                        new_ports.iter().map(|p| p.port).collect::<Vec<_>>()
+                    );
+                }
+            }
+            Err(err) => {
+                log::debug!("Port detection: exec failed: {}", err);
+            }
+        }
+
+        // Wait for the poll interval or stop signal
+        smol::Timer::after(poll_interval).await;
+    }
+}
+
+/// Process terminal output text for port detection.
+///
+/// Call this with chunks of terminal output to detect localhost URLs.
+/// Returns a list of newly detected (port, url) pairs.
+pub fn scan_terminal_output(
+    scanner: &mut TerminalOutputPortScanner,
+    manager: &mut PortForwardManager,
+    text: &str,
+) -> Vec<(u16, String)> {
+    let new_ports = scanner.scan_text(text);
+    for (port, ref _url) in &new_ports {
+        manager.port_detected(*port, "127.0.0.1".into(), DetectionSource::TerminalOutput);
+    }
+    new_ports
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -349,5 +457,29 @@ mod test {
         assert_eq!(entries[0].remote_port, 3000);
         assert_eq!(entries[1].remote_port, 5432);
         assert_eq!(entries[2].remote_port, 8080);
+    }
+
+    #[test]
+    fn test_scan_terminal_output_integration() {
+        use crate::port_detect::TerminalOutputPortScanner;
+
+        let mut scanner = TerminalOutputPortScanner::new();
+        let mut mgr = PortForwardManager::new(true, HashSet::new());
+
+        let new = scan_terminal_output(
+            &mut scanner,
+            &mut mgr,
+            "Server at http://localhost:3000\nAlso http://127.0.0.1:8080",
+        );
+        assert_eq!(new.len(), 2);
+        assert_eq!(mgr.entries().len(), 2);
+
+        // Duplicate scan produces nothing new
+        let new = scan_terminal_output(
+            &mut scanner,
+            &mut mgr,
+            "Server at http://localhost:3000",
+        );
+        assert_eq!(new.len(), 0);
     }
 }

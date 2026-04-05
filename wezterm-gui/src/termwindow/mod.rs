@@ -3159,6 +3159,11 @@ impl TermWindow {
                 let modal = crate::termwindow::palette::CommandPalette::new(self);
                 self.set_modal(Rc::new(modal));
             }
+            // --- weezterm remote features ---
+            ShowPortForwardOverlay => {
+                // TODO: Wire up to the overlay in a future phase.
+                log::info!("ShowPortForwardOverlay triggered");
+            }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),

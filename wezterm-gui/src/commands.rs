@@ -2011,6 +2011,19 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
+        // --- weezterm remote features ---
+        ShowPortForwardOverlay => CommandDef {
+            brief: "Show port forwarding manager".into(),
+            doc: "Opens an overlay showing detected and forwarded ports \
+                  for the current SSH session. Use arrow keys to navigate, \
+                  Enter to toggle forwarding, F to forward a new port, \
+                  S to stop, and D to exclude a port."
+                .into(),
+            keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), "g".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: None,
+        },
     })
 }
 
@@ -2136,6 +2149,8 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ActivateLastTab,
         ShowLauncher,
         ShowTabNavigator,
+        // --- weezterm remote features ---
+        ShowPortForwardOverlay,
         // ----------------- Help
         OpenUri("https://wezterm.org/".to_string()),
         OpenUri("https://github.com/wezterm/wezterm/discussions/".to_string()),

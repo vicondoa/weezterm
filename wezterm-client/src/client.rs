@@ -317,6 +317,31 @@ fn process_unilateral(
 
             return Ok(());
         }
+        Pdu::PortDetectedNotification(notif) => {
+            log::info!(
+                "Remote port detected: {}:{} (process: {:?})",
+                notif.host,
+                notif.port,
+                notif.process_name
+            );
+            // TODO: Feed to PortForwardManager for auto-forwarding
+            return Ok(());
+        }
+        Pdu::OpenUrlOnClient(req) => {
+            log::info!("Remote requests opening URL: {}", req.url);
+            wezterm_open_url::open_url(&req.url);
+            return Ok(());
+        }
+        // These are request/response PDUs, not unilateral.
+        // They're handled by the serial-matching dispatch.
+        Pdu::GetDetectedPorts(_)
+        | Pdu::GetDetectedPortsResponse(_)
+        | Pdu::RequestPortForward(_)
+        | Pdu::RequestPortForwardResponse(_)
+        | Pdu::StopPortForward(_) => {
+            log::warn!("Unexpected request/response PDU in unilateral handler");
+            return Ok(());
+        }
         _ => {}
     }
 
