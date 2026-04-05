@@ -172,6 +172,38 @@ pub mod url_scraper {
     }
 }
 
+/// Adapter that scans text for localhost URLs and produces Alert-compatible events.
+/// This is designed to be called with terminal output text from the mux layer.
+pub struct TerminalOutputPortScanner {
+    /// Ports already detected from terminal output (to avoid duplicate alerts)
+    seen_ports: HashSet<u16>,
+}
+
+impl TerminalOutputPortScanner {
+    pub fn new() -> Self {
+        Self {
+            seen_ports: HashSet::new(),
+        }
+    }
+
+    /// Scan a chunk of terminal output text for localhost URLs.
+    /// Returns a list of (port, url) pairs for newly-detected ports.
+    pub fn scan_text(&mut self, text: &str) -> Vec<(u16, String)> {
+        let mut results = Vec::new();
+        for (port, url) in url_scraper::extract_ports(text) {
+            if self.seen_ports.insert(port) {
+                results.push((port, url));
+            }
+        }
+        results
+    }
+
+    /// Reset the scanner state (e.g., on reconnection).
+    pub fn reset(&mut self) {
+        self.seen_ports.clear();
+    }
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -340,5 +372,38 @@ mod test {
         let text = "Visit http://localhost for info";
         let ports = url_scraper::extract_ports(text);
         assert_eq!(ports.len(), 0); // No port number
+    }
+
+    // --- TerminalOutputPortScanner tests ---
+
+    #[test]
+    fn test_terminal_output_scanner_dedup() {
+        let mut scanner = TerminalOutputPortScanner::new();
+
+        // First scan finds the port
+        let results = scanner.scan_text("Server running at http://localhost:3000");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 3000);
+
+        // Second scan with same text produces nothing (already seen)
+        let results = scanner.scan_text("Server running at http://localhost:3000");
+        assert_eq!(results.len(), 0);
+
+        // New port is detected
+        let results = scanner.scan_text("Also at http://localhost:8080");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].0, 8080);
+    }
+
+    #[test]
+    fn test_terminal_output_scanner_reset() {
+        let mut scanner = TerminalOutputPortScanner::new();
+        scanner.scan_text("http://localhost:3000");
+        assert_eq!(scanner.scan_text("http://localhost:3000").len(), 0);
+
+        scanner.reset();
+        // After reset, the port should be detected again
+        let results = scanner.scan_text("http://localhost:3000");
+        assert_eq!(results.len(), 1);
     }
 }
