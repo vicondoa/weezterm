@@ -987,6 +987,35 @@ impl SessionHandler {
                 .detach();
             }
 
+            // --- weezterm remote features ---
+            Pdu::GetDetectedPorts(_) => {
+                // TODO: Return detected ports from PortForwardManager
+                send_response(Ok(Pdu::GetDetectedPortsResponse(
+                    GetDetectedPortsResponse { ports: vec![] },
+                )));
+            }
+            Pdu::RequestPortForward(req) => {
+                // TODO: Start port forwarding via PortForwardProxy
+                send_response(Ok(Pdu::RequestPortForwardResponse(
+                    RequestPortForwardResponse {
+                        local_port: req.preferred_local_port,
+                        success: false,
+                        error: Some(
+                            "Port forwarding not yet implemented in mux server mode".into(),
+                        ),
+                    },
+                )));
+            }
+            Pdu::StopPortForward(_) => {
+                // TODO: Stop port forwarding
+                send_response(Ok(Pdu::UnitResponse(UnitResponse {})));
+            }
+            // Unilateral PDUs (server→client) — should never be received by server
+            Pdu::PortDetectedNotification(_) | Pdu::OpenUrlOnClient(_) => {
+                log::warn!("Received client-bound PDU on server side, ignoring");
+                send_response(Err(anyhow!("expected a request, got {:?}", decoded.pdu)));
+            }
+
             Pdu::Invalid { .. } => send_response(Err(anyhow!("invalid PDU {:?}", decoded.pdu))),
             Pdu::Pong { .. }
             | Pdu::ListPanesResponse { .. }
@@ -1010,6 +1039,8 @@ impl SessionHandler {
             | Pdu::MovePaneToNewTabResponse { .. }
             | Pdu::TabAddedToWindow { .. }
             | Pdu::GetPaneRenderableDimensionsResponse { .. }
+            | Pdu::GetDetectedPortsResponse { .. }
+            | Pdu::RequestPortForwardResponse { .. }
             | Pdu::ErrorResponse { .. } => {
                 send_response(Err(anyhow!("expected a request, got {:?}", decoded.pdu)))
             }

@@ -646,6 +646,9 @@ pub enum KeyAssignment {
     PromptInputLine(PromptInputLine),
     InputSelector(InputSelector),
     Confirmation(Confirmation),
+
+    // --- weezterm remote features ---
+    ShowPortForwardOverlay,
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

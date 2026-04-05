@@ -37,6 +37,7 @@ url.workspace = true
 wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
+wezterm-open-url.workspace = true
 wezterm-uds.workspace = true
 
 [target."cfg(windows)".dependencies]

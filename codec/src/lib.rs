@@ -441,7 +441,7 @@ macro_rules! pdu {
 /// The overall version of the codec.
 /// This must be bumped when backwards incompatible changes
 /// are made to the types and protocol.
-pub const CODEC_VERSION: usize = 45;
+pub const CODEC_VERSION: usize = 46;
 
 // Defines the Pdu enum.
 // Each struct has an explicit identifying number.
@@ -502,6 +502,14 @@ pdu! {
     GetPaneDirection: 60,
     GetPaneDirectionResponse: 61,
     AdjustPaneSize: 62,
+    // --- weezterm remote features ---
+    GetDetectedPorts: 63,
+    GetDetectedPortsResponse: 64,
+    RequestPortForward: 65,
+    RequestPortForwardResponse: 66,
+    StopPortForward: 67,
+    PortDetectedNotification: 68,
+    OpenUrlOnClient: 69,
 }
 
 impl Pdu {
@@ -1142,6 +1150,58 @@ pub struct GetImageCellResponse {
     pub data: Option<Arc<ImageData>>,
 }
 
+// --- weezterm remote features ---
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetDetectedPorts {
+    pub domain_id: u64,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct GetDetectedPortsResponse {
+    pub ports: Vec<DetectedPortInfo>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct DetectedPortInfo {
+    pub port: u16,
+    pub host: String,
+    pub forwarded: bool,
+    pub local_port: Option<u16>,
+    pub label: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct RequestPortForward {
+    pub remote_port: u16,
+    pub remote_host: String,
+    pub preferred_local_port: u16,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct RequestPortForwardResponse {
+    pub local_port: u16,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct StopPortForward {
+    pub remote_port: u16,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct PortDetectedNotification {
+    pub port: u16,
+    pub host: String,
+    pub process_name: Option<String>,
+}
+
+#[derive(Deserialize, Serialize, PartialEq, Debug)]
+pub struct OpenUrlOnClient {
+    pub url: String,
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
@@ -1261,5 +1321,64 @@ mod test {
             },
             Pdu::decode(encoded.as_slice()).unwrap()
         );
+    }
+
+    #[test]
+    fn test_pdu_open_url_roundtrip() {
+        let mut encoded = Vec::new();
+        Pdu::OpenUrlOnClient(OpenUrlOnClient {
+            url: "https://example.com".into(),
+        })
+        .encode(&mut encoded, 0x50)
+        .unwrap();
+        let decoded = Pdu::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.serial, 0x50);
+        assert_eq!(
+            decoded.pdu,
+            Pdu::OpenUrlOnClient(OpenUrlOnClient {
+                url: "https://example.com".into(),
+            })
+        );
+    }
+
+    #[test]
+    fn test_pdu_port_forward_request_roundtrip() {
+        let mut encoded = Vec::new();
+        Pdu::RequestPortForward(RequestPortForward {
+            remote_port: 3000,
+            remote_host: "127.0.0.1".into(),
+            preferred_local_port: 3000,
+        })
+        .encode(&mut encoded, 0x51)
+        .unwrap();
+        let decoded = Pdu::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.serial, 0x51);
+    }
+
+    #[test]
+    fn test_pdu_detected_ports_response_roundtrip() {
+        let mut encoded = Vec::new();
+        Pdu::GetDetectedPortsResponse(GetDetectedPortsResponse {
+            ports: vec![
+                DetectedPortInfo {
+                    port: 3000,
+                    host: "0.0.0.0".into(),
+                    forwarded: true,
+                    local_port: Some(3000),
+                    label: None,
+                },
+                DetectedPortInfo {
+                    port: 8080,
+                    host: "127.0.0.1".into(),
+                    forwarded: false,
+                    local_port: None,
+                    label: Some("webpack".into()),
+                },
+            ],
+        })
+        .encode(&mut encoded, 0x52)
+        .unwrap();
+        let decoded = Pdu::decode(encoded.as_slice()).unwrap();
+        assert_eq!(decoded.serial, 0x52);
     }
 }

@@ -15,6 +15,9 @@ pub mod prompt;
 pub mod quickselect;
 pub mod selector;
 
+// --- weezterm remote features ---
+pub mod port_forward;
+
 pub use confirm_close_pane::{
     confirm_close_pane, confirm_close_tab, confirm_close_window, confirm_quit_program,
 };

@@ -138,6 +138,29 @@ impl GuiFrontEnd {
                 } => {
                     // Handled via TermWindowNotif; NOP it here.
                 }
+                // --- weezterm remote features ---
+                MuxNotification::Alert {
+                    pane_id: _,
+                    alert: Alert::OpenUrl(url),
+                } => {
+                    log::info!("Opening URL on local browser: {}", url);
+                    wezterm_open_url::open_url(&url);
+                    persistent_toast_notification(
+                        "Opening URL",
+                        &format!("Opened {} in browser", url),
+                    );
+                }
+                // --- weezterm remote features ---
+                MuxNotification::Alert {
+                    pane_id: _,
+                    alert: Alert::PortDetected { port, url },
+                } => {
+                    log::info!("Port detected in terminal output: {} ({})", port, url);
+                    persistent_toast_notification(
+                        "Port Detected",
+                        &format!("Detected port {} — auto-forwarding enabled", port),
+                    );
+                }
                 MuxNotification::Alert {
                     pane_id: _,
                     alert:

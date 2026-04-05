@@ -1247,7 +1247,10 @@ impl TermWindow {
                     window.invalidate();
                 }
                 MuxNotification::Alert {
-                    alert: Alert::ToastNotification { .. },
+                    alert:
+                        Alert::ToastNotification { .. }
+                        | Alert::PortDetected { .. }
+                        | Alert::OpenUrl(_),
                     ..
                 } => {}
                 MuxNotification::TabAddedToWindow {
@@ -1516,7 +1519,10 @@ impl TermWindow {
                 }
             }
             MuxNotification::Alert {
-                alert: Alert::ToastNotification { .. },
+                alert:
+                    Alert::ToastNotification { .. }
+                    | Alert::PortDetected { .. }
+                    | Alert::OpenUrl(_),
                 ..
             }
             | MuxNotification::AssignClipboard { .. }
@@ -2367,6 +2373,59 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    // --- weezterm remote features ---
+    fn show_port_forward_overlay(&mut self) {
+        use crate::overlay::port_forward::{PortDisplayEntry, PortForwardAction};
+        use mux::port_forward::{ForwardState, PortForwardEntry};
+        use mux::ssh::RemoteSshDomain;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        // Get port entries from the active pane's domain
+        let pane = match tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let domain_id = pane.domain_id();
+        let entries: Vec<PortDisplayEntry> =
+            if let Some(domain) = mux.get_domain(domain_id) {
+                if let Some(ssh_domain) = domain.downcast_ref::<RemoteSshDomain>() {
+                    ssh_domain
+                        .port_forward_entries()
+                        .into_iter()
+                        .map(|e| PortDisplayEntry {
+                            remote_port: e.remote_port,
+                            local_port: e.local_port,
+                            remote_host: e.remote_host,
+                            label: e.label,
+                            is_forwarded: matches!(e.state, ForwardState::Active { .. }),
+                            is_error: matches!(e.state, ForwardState::Error(_)),
+                            error_msg: match &e.state {
+                                ForwardState::Error(msg) => Some(msg.clone()),
+                                _ => None,
+                            },
+                        })
+                        .collect()
+                } else {
+                    vec![]
+                }
+            } else {
+                vec![]
+            };
+
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::port_forward::run_port_forward_overlay(term, entries)
+        });
+        self.assign_overlay(tab_id, overlay);
+        promise::spawn::spawn(future).detach();
+    }
+    // --- end weezterm remote features ---
+
     fn show_tab_navigator(&mut self) {
         let mux = Mux::get();
         let active_tab_idx = match mux.get_window(self.mux_window_id) {
@@ -3158,6 +3217,10 @@ impl TermWindow {
             ActivateCommandPalette => {
                 let modal = crate::termwindow::palette::CommandPalette::new(self);
                 self.set_modal(Rc::new(modal));
+            }
+            // --- weezterm remote features ---
+            ShowPortForwardOverlay => {
+                self.show_port_forward_overlay();
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
