@@ -3,7 +3,10 @@ use crate::config::ConfigMap;
 use crate::dirwrap::DirWrap;
 use crate::filewrap::FileWrap;
 use crate::pty::*;
-use crate::session::{Exec, ExecResult, SessionEvent, SessionRequest, SignalChannel};
+use crate::session::{
+    Exec, ExecResult, SessionEvent, SessionRequest, SignalChannel,
+    DirectTcpIpRequest, DirectTcpIpResult,
+};
 use crate::sessionwrap::SessionWrap;
 use crate::sftp::dir::{Dir, DirId, DirRequest};
 use crate::sftp::file::{File, FileId, FileRequest};
@@ -854,6 +857,9 @@ impl SessionInner {
                     SessionRequest::Sftp(SftpRequest::RemoveFile(path, reply)) => {
                         dispatch(reply, || self.init_sftp(sess)?.unlink(&path), "remove_file")
                     }
+                    SessionRequest::DirectTcpIp(req, reply) => {
+                        dispatch(reply, || self.direct_tcpip(sess, req), "direct_tcpip")
+                    }
                 };
                 sess.set_blocking(false);
                 res
@@ -1007,6 +1013,56 @@ impl SessionInner {
         self.channels.insert(channel_id, info);
 
         Ok(result)
+    }
+
+    pub fn direct_tcpip(
+        &mut self,
+        sess: &mut SessionWrap,
+        req: DirectTcpIpRequest,
+    ) -> anyhow::Result<DirectTcpIpResult> {
+        let channel = sess.channel_direct_tcpip(
+            &req.remote_host,
+            req.remote_port,
+            &req.src_host,
+            req.src_port,
+        )?;
+
+        let channel_id = self.next_channel_id;
+        self.next_channel_id += 1;
+
+        let (write_to_channel, mut read_from_channel) = socketpair()?;
+        let (mut write_from_channel, read_from_channel_out) = socketpair()?;
+
+        read_from_channel.set_non_blocking(true)?;
+        write_from_channel.set_non_blocking(true)?;
+
+        let info = ChannelInfo {
+            channel_id,
+            channel,
+            exit: None,
+            exited: false,
+            descriptors: [
+                DescriptorState {
+                    fd: Some(read_from_channel),
+                    buf: VecDeque::with_capacity(8192),
+                },
+                DescriptorState {
+                    fd: Some(write_from_channel),
+                    buf: VecDeque::with_capacity(8192),
+                },
+                DescriptorState {
+                    fd: None,
+                    buf: VecDeque::with_capacity(8192),
+                },
+            ],
+        };
+
+        self.channels.insert(channel_id, info);
+
+        Ok(DirectTcpIpResult {
+            reader: read_from_channel_out,
+            writer: write_to_channel,
+        })
     }
 
     /// Open a handle to a file.

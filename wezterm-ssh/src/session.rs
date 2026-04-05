@@ -59,12 +59,28 @@ pub(crate) enum SessionRequest {
     Sftp(SftpRequest),
     SignalChannel(SignalChannel),
     SessionDropped,
+    DirectTcpIp(DirectTcpIpRequest, Sender<anyhow::Result<DirectTcpIpResult>>),
 }
 
 #[derive(Debug)]
 pub(crate) struct SignalChannel {
     pub channel: ChannelId,
     pub signame: &'static str,
+}
+
+#[derive(Debug)]
+pub(crate) struct DirectTcpIpRequest {
+    pub remote_host: String,
+    pub remote_port: u16,
+    pub src_host: String,
+    pub src_port: u16,
+}
+
+/// Result of creating a direct-tcpip channel.
+/// The reader/writer provide bidirectional I/O through the tunnel.
+pub struct DirectTcpIpResult {
+    pub reader: FileDescriptor,
+    pub writer: FileDescriptor,
 }
 
 #[derive(Debug)]
@@ -186,6 +202,31 @@ impl Session {
         Sftp {
             tx: self.tx.clone(),
         }
+    }
+
+    /// Create a direct-tcpip channel for port forwarding.
+    /// This opens an SSH channel that tunnels TCP traffic to the remote host.
+    pub async fn direct_tcpip(
+        &self,
+        remote_host: &str,
+        remote_port: u16,
+        src_host: &str,
+        src_port: u16,
+    ) -> anyhow::Result<DirectTcpIpResult> {
+        let (reply, rx) = bounded(1);
+        self.tx
+            .send(SessionRequest::DirectTcpIp(
+                DirectTcpIpRequest {
+                    remote_host: remote_host.to_string(),
+                    remote_port,
+                    src_host: src_host.to_string(),
+                    src_port,
+                },
+                reply,
+            ))
+            .await
+            .map_err(|_| DeadSession)?;
+        rx.recv().await?
     }
 }
 

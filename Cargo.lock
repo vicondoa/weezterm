@@ -3483,6 +3483,7 @@ dependencies = [
  "procinfo",
  "promise",
  "rangeset",
+ "regex",
  "serde",
  "serial2",
  "shell-words",

@@ -104,4 +104,29 @@ impl SessionWrap {
             Self::LibSsh(sess) => sess.sess.accept_agent_forward().map(ChannelWrap::LibSsh),
         }
     }
+
+    pub fn channel_direct_tcpip(
+        &self,
+        remote_host: &str,
+        remote_port: u16,
+        src_host: &str,
+        src_port: u16,
+    ) -> anyhow::Result<ChannelWrap> {
+        match self {
+            #[cfg(feature = "ssh2")]
+            Self::Ssh2(sess) => {
+                let channel = sess
+                    .sess
+                    .channel_direct_tcpip(remote_host, remote_port, Some((src_host, src_port)))?;
+                Ok(ChannelWrap::Ssh2(channel))
+            }
+
+            #[cfg(feature = "libssh-rs")]
+            Self::LibSsh(sess) => {
+                let channel = sess.sess.new_channel()?;
+                channel.open_forward(remote_host, remote_port, src_host, src_port)?;
+                Ok(ChannelWrap::LibSsh(channel))
+            }
+        }
+    }
 }
