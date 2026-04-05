@@ -769,6 +769,13 @@ impl<'a> Performer<'a> {
             OperatingSystemCommand::SetHyperlink(link) => {
                 self.set_hyperlink(link);
             }
+            // --- weezterm remote features ---
+            OperatingSystemCommand::WezTermOpenUrl(url) => {
+                log::debug!("OSC 7457: request to open URL: {}", url);
+                if let Some(handler) = self.alert_handler.as_mut() {
+                    handler.alert(Alert::OpenUrl(url));
+                }
+            }
             OperatingSystemCommand::Unspecified(unspec) => {
                 if self.config.log_unknown_escape_sequences() {
                     let mut output = String::new();

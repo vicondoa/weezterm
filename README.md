@@ -1,40 +1,90 @@
-# Wez's Terminal
+# Weezterm
 
-<img height="128" alt="WezTerm Icon" src="https://raw.githubusercontent.com/wezterm/wezterm/main/assets/icon/wezterm-icon.svg" align="left"> *A GPU-accelerated cross-platform terminal emulator and multiplexer written by <a href="https://github.com/wez">@wez</a> and implemented in <a href="https://www.rust-lang.org/">Rust</a>*
+<img height="128" alt="WezTerm Icon" src="https://raw.githubusercontent.com/wezterm/wezterm/main/assets/icon/wezterm-icon.svg" align="left">
 
-User facing docs and guide at: https://wezterm.org/
+*A fork of [WezTerm](https://github.com/wezterm/wezterm) — the GPU-accelerated cross-platform terminal emulator and multiplexer written by [@wez](https://github.com/wez) in [Rust](https://www.rust-lang.org/) — with integrated remote SSH extensions.*
 
-![Screenshot](docs/screenshots/two.png)
+Weezterm extends WezTerm with VS Code Remote SSH-style features:
+- **Remote browser opening** — Programs on the remote host can open URLs in your local browser (e.g., `az login` interactive auth)
+- **Automatic port forwarding** — Ports opened on the remote host are detected and forwarded to localhost, enabling OAuth callback flows and dev server access
 
-*Screenshot of wezterm on macOS, running vim*
+## Credits
+
+Weezterm is built on top of **WezTerm** by [@wez](https://github.com/wez) (Wez Furlong).
+All credit for the terminal emulator, multiplexer, GPU rendering, and the vast majority
+of the codebase goes to the WezTerm project and its contributors.
+
+- **Upstream**: [github.com/wezterm/wezterm](https://github.com/wezterm/wezterm)
+- **Upstream docs**: [wezterm.org](https://wezterm.org/)
+- **License**: Same as WezTerm (see [LICENSE.md](LICENSE.md))
+
+The remote extensions added by this fork are inspired by
+[VS Code Remote SSH](https://code.visualstudio.com/docs/remote/ssh).
+
+## Remote Extensions
+
+### Remote Browser Opening (`$BROWSER`)
+
+When connected to a remote host via SSH, Weezterm sets the `$BROWSER` environment
+variable to a helper that opens URLs on your **local** machine. This enables
+interactive browser-based authentication flows (like `az login`, `gcloud auth login`,
+etc.) to work seamlessly over SSH.
+
+**How it works:**
+1. Weezterm injects `$BROWSER` when spawning remote shells
+2. When a program calls `$BROWSER <url>`, the helper sends an escape sequence through the terminal
+3. Weezterm detects the sequence and opens the URL in your local browser
+
+**Configuration:**
+```lua
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    set_remote_browser = true,  -- default: true
+  },
+}
+```
+
+### Automatic Port Forwarding
+
+Weezterm detects ports opened on the remote host and automatically forwards them to
+localhost. This is essential for OAuth callback flows where the auth server redirects
+to `http://localhost:PORT`.
+
+**Detection methods:**
+- Polling `/proc/net/tcp` on the remote host (Linux)
+- Scanning terminal output for `localhost:PORT` URLs
+
+**Port management:**
+- Press `Ctrl+Shift+G` to open the port forwarding overlay
+- Auto-forwarded ports show a toast notification
+- Exclude ports or disable auto-forwarding in configuration
+
+**Configuration:**
+```lua
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    port_forwarding = {
+      enabled = true,
+      auto_forward = true,
+      detect_with_proc_net_tcp = true,
+      detect_with_terminal_scrape = true,
+      poll_interval_secs = 2,
+      exclude_ports = { 22, 80, 443 },
+    },
+  },
+}
+```
 
 ## Installation
 
-https://wezterm.org/installation
+Same as WezTerm: see [wezterm.org/installation](https://wezterm.org/installation).
+Build from this fork's source for the remote extensions.
 
 ## Getting help
 
-This is a spare time project, so please bear with me.  There are a couple of channels for support:
-
-* You can use the [GitHub issue tracker](https://github.com/wezterm/wezterm/issues) to see if someone else has a similar issue, or to file a new one.
-* Start or join a thread in our [GitHub Discussions](https://github.com/wezterm/wezterm/discussions); if you have general
-  questions or want to chat with other wezterm users, you're welcome here!
-* There is a [Matrix room via Element.io](https://app.element.io/#/room/#wezterm:matrix.org)
-  for (potentially!) real time discussions.
-
-The GitHub Discussions and Element/Gitter rooms are better suited for questions
-than bug reports, but don't be afraid to use whichever you are most comfortable
-using and we'll work it out.
-
-## Supporting the Project
-
-If you use and like WezTerm, please consider sponsoring it: your support helps
-to cover the fees required to maintain the project and to validate the time
-spent working on it!
-
-[Read more about sponsoring](https://wezterm.org/sponsor.html).
-
-* [![Sponsor WezTerm](https://img.shields.io/github/sponsors/wez?label=Sponsor%20WezTerm&logo=github&style=for-the-badge)](https://github.com/sponsors/wez)
-* [Patreon](https://patreon.com/WezFurlong)
-* [Ko-Fi](https://ko-fi.com/wezfurlong)
-* [Liberapay](https://liberapay.com/wez)
+- [WezTerm documentation](https://wezterm.org/) — for all core terminal features
+- [GitHub Issues](../../issues) — for Weezterm-specific remote extension issues

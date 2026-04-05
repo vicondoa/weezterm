@@ -71,6 +71,16 @@ pub enum Alert {
     OutputSinceFocusLost,
     /// A change to the progress bar state
     Progress(Progress),
+
+    // --- weezterm remote features ---
+    /// A request to open a URL on the local/client browser.
+    /// Triggered by OSC 7457 from the $BROWSER helper on remote SSH hosts.
+    OpenUrl(String),
+    /// A port was detected in terminal output (localhost URL).
+    PortDetected {
+        port: u16,
+        url: String,
+    },
 }
 
 pub trait AlertHandler: Send + Sync {

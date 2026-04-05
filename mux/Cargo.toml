@@ -35,6 +35,7 @@ portable-pty = { workspace=true, features = ["serde_support"]}
 procinfo.workspace = true
 promise.workspace = true
 rangeset.workspace = true
+regex.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
 serial2.workspace = true
 shell-words.workspace = true

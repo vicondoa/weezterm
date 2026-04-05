@@ -51,6 +51,11 @@ pub enum OperatingSystemCommand {
     RxvtExtension(Vec<String>),
     ConEmuProgress(Progress),
 
+    // --- weezterm remote features ---
+    /// OSC 7457: Request the client to open a URL in the local browser.
+    /// Used by the $BROWSER helper on remote SSH hosts.
+    WezTermOpenUrl(String),
+
     Unspecified(Vec<Vec<u8>>),
 }
 
@@ -391,6 +396,19 @@ impl OperatingSystemCommand {
                 Self::parse_change_dynamic_color_number(p1str.parse::<u8>().unwrap(), osc)
             }
 
+            WezTermOpenUrl => {
+                if osc.len() >= 2 {
+                    let payload = String::from_utf8_lossy(osc[1]);
+                    if let Some(url) = payload.strip_prefix("open-url;") {
+                        Ok(OperatingSystemCommand::WezTermOpenUrl(url.to_string()))
+                    } else {
+                        bail!("expected open-url; prefix in OSC 7457, got {:?}", payload)
+                    }
+                } else {
+                    bail!("OSC 7457 requires at least 2 parameters")
+                }
+            }
+
             osc_code => bail!("{:?} not impl", osc_code),
         }
     }
@@ -502,6 +520,8 @@ osc_entries!(
     /// that lays out various window related escape sequences.
     SetWindowTitleSun = "l",
     SetIconNameSun = "L",
+    /// Weezterm: open URL on client browser
+    WezTermOpenUrl = "7457",
 );
 
 struct OscMap {
@@ -569,6 +589,11 @@ impl Display for OperatingSystemCommand {
             SetHyperlink(Some(link)) => link.fmt(f)?,
             SetHyperlink(None) => write!(f, "8;;")?,
             RxvtExtension(params) => write!(f, "777;{}", params.join(";"))?,
+            // --- weezterm remote features ---
+            WezTermOpenUrl(url) => {
+                let code = OperatingSystemCommandCode::WezTermOpenUrl.as_code();
+                write!(f, "{};open-url;{}", code, url)?;
+            }
             Unspecified(v) => {
                 for (idx, item) in v.iter().enumerate() {
                     if idx > 0 {
@@ -1995,6 +2020,42 @@ mod test {
                     data: b"hello".to_vec(),
                 }
             )))
+        );
+    }
+
+    #[test]
+    fn test_osc_7457_open_url() {
+        assert_eq!(
+            parse(
+                &["7457", "open-url;https://example.com"],
+                "\x1b]7457;open-url;https://example.com\x1b\\"
+            ),
+            OperatingSystemCommand::WezTermOpenUrl("https://example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn test_osc_7457_roundtrip() {
+        let osc = OperatingSystemCommand::WezTermOpenUrl(
+            "https://login.microsoftonline.com/foo".into(),
+        );
+        let formatted = format!("{}", osc);
+        assert!(formatted.contains("7457;open-url;https://login.microsoftonline.com/foo"));
+    }
+
+    #[test]
+    fn test_osc_7457_complex_url() {
+        assert_eq!(
+            parse(
+                &[
+                    "7457",
+                    "open-url;http://localhost:8080/callback?code=abc&state=xyz"
+                ],
+                "\x1b]7457;open-url;http://localhost:8080/callback?code=abc&state=xyz\x1b\\"
+            ),
+            OperatingSystemCommand::WezTermOpenUrl(
+                "http://localhost:8080/callback?code=abc&state=xyz".to_string()
+            )
         );
     }
 }
