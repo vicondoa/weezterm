@@ -264,7 +264,7 @@ mod test {
 
     #[test]
     fn test_scanner_excludes_ports() {
-        let exclude: HashSet<u16> = [22, 3000].into_iter().collect();
+        let exclude: HashSet<u16> = HashSet::from([22u16, 3000]);
         let mut scanner = ProcNetTcpScanner::new(exclude);
         let new = scanner.scan(SAMPLE_PROC_NET_TCP, "");
         assert_eq!(new.len(), 1);

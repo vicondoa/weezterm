@@ -502,7 +502,7 @@ mod test {
 
     #[test]
     fn test_reset_preserves_exclusions() {
-        let mut mgr = PortForwardManager::new(true, [22].into_iter().collect());
+        let mut mgr = PortForwardManager::new(true, HashSet::from([22u16]));
         mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
 
         mgr.reset_for_reconnect();
