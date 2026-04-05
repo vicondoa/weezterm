@@ -104,6 +104,17 @@ pub struct SshDomain {
 
     #[dynamic(default)]
     pub assume_shell: Shell,
+
+    // --- weezterm remote features ---
+    /// Whether to set the $BROWSER environment variable on the remote host
+    /// to a helper that opens URLs on the local/client browser via OSC 7457.
+    /// Default: true
+    #[dynamic(default = "default_true")]
+    pub set_remote_browser: Option<bool>,
+}
+
+fn default_true() -> Option<bool> {
+    Some(true)
 }
 impl_lua_conversion_dynamic!(SshDomain);
 

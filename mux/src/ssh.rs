@@ -269,6 +269,17 @@ impl RemoteSshDomain {
         // existing terminal connection
         env.insert("WEZTERM_REMOTE_PANE".to_string(), pane_id.to_string());
 
+        // --- weezterm remote features ---
+        // Set $BROWSER to a helper that sends URLs back to the client via OSC 7457.
+        // This enables remote programs (like `az login`) to open URLs in the local browser.
+        if self.dom.set_remote_browser.unwrap_or(true) {
+            env.insert(
+                "BROWSER".to_string(),
+                r#"sh -c 'printf "\e]7457;open-url;%s\e\\" "$1" > /dev/tty' wezterm-browser"#
+                    .to_string(),
+            );
+        }
+
         fn build_env_command(
             dir: Option<String>,
             cmd: &CommandBuilder,
