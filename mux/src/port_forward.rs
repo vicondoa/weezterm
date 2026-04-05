@@ -351,6 +351,137 @@ pub fn scan_terminal_output(
     new_ports
 }
 
+/// Orchestrate port forwarding for a direct SSH session.
+///
+/// This is the main entry point that ties together detection, state management,
+/// and proxy creation. It:
+/// 1. Starts the `/proc/net/tcp` detection loop (if enabled)
+/// 2. Listens for `PortDetected` events from the manager
+/// 3. Auto-creates SSH tunnel + TCP proxy for each detected port (if enabled)
+///
+/// Designed to be spawned as an async task when an SSH session is authenticated.
+pub async fn run_port_forward_orchestrator(
+    session: wezterm_ssh::Session,
+    manager: std::sync::Arc<std::sync::Mutex<PortForwardManager>>,
+    config: config::PortForwardConfig,
+    stop_rx: smol::channel::Receiver<()>,
+) {
+    use crate::port_forward_proxy::PortForwardProxy;
+    use std::collections::HashMap;
+
+    log::info!("Port forwarding orchestrator started");
+
+    let event_rx = manager.lock().unwrap().event_receiver();
+
+    // Start /proc/net/tcp detection loop if enabled
+    if config.detect_with_proc_net_tcp {
+        let sess = session.clone();
+        let mgr = manager.clone();
+        let interval = Duration::from_secs(config.poll_interval_secs);
+        let stop = stop_rx.clone();
+        smol::spawn(async move {
+            run_proc_net_tcp_detection(sess, mgr, interval, stop).await;
+        })
+        .detach();
+    }
+
+    // Track active proxies so we can stop them
+    let mut proxies: HashMap<u16, PortForwardProxy> = HashMap::new();
+
+    // Main event loop: react to detected ports
+    loop {
+        let event = smol::future::or(
+            async {
+                event_rx.recv().await.ok()
+            },
+            async {
+                stop_rx.recv().await.ok();
+                None
+            },
+        )
+        .await;
+
+        let event = match event {
+            Some(e) => e,
+            None => break, // stop signal or channel closed
+        };
+
+        match event {
+            PortForwardEvent::PortDetected(entry) => {
+                let auto = manager.lock().unwrap().is_auto_forward();
+                if !auto {
+                    log::info!(
+                        "Port {} detected but auto-forward is off",
+                        entry.remote_port
+                    );
+                    continue;
+                }
+                log::info!(
+                    "Auto-forwarding port {} ({}:{})",
+                    entry.remote_port,
+                    entry.remote_host,
+                    entry.remote_port
+                );
+                match PortForwardProxy::start(
+                    session.clone(),
+                    entry.remote_host.clone(),
+                    entry.remote_port,
+                    entry.remote_port,
+                )
+                .await
+                {
+                    Ok(proxy) => {
+                        let local_port = proxy.local_port();
+                        let remote_port = entry.remote_port;
+                        proxies.insert(remote_port, proxy);
+                        manager
+                            .lock()
+                            .unwrap()
+                            .mark_forwarded(remote_port, local_port);
+                        log::info!(
+                            "Port {} forwarded to localhost:{}",
+                            remote_port,
+                            local_port
+                        );
+                    }
+                    Err(e) => {
+                        let msg = format!("{:#}", e);
+                        manager
+                            .lock()
+                            .unwrap()
+                            .mark_error(entry.remote_port, msg.clone());
+                        log::error!(
+                            "Failed to forward port {}: {}",
+                            entry.remote_port,
+                            msg
+                        );
+                    }
+                }
+            }
+            PortForwardEvent::PortStopped { remote_port } => {
+                if let Some(proxy) = proxies.remove(&remote_port) {
+                    proxy.stop();
+                    log::info!("Stopped forward for port {}", remote_port);
+                }
+            }
+            PortForwardEvent::PortRemoved { remote_port } => {
+                if let Some(proxy) = proxies.remove(&remote_port) {
+                    proxy.stop();
+                    log::info!("Removed forward for port {}", remote_port);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Clean up all proxies on shutdown
+    for (port, proxy) in proxies.drain() {
+        proxy.stop();
+        log::info!("Shutting down proxy for port {}", port);
+    }
+    log::info!("Port forwarding orchestrator stopped");
+}
+
 #[cfg(test)]
 mod test {
     use super::*;

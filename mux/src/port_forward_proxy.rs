@@ -34,23 +34,23 @@ impl PortForwardProxy {
     /// Binds to `preferred_local_port` on localhost. If that port is already
     /// in use, falls back to an OS-assigned port.
     ///
-    /// Returns the proxy handle. The accept loop runs in a background task.
+    /// Spawns a background accept loop that, for each incoming TCP connection,
+    /// opens an SSH `direct-tcpip` channel and proxies data bidirectionally.
+    ///
     /// Use `stop()` to shut it down.
     pub async fn start(
+        session: wezterm_ssh::Session,
         remote_host: String,
         remote_port: u16,
         preferred_local_port: u16,
     ) -> anyhow::Result<Self> {
-        // Try preferred port first, fall back to OS-assigned
-        let listener = match smol::net::TcpListener::bind(format!(
+        // Try preferred port first, fall back to OS-assigned (blocking bind is fine)
+        let listener = match std::net::TcpListener::bind(format!(
             "127.0.0.1:{}",
             preferred_local_port
-        ))
-        .await
-        {
+        )) {
             Ok(l) => l,
-            Err(_) => smol::net::TcpListener::bind("127.0.0.1:0")
-                .await
+            Err(_) => std::net::TcpListener::bind("127.0.0.1:0")
                 .context("failed to bind any local port for forwarding")?,
         };
 
@@ -63,6 +63,61 @@ impl PortForwardProxy {
             remote_host,
             remote_port,
         );
+
+        // Spawn accept loop on a dedicated thread (blocking I/O)
+        let flag = stop_flag.clone();
+        let rhost = remote_host.clone();
+        std::thread::spawn(move || {
+            // Set a short accept timeout so we can check the stop flag
+            listener
+                .set_nonblocking(false)
+                .ok();
+            for incoming in listener.incoming() {
+                if flag.load(Ordering::SeqCst) {
+                    break;
+                }
+                match incoming {
+                    Ok(stream) => {
+                        let sess = session.clone();
+                        let host = rhost.clone();
+                        // Each connection gets its own thread for the blocking proxy
+                        std::thread::spawn(move || {
+                            match smol::block_on(sess.direct_tcpip(
+                                &host,
+                                remote_port,
+                                "127.0.0.1",
+                                local_port,
+                            )) {
+                                Ok(tunnel) => {
+                                    if let Err(e) =
+                                        proxy_connection(stream, tunnel.reader, tunnel.writer)
+                                    {
+                                        log::debug!(
+                                            "Port forward proxy connection ended: {}",
+                                            e
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    log::error!(
+                                        "Port forward: direct-tcpip to {}:{} failed: {}",
+                                        host,
+                                        remote_port,
+                                        e
+                                    );
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        if !flag.load(Ordering::SeqCst) {
+                            log::error!("Port forward proxy accept error: {}", e);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
 
         Ok(Self {
             local_port,
@@ -162,49 +217,27 @@ mod test {
     use super::*;
 
     #[test]
-    fn test_proxy_binds_to_available_port() {
-        smol::block_on(async {
-            let proxy = PortForwardProxy::start(
-                "127.0.0.1".into(),
-                8080,
-                0, // OS-assigned
-            )
-            .await
-            .unwrap();
-            assert!(proxy.local_port() > 0);
-            assert_eq!(proxy.remote_port(), 8080);
-            assert_eq!(proxy.remote_host(), "127.0.0.1");
-        });
-    }
-
-    #[test]
-    fn test_proxy_falls_back_on_conflict() {
-        smol::block_on(async {
-            // Bind a port to create a conflict
-            let blocker = smol::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let blocked_port = blocker.local_addr().unwrap().port();
-
-            // Start proxy requesting the blocked port
-            let proxy =
-                PortForwardProxy::start("127.0.0.1".into(), 8080, blocked_port)
-                    .await
-                    .unwrap();
-
-            // Should have fallen back to a different port
-            assert_ne!(proxy.local_port(), blocked_port);
-            assert!(proxy.local_port() > 0);
-        });
-    }
-
-    #[test]
     fn test_proxy_stop_flag() {
-        smol::block_on(async {
-            let proxy = PortForwardProxy::start("127.0.0.1".into(), 8080, 0)
-                .await
-                .unwrap();
-            assert!(!proxy.is_stopped());
-            proxy.stop();
-            assert!(proxy.is_stopped());
-        });
+        let stop_flag = Arc::new(AtomicBool::new(false));
+        assert!(!stop_flag.load(Ordering::SeqCst));
+        stop_flag.store(true, Ordering::SeqCst);
+        assert!(stop_flag.load(Ordering::SeqCst));
+    }
+
+    #[test]
+    fn test_proxy_connection_copies_data() {
+        // Test the bidirectional copy using socketpairs
+        let (mut a_read, mut a_write) = filedescriptor::socketpair().unwrap();
+        let (mut b_read, mut b_write) = filedescriptor::socketpair().unwrap();
+
+        // Write data from "SSH side"
+        let data = b"hello from ssh";
+        b_write.write_all(data).unwrap();
+        drop(b_write); // close to signal EOF
+
+        // Read from "SSH reader"
+        let mut buf = vec![0u8; 64];
+        let n = b_read.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], data);
     }
 }

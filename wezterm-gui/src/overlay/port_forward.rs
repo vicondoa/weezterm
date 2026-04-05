@@ -259,7 +259,8 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
             // Selection indicator
             if is_selected {
                 changes.push(Change::Attribute(AttributeChange::Foreground(
-                    AnsiColor::Cyan.into(),
+                    // --- weezterm remote features ---
+                    AnsiColor::Aqua.into(),
                 )));
                 changes.push(Change::Text(" ▸ ".into()));
             } else {

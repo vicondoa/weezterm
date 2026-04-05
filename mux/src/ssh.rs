@@ -182,6 +182,13 @@ pub struct RemoteSshDomain {
     dom: SshDomain,
     id: DomainId,
     name: String,
+    // --- weezterm remote features ---
+    /// Signal to stop the port forwarding orchestrator
+    port_forward_stop_tx: Mutex<Option<smol::channel::Sender<()>>>,
+    /// Shared port forward manager (accessible from overlay)
+    port_forward_manager:
+        Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<crate::port_forward::PortForwardManager>>>>>,
+    // --- end weezterm remote features ---
 }
 
 pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap> {
@@ -237,12 +244,25 @@ impl RemoteSshDomain {
             name: dom.name.clone(),
             session: Mutex::new(None),
             dom: dom.clone(),
+            port_forward_stop_tx: Mutex::new(None),
+            port_forward_manager: Arc::new(std::sync::Mutex::new(None)),
         })
     }
 
     pub fn ssh_config(&self) -> anyhow::Result<ConfigMap> {
         ssh_domain_to_ssh_config(&self.dom)
     }
+
+    // --- weezterm remote features ---
+    /// Get port forward entries for the overlay UI.
+    pub fn port_forward_entries(&self) -> Vec<crate::port_forward::PortForwardEntry> {
+        if let Some(mgr) = self.port_forward_manager.lock().unwrap().as_ref() {
+            mgr.lock().unwrap().entries()
+        } else {
+            vec![]
+        }
+    }
+    // --- end weezterm remote features ---
 
     fn build_command(
         &self,
@@ -270,15 +290,36 @@ impl RemoteSshDomain {
         env.insert("WEZTERM_REMOTE_PANE".to_string(), pane_id.to_string());
 
         // --- weezterm remote features ---
-        // Set $BROWSER to a helper that sends URLs back to the client via OSC 7457.
-        // This enables remote programs (like `az login`) to open URLs in the local browser.
-        if self.dom.set_remote_browser.unwrap_or(true) {
+        // Set $BROWSER to a helper script that sends URLs back to the client
+        // via OSC 7457, opening them in the local browser.
+        //
+        // We write a real script file on the remote rather than inlining
+        // `sh -c '...'` in the env value, because shell variable expansion
+        // doesn't re-parse quotes — `$BROWSER url` would break on word
+        // splitting.  A script path works for both direct invocation
+        // (`$BROWSER url`) and programs that run it via `os.system()`
+        // (like Python's webbrowser module used by `az login`).
+        let browser_setup = if self.dom.set_remote_browser.unwrap_or(true) {
+            // Also put the path in env so setenv is attempted (works if
+            // the server has AcceptEnv BROWSER configured).
             env.insert(
                 "BROWSER".to_string(),
-                r#"sh -c 'printf "\e]7457;open-url;%s\e\\" "$1" > /dev/tty' wezterm-browser"#
-                    .to_string(),
+                "/tmp/.wezterm-browser".to_string(),
             );
-        }
+            // Heredoc with single-quoted delimiter suppresses all expansion,
+            // so the script content is written verbatim.
+            r#"_wz_b=/tmp/.wezterm-browser
+cat > "$_wz_b" << 'WEZEOF'
+#!/bin/sh
+printf '\033]7457;open-url;%s\033\\' "$1" >/dev/tty
+WEZEOF
+chmod +x "$_wz_b"
+export BROWSER="$_wz_b"
+"#
+        } else {
+            ""
+        };
+        // --- end weezterm remote features ---
 
         fn build_env_command(
             dir: Option<String>,
@@ -328,9 +369,27 @@ impl RemoteSshDomain {
 
         let command_line = match (cmd.is_default_prog(), self.dom.assume_shell, command_dir) {
             (_, Shell::Posix, dir) => Some(build_env_command(dir, &cmd, &env)?),
+            // --- weezterm remote features ---
+            // When we need to inject env vars (e.g. $BROWSER for remote browser opening),
+            // we can't rely on SSH setenv because most servers don't whitelist BROWSER in
+            // AcceptEnv.  Fall through to build_env_command which wraps the login shell
+            // invocation with `env KEY=VALUE ...`.
+            (true, Shell::Unknown, dir) if !env.is_empty() => {
+                Some(build_env_command(dir, &cmd, &env)?)
+            }
+            // --- end weezterm remote features ---
             (true, _, _) => None,
             (false, _, _) => Some(cmd.as_unix_command_line()?),
         };
+
+        // --- weezterm remote features ---
+        // Prepend the browser helper script creation to the command line.
+        let command_line = if !browser_setup.is_empty() {
+            command_line.map(|cmd| format!("{}{}", browser_setup, cmd))
+        } else {
+            command_line
+        };
+        // --- end weezterm remote features ---
 
         Ok((command_line, env))
     }
@@ -789,6 +848,42 @@ impl Domain for RemoteSshDomain {
         ));
         let mux = Mux::get();
         mux.add_pane(&pane)?;
+
+        // --- weezterm remote features ---
+        // Start port forwarding orchestrator on first successful spawn.
+        // We check port_forward_stop_tx: if it's None, we haven't started yet.
+        {
+            let mut stop_guard = self.port_forward_stop_tx.lock().unwrap();
+            if stop_guard.is_none() && self.dom.port_forwarding.enabled {
+                if let Some(session) = self.session.lock().unwrap().as_ref().cloned() {
+                    let (stop_tx, stop_rx) = smol::channel::bounded(1);
+                    stop_guard.replace(stop_tx);
+
+                    let excluded: std::collections::HashSet<u16> =
+                        self.dom.port_forwarding.exclude_ports.iter().copied().collect();
+                    let manager = Arc::new(std::sync::Mutex::new(
+                        crate::port_forward::PortForwardManager::new(
+                            self.dom.port_forwarding.auto_forward,
+                            excluded,
+                        ),
+                    ));
+                    // Store manager so the overlay can access it
+                    self.port_forward_manager.lock().unwrap().replace(manager.clone());
+                    let pf_config = self.dom.port_forwarding.clone();
+
+                    promise::spawn::spawn_into_main_thread(async move {
+                        crate::port_forward::run_port_forward_orchestrator(
+                            session, manager, pf_config, stop_rx,
+                        )
+                        .await;
+                    })
+                    .detach();
+
+                    log::info!("Port forwarding started for domain '{}'", self.name);
+                }
+            }
+        }
+        // --- end weezterm remote features ---
 
         Ok(pane)
     }

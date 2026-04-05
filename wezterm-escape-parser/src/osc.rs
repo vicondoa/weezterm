@@ -397,8 +397,16 @@ impl OperatingSystemCommand {
             }
 
             WezTermOpenUrl => {
+                // --- weezterm remote features ---
+                // vtparse splits on every `;`, so osc[0]="7457",
+                // osc[1]="open-url", osc[2..] = URL parts (URLs may contain `;`).
+                // We rejoin osc[1..] with `;` to reconstruct the full payload.
                 if osc.len() >= 2 {
-                    let payload = String::from_utf8_lossy(osc[1]);
+                    let payload = osc[1..]
+                        .iter()
+                        .map(|s| String::from_utf8_lossy(s))
+                        .collect::<Vec<_>>()
+                        .join(";");
                     if let Some(url) = payload.strip_prefix("open-url;") {
                         Ok(OperatingSystemCommand::WezTermOpenUrl(url.to_string()))
                     } else {
@@ -407,6 +415,7 @@ impl OperatingSystemCommand {
                 } else {
                     bail!("OSC 7457 requires at least 2 parameters")
                 }
+                // --- end weezterm remote features ---
             }
 
             osc_code => bail!("{:?} not impl", osc_code),
@@ -2025,9 +2034,11 @@ mod test {
 
     #[test]
     fn test_osc_7457_open_url() {
+        // vtparse splits on every `;`, so the pre-split input
+        // mirrors what vtparse actually produces.
         assert_eq!(
             parse(
-                &["7457", "open-url;https://example.com"],
+                &["7457", "open-url", "https://example.com"],
                 "\x1b]7457;open-url;https://example.com\x1b\\"
             ),
             OperatingSystemCommand::WezTermOpenUrl("https://example.com".to_string())
@@ -2045,11 +2056,13 @@ mod test {
 
     #[test]
     fn test_osc_7457_complex_url() {
+        // URL containing `:` — vtparse splits at each `;`
         assert_eq!(
             parse(
                 &[
                     "7457",
-                    "open-url;http://localhost:8080/callback?code=abc&state=xyz"
+                    "open-url",
+                    "http://localhost:8080/callback?code=abc&state=xyz"
                 ],
                 "\x1b]7457;open-url;http://localhost:8080/callback?code=abc&state=xyz\x1b\\"
             ),

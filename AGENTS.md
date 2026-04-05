@@ -128,6 +128,87 @@ This makes merge conflicts with upstream easy to identify and resolve.
 Changes to upstream files are small, additive-only (new enum variants, match arms, methods),
 and always delimited with the `// --- weezterm remote features ---` comment.
 
+## Adding Code That Merges Cleanly with Upstream
+
+Weezterm is a fork of WezTerm. All fork-specific code must be structured for easy merging.
+Follow these rules strictly:
+
+### Rule 1: Mark every change with begin AND end sentinel comments
+Every block of Weezterm-specific code in an upstream file **must** be wrapped
+with both a begin and end sentinel. This is mandatory for **all** multi-line
+additions — no exceptions:
+```rust
+// --- weezterm remote features ---
+fn my_new_function() {
+    // ...
+}
+// --- end weezterm remote features ---
+```
+
+For **single-line** additions only (e.g. one new enum variant, one match arm,
+or one `mod` statement), a single begin comment above the line is sufficient —
+no end comment needed:
+```rust
+// --- weezterm remote features ---
+MyNewVariant,
+```
+
+**Checklist before committing changes to upstream files:**
+- [ ] Every multi-line block has `// --- weezterm remote features ---` before it
+- [ ] Every multi-line block has `// --- end weezterm remote features ---` after it
+- [ ] Single-line additions have at least the begin comment
+- [ ] Comments use the exact strings above (for `grep` searchability)
+- [ ] In non-Rust files (Makefile, YAML), use the appropriate comment syntax:
+      `# --- weezterm remote features ---` / `# --- end weezterm remote features ---`
+
+### Rule 2: Prefer new files over modifying upstream files
+- New modules go in new files → zero merge conflicts.
+- Register them from existing files with a small, marked `mod` statement.
+- Example: `mux/src/port_detect.rs` is a new file; `mux/src/lib.rs` has a one-line
+  `// --- weezterm remote features ---\npub mod port_detect;` addition.
+
+### Rule 3: Additive-only changes to upstream files
+- **Add** enum variants, match arms, methods, trait impls — never delete or rename upstream code.
+- Place new enum variants at the **end** of the enum.
+- Place new match arms at the **end**, before any wildcard (`_`) arm.
+- Keep additions as small and self-contained as possible.
+
+### Rule 4: Use feature gating where practical
+If a change is large, consider gating it behind a cargo feature flag:
+```toml
+# Cargo.toml
+[features]
+remote-extensions = []
+```
+```rust
+#[cfg(feature = "remote-extensions")]
+mod port_detect;
+```
+This lets upstream compile without the fork code entirely.
+
+### Rule 5: Do not touch formatting or refactor upstream code
+- Never reformat upstream files (even with `cargo +nightly fmt` if it changes upstream lines).
+- Never rename upstream symbols.
+- Never move upstream code between files.
+
+### Rule 6: Keep Cargo.toml changes minimal
+- Add new dependencies at the **end** of `[dependencies]`.
+- New workspace members go at the **end** of `members = [...]`.
+- Never modify existing dependency versions.
+
+### Rule 7: New Makefile targets
+Add Weezterm-specific Makefile targets at the **end** of the file, after a
+`# --- weezterm remote features ---` comment. Never modify existing targets.
+
+### Merge workflow
+```bash
+git remote add upstream https://github.com/wezterm/wezterm.git
+git fetch upstream
+git merge upstream/main          # or rebase, per preference
+# Search for conflict markers, resolve by keeping both sides:
+#   upstream code stays as-is, Weezterm additions stay in sentinel blocks
+```
+
 ## Key File Locations for Common Tasks
 
 | Task | Files |
