@@ -120,10 +120,8 @@ This makes merge conflicts with upstream easy to identify and resolve.
 ### New files (fork-only, no merge risk):
 - `mux/src/port_detect.rs` — Remote port detection
 - `mux/src/port_forward.rs` — Port forwarding state manager
+- `mux/src/port_forward_proxy.rs` — TCP proxy
 - `wezterm-gui/src/overlay/port_forward.rs` — Port manager overlay UI
-- `wezterm-client/src/port_forward_proxy.rs` — TCP proxy
-- `term/src/test/remote_features.rs` — Tests for remote features
-- `wezterm-ssh/tests/e2e/direct_tcpip.rs` — SSH forwarding tests
 - `docs/remote-extensions.md` — Remote features documentation
 
 ### Additive changes to existing files:

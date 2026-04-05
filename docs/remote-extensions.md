@@ -74,14 +74,17 @@ virtually every Unix-like system without additional dependencies.
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enable_remote_browser` | boolean | `true` | Set the `$BROWSER` env var on remote SSH sessions. |
-| `remote_browser_open_osc` | number | `7457` | The OSC number used for the browser-open escape sequence. |
+| `set_remote_browser` | boolean | `true` | Set the `$BROWSER` env var on remote SSH sessions to open URLs locally via OSC 7457. |
 
-Example configuration:
+Example configuration (inside an `ssh_domains` entry):
 
 ```lua
-return {
-  enable_remote_browser = true,
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    set_remote_browser = true,  -- default: true
+  },
 }
 ```
 
@@ -130,25 +133,36 @@ Press **Ctrl+Shift+G** to open the **Port Manager Overlay**, which shows:
 
 ### Configuration
 
+All port-forwarding options live under the `port_forwarding` table inside an
+`ssh_domains` entry:
+
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `enable_auto_port_forward` | boolean | `true` | Enable automatic port forwarding for SSH sessions. |
-| `port_forward_poll_interval_secs` | number | `2` | How often (in seconds) to poll `/proc/net/tcp` for new listeners. |
-| `port_forward_exclude` | list of numbers | `[]` | Ports to never auto-forward (e.g., `[22, 3306]`). |
-| `port_forward_include_range` | list of two numbers | `[1024, 65535]` | Only auto-forward ports within this range (inclusive). |
-| `port_forward_url_scraping` | boolean | `true` | Enable detection of ports from URLs printed in the terminal. |
-| `port_forward_notification` | boolean | `true` | Show a notification when a port is auto-forwarded. |
+| `port_forwarding.enabled` | boolean | `true` | Master switch to enable/disable port forwarding. |
+| `port_forwarding.auto_forward` | boolean | `true` | Whether to automatically forward newly detected ports. |
+| `port_forwarding.detect_with_proc_net_tcp` | boolean | `true` | Enable detection via `/proc/net/tcp` polling (Linux only). |
+| `port_forwarding.detect_with_terminal_scrape` | boolean | `true` | Enable detection of ports from URLs printed in the terminal. |
+| `port_forwarding.poll_interval_secs` | number | `2` | How often (in seconds) to poll `/proc/net/tcp` for new listeners. |
+| `port_forwarding.exclude_ports` | list of numbers | `[22]` | Ports to never auto-forward. |
+| `port_forwarding.include_ports` | list of numbers | `[]` | Ports to always forward when detected on connect. |
 
-Example configuration:
+Example configuration (inside an `ssh_domains` entry):
 
 ```lua
-return {
-  enable_auto_port_forward = true,
-  port_forward_poll_interval_secs = 3,
-  port_forward_exclude = { 22, 3306, 5432 },
-  port_forward_include_range = { 1024, 65535 },
-  port_forward_url_scraping = true,
-  port_forward_notification = true,
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    port_forwarding = {
+      enabled = true,
+      auto_forward = true,
+      detect_with_proc_net_tcp = true,
+      detect_with_terminal_scrape = true,
+      poll_interval_secs = 3,
+      exclude_ports = { 22, 3306, 5432 },
+      include_ports = {},
+    },
+  },
 }
 ```
 
@@ -207,21 +221,28 @@ No manual SSH tunnels. No copy-pasting URLs. It just works.
 ## Full Configuration Reference
 
 Below is a consolidated reference of all remote extension configuration
-options and their defaults:
+options and their defaults (inside an `ssh_domains` entry):
 
 ```lua
-return {
-  -- Remote Browser Opening
-  enable_remote_browser = true,
-  remote_browser_open_osc = 7457,
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
 
-  -- Automatic Port Forwarding
-  enable_auto_port_forward = true,
-  port_forward_poll_interval_secs = 2,
-  port_forward_exclude = {},
-  port_forward_include_range = { 1024, 65535 },
-  port_forward_url_scraping = true,
-  port_forward_notification = true,
+    -- Remote Browser Opening
+    set_remote_browser = true,
+
+    -- Automatic Port Forwarding
+    port_forwarding = {
+      enabled = true,
+      auto_forward = true,
+      detect_with_proc_net_tcp = true,
+      detect_with_terminal_scrape = true,
+      poll_interval_secs = 2,
+      exclude_ports = { 22 },
+      include_ports = {},
+    },
+  },
 }
 ```
 
@@ -274,11 +295,10 @@ port will fail. Weezterm will log a warning and skip the forward.
 Automatic port forwarding exposes remote services on your local machine.
 Keep the following in mind:
 
-- **Restrict the port range** with `port_forward_include_range` to limit
-  exposure to expected development ports.
-- **Exclude sensitive ports** (e.g., databases) with `port_forward_exclude`.
+- **Exclude sensitive ports** (e.g., databases) with `exclude_ports`.
 - Forwarded ports bind to `localhost` only — they are not accessible from
   other machines on your network.
 - If you are on a shared remote host, other users' services could be
-  forwarded. Use `port_forward_exclude` or disable auto-forwarding entirely
-  if this is a concern.
+  forwarded. Use `exclude_ports` or set `enabled = false` in the
+  `port_forwarding` config to disable auto-forwarding entirely if this is a
+  concern.
