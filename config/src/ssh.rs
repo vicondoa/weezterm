@@ -111,11 +111,82 @@ pub struct SshDomain {
     /// Default: true
     #[dynamic(default = "default_true")]
     pub set_remote_browser: Option<bool>,
+
+    /// Configuration for automatic port forwarding.
+    #[dynamic(default)]
+    pub port_forwarding: PortForwardConfig,
 }
 
 fn default_true() -> Option<bool> {
     Some(true)
 }
+
+fn default_true_bool() -> bool {
+    true
+}
+
+fn default_poll_interval() -> u64 {
+    2
+}
+
+fn default_exclude_ports() -> Vec<u16> {
+    vec![22]
+}
+
+/// Configuration for automatic port forwarding on SSH domains.
+#[derive(Debug, Clone, FromDynamic, ToDynamic)]
+pub struct PortForwardConfig {
+    /// Master switch to enable/disable port forwarding.
+    /// Default: true
+    #[dynamic(default = "default_true_bool")]
+    pub enabled: bool,
+
+    /// Whether to automatically forward newly detected ports.
+    /// Default: true
+    #[dynamic(default = "default_true_bool")]
+    pub auto_forward: bool,
+
+    /// Enable detection via /proc/net/tcp polling (Linux only).
+    /// Default: true
+    #[dynamic(default = "default_true_bool")]
+    pub detect_with_proc_net_tcp: bool,
+
+    /// Enable detection via terminal output URL scraping.
+    /// Default: true
+    #[dynamic(default = "default_true_bool")]
+    pub detect_with_terminal_scrape: bool,
+
+    /// Polling interval in seconds for /proc/net/tcp scanning.
+    /// Default: 2
+    #[dynamic(default = "default_poll_interval")]
+    pub poll_interval_secs: u64,
+
+    /// Ports to never auto-forward (e.g., SSH port 22).
+    /// Default: [22]
+    #[dynamic(default = "default_exclude_ports")]
+    pub exclude_ports: Vec<u16>,
+
+    /// Ports to always forward when detected on connect.
+    /// Default: []
+    #[dynamic(default)]
+    pub include_ports: Vec<u16>,
+}
+
+impl Default for PortForwardConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_forward: true,
+            detect_with_proc_net_tcp: true,
+            detect_with_terminal_scrape: true,
+            poll_interval_secs: 2,
+            exclude_ports: vec![22],
+            include_ports: vec![],
+        }
+    }
+}
+
+impl_lua_conversion_dynamic!(PortForwardConfig);
 impl_lua_conversion_dynamic!(SshDomain);
 
 impl SshDomain {
