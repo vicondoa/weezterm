@@ -41,6 +41,7 @@ pub mod localpane;
 pub mod pane;
 // --- weezterm remote features ---
 pub mod port_detect;
+pub mod port_forward;
 pub mod renderable;
 pub mod ssh;
 pub mod ssh_agent;
