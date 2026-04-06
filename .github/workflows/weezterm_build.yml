@@ -47,6 +47,15 @@ jobs:
         if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
         shell: bash
         run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
+      - name: "Set version tag"
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
       - name: "Build (Release)"
         shell: cmd
         run: |
@@ -103,6 +112,14 @@ jobs:
         run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
       - name: "Install system deps"
         run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Set version tag"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
       - name: "Build (ARM64)"
         run: |
           cargo build -p wezterm --release --target=aarch64-apple-darwin
@@ -197,6 +214,14 @@ jobs:
         run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
       - name: "Install system deps"
         run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Set version tag"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
       - name: "Build (Release)"
         run: |
           cargo build -p wezterm --release
