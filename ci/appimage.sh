@@ -15,6 +15,8 @@ done
 if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
   ln -sf weezterm/terminal.png assets/icon/terminal.png
 fi
+# Use extract-and-run to avoid FUSE requirement in containers
+export APPIMAGE_EXTRACT_AND_RUN=1
 # --- end weezterm remote features ---
 
 mkdir AppDir
