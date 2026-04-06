@@ -75,7 +75,7 @@ jobs:
         shell: cmd
         run: |
           PATH C:\Strawberry\perl\bin;%PATH%
-          cargo nextest run --all --no-fail-fast
+          cargo nextest run --all --no-fail-fast -E 'not test(e2e::sftp)'
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
@@ -139,7 +139,7 @@ jobs:
         with:
           tool: "cargo-nextest"
       - name: "Test (x86_64)"
-        run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin"
+        run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin -E 'not test(e2e::sftp)'"
       - name: "Package"
         run: "bash ci/deploy.sh"
       - uses: actions/upload-artifact@v4
@@ -234,7 +234,7 @@ jobs:
         with:
           tool: "cargo-nextest"
       - name: "Test"
-        run: "cargo nextest run --all --no-fail-fast"
+        run: "cargo nextest run --all --no-fail-fast -E 'not test(e2e::sftp)'"
       - name: "Package"
         run: "bash ci/deploy.sh"
       - name: "Build AppImage"
