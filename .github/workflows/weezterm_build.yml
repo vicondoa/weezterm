@@ -75,7 +75,7 @@ jobs:
         shell: cmd
         run: |
           PATH C:\Strawberry\perl\bin;%PATH%
-          cargo nextest run --all --no-fail-fast -E 'not test(e2e::)'
+          cargo nextest run --all --no-fail-fast -E "not test(e2e::)"
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
