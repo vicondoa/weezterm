@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <content_rating type="oars-1.0" />
+  <id>com.vicondoa.weezterm</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT</project_license>
+  <name>WeezTerm</name>
+  <summary>A GPU-accelerated cross-platform terminal emulator and multiplexer</summary>
+  <description>
+    <p>
+      WeezTerm is a fork of WezTerm with integrated remote SSH extensions.
+      It is a terminal emulator with support for modern features such as
+      fonts with ligatures, hyperlinks, multiple windows, tabs and split panes.
+    </p>
+    <p>
+      Configuration is expressed using Lua and many powerful functions are
+      provided to help you customize your terminal to your workflow.
+    </p>
+    <p>
+      WeezTerm extends WezTerm with VS Code Remote SSH-style features:
+      remote browser opening, automatic port forwarding, and more.
+    </p>
+  </description>
+  <url type="homepage">https://github.com/vicondoa/weezterm</url>
+  <url type="bugtracker">https://github.com/vicondoa/weezterm/issues</url>
+  <launchable type="desktop-id">com.vicondoa.weezterm.desktop</launchable>
+</component>
