@@ -101,10 +101,9 @@ jobs:
         shell: bash
         run: "cargo build -p strip-ansi-escapes --release"
       - name: "Install cargo-nextest from Cargo"
-        uses: baptiste0928/cargo-install@v3
+        uses: taiki-e/install-action@v2
         with:
-          crate: "cargo-nextest"
-          cache-key: "ubuntu20.04"
+          tool: "cargo-nextest"
       - name: "Test"
         shell: bash
         run: "cargo nextest run --all --no-fail-fast"
