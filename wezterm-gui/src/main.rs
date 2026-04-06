@@ -66,12 +66,14 @@ pub use selection::SelectionMode;
 pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DATA};
 
 #[derive(Debug, Parser)]
+// --- weezterm remote features ---
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
+    about = "WeezTerm — Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
     version = config::wezterm_version()
 )]
+// --- end weezterm remote features ---
 struct Opt {
-    /// Skip loading wezterm.lua
+    /// Skip loading weezterm.lua
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -1171,9 +1173,11 @@ fn run() -> anyhow::Result<()> {
     #[cfg(windows)]
     {
         unsafe {
+            // --- weezterm remote features ---
             ::windows::Win32::UI::Shell::SetCurrentProcessExplicitAppUserModelID(
-                ::windows::core::PCWSTR(wide_string("org.wezfurlong.wezterm").as_ptr()),
+                ::windows::core::PCWSTR(wide_string("com.vicondoa.weezterm").as_ptr()),
             )
+            // --- end weezterm remote features ---
             .unwrap();
         }
     }

@@ -227,7 +227,10 @@ pub fn make_lua_context(config_file: &Path) -> anyhow::Result<Lua> {
             array.insert(1, format!("{}/?/init.lua", path.display()));
         }
 
+        // --- weezterm remote features ---
+        prefix_path(&mut path_array, &crate::HOME_DIR.join(".weezterm"));
         prefix_path(&mut path_array, &crate::HOME_DIR.join(".wezterm"));
+        // --- end weezterm remote features ---
         for dir in crate::CONFIG_DIRS.iter() {
             prefix_path(&mut path_array, dir);
         }

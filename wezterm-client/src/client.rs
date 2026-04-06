@@ -1248,8 +1248,10 @@ impl Client {
         prefer_mux: bool,
         class_name: &str,
     ) -> anyhow::Result<config::UnixDomain> {
-        match std::env::var_os("WEZTERM_UNIX_SOCKET") {
+        // --- weezterm remote features ---
+        match config::branding::get_env_with_compat("UNIX_SOCKET") {
             Some(path) if !path.is_empty() => Ok(config::UnixDomain {
+        // --- end weezterm remote features ---
                 socket_path: Some(path.into()),
                 ..Default::default()
             }),
@@ -1270,7 +1272,8 @@ impl Client {
                     .first()
                     .ok_or_else(|| {
                         anyhow!(
-                            "no default unix domain is configured and WEZTERM_UNIX_SOCKET \
+                            "no default unix domain is configured and \
+                             WEEZTERM_UNIX_SOCKET / WEZTERM_UNIX_SOCKET \
                              is not set in the environment"
                         )
                     })?

@@ -4,7 +4,9 @@ use config::{GuiPosition, SshParameters};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-pub const DEFAULT_WINDOW_CLASS: &str = "org.wezfurlong.wezterm";
+// --- weezterm remote features ---
+pub const DEFAULT_WINDOW_CLASS: &str = "com.vicondoa.weezterm";
+// --- end weezterm remote features ---
 
 /// Helper for parsing config overrides
 pub fn name_equals_value(arg: &str) -> Result<(String, String), String> {

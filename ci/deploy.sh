@@ -4,6 +4,34 @@ set -e
 
 TARGET_DIR=${1:-target}
 
+# --- weezterm remote features ---
+# The fork's [[bin]] sections rename output binaries from wezterm* to weezterm*.
+# Create compat symlinks so the rest of this script (and RPM/DEB %install
+# sections that reference the old names) keep working.
+_create_compat_links() {
+  local dir="$1"
+  if [ -d "$dir" ]; then
+    for old in wezterm wezterm-gui wezterm-mux-server; do
+      local new="${old/wezterm/weezterm}"
+      if [ -f "$dir/$new" ] && [ ! -f "$dir/$old" ]; then
+        ln -sf "$new" "$dir/$old"
+      fi
+      if [ -f "$dir/$new.exe" ] && [ ! -f "$dir/$old.exe" ]; then
+        ln -sf "$new.exe" "$dir/$old.exe"
+      fi
+      if [ -f "$dir/$new.pdb" ] && [ ! -f "$dir/$old.pdb" ]; then
+        ln -sf "$new.pdb" "$dir/$old.pdb"
+      fi
+    done
+  fi
+}
+_create_compat_links "$TARGET_DIR/release"
+# Also handle cross-compiled targets (macOS universal build)
+for _d in "$TARGET_DIR"/*/release; do
+  _create_compat_links "$_d"
+done
+# --- end weezterm remote features ---
+
 TAG_NAME=${TAG_NAME:-$(git -c "core.abbrev=8" show -s "--format=%cd-%h" "--date=format:%Y%m%d-%H%M%S")}
 
 HERE=$(pwd)

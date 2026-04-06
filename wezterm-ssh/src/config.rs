@@ -656,9 +656,11 @@ impl Config {
             // For testing purposes only, allow pretending that we
             // have a specific fixed UID so that test expectations
             // are easier to handle with snapshots
-            if let Some(uid) = env.get("WEZTERM_SSH_UID") {
+            // --- weezterm remote features ---
+            if let Some(uid) = env.get("WEEZTERM_SSH_UID").or_else(|| env.get("WEZTERM_SSH_UID")) {
                 return uid.to_string();
             }
+            // --- end weezterm remote features ---
         }
 
         #[cfg(unix)]

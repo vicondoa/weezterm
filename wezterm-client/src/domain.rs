@@ -846,7 +846,9 @@ impl Domain for ClientDomain {
             result.tab_id,
             result.pane_id,
             size,
-            "wezterm",
+            // --- weezterm remote features ---
+            config::branding::APP_NAME,
+            // --- end weezterm remote features ---
         ));
         let tab = Arc::new(Tab::new(&size));
         tab.assign_pane(&pane);
@@ -908,7 +910,9 @@ impl Domain for ClientDomain {
             result.tab_id,
             result.pane_id,
             result.size,
-            "wezterm",
+            // --- weezterm remote features ---
+            config::branding::APP_NAME,
+            // --- end weezterm remote features ---
         ));
 
         let pane_index = match tab
@@ -942,7 +946,9 @@ impl Domain for ClientDomain {
             window_id,
             ..Default::default()
         });
-        ui.title("wezterm: Connecting...");
+        // --- weezterm remote features ---
+        ui.title("weezterm: Connecting...");
+        // --- end weezterm remote features ---
 
         ui.async_run_and_log_error({
             let ui = ui.clone();
