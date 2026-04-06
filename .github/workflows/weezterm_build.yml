@@ -64,10 +64,9 @@ jobs:
           cargo build -p wezterm-gui --release
           cargo build -p wezterm-mux-server --release
           cargo build -p strip-ansi-escapes --release
-      - uses: baptiste0928/cargo-install@v3
+      - uses: taiki-e/install-action@v2
         with:
-          crate: "cargo-nextest"
-          cache-key: "windows"
+          tool: "cargo-nextest"
       - name: "Test"
         shell: cmd
         run: |
@@ -132,10 +131,9 @@ jobs:
           cargo build -p wezterm-gui --release --target=x86_64-apple-darwin
           cargo build -p wezterm-mux-server --release --target=x86_64-apple-darwin
           cargo build -p strip-ansi-escapes --release --target=x86_64-apple-darwin
-      - uses: baptiste0928/cargo-install@v3
+      - uses: taiki-e/install-action@v2
         with:
-          crate: "cargo-nextest"
-          cache-key: "macos"
+          tool: "cargo-nextest"
       - name: "Test (x86_64)"
         run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin"
       - name: "Package"
@@ -228,10 +226,9 @@ jobs:
           cargo build -p wezterm-gui --release
           cargo build -p wezterm-mux-server --release
           cargo build -p strip-ansi-escapes --release
-      - uses: baptiste0928/cargo-install@v3
+      - uses: taiki-e/install-action@v2
         with:
-          crate: "cargo-nextest"
-          cache-key: "${{ matrix.artifact }}"
+          tool: "cargo-nextest"
       - name: "Test"
         run: "cargo nextest run --all --no-fail-fast"
       - name: "Package"
