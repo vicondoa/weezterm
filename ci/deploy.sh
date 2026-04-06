@@ -30,6 +30,10 @@ _create_compat_links "$TARGET_DIR/release"
 for _d in "$TARGET_DIR"/*/release; do
   _create_compat_links "$_d"
 done
+# Also symlink the icon so RPM/DEB/AppImage install lines keep working
+if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
+  ln -sf weezterm/terminal.png assets/icon/terminal.png
+fi
 # --- end weezterm remote features ---
 
 TAG_NAME=${TAG_NAME:-$(git -c "core.abbrev=8" show -s "--format=%cd-%h" "--date=format:%Y%m%d-%H%M%S")}

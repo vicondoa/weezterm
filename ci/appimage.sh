@@ -11,6 +11,10 @@ for old in wezterm wezterm-gui wezterm-mux-server; do
     ln -sf "$new" "target/release/$old"
   fi
 done
+# Icon compat symlink
+if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
+  ln -sf weezterm/terminal.png assets/icon/terminal.png
+fi
 # --- end weezterm remote features ---
 
 mkdir AppDir

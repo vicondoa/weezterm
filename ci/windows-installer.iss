@@ -29,7 +29,9 @@ DisableProgramGroupPage=yes
 ;PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..
 OutputBaseFilename=WezTerm-Setup
-SetupIconFile=..\assets\windows\terminal.ico
+; --- weezterm remote features ---
+SetupIconFile=..\assets\icon\weezterm\terminal.ico
+; --- end weezterm remote features ---
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma
 SolidCompression=yes

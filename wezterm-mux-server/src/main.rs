@@ -15,11 +15,13 @@ use wezterm_mux_server_impl::update_mux_domains_for_server;
 mod daemonize;
 
 #[derive(Debug, Parser)]
+// --- weezterm remote features ---
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
+    about = "WeezTerm \u{2014} Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
     version = config::wezterm_version(),
     trailing_var_arg = true,
 )]
+// --- end weezterm remote features ---
 struct Opt {
     /// Skip loading wezterm.lua
     #[arg(long, short = 'n')]
