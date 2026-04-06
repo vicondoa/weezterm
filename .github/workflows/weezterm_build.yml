@@ -83,8 +83,8 @@ jobs:
         with:
           name: "windows"
           path: |
-            WezTerm-*.zip
-            WezTerm-*.exe
+            Weezterm-*.zip
+            Weezterm-*.exe
 
   # ─── macOS (Universal binary) ─────────────────────────────────────
   macos:
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: "macos"
-          path: "WezTerm-*.zip"
+          path: "Weezterm-*.zip"
 
   # ─── Linux matrix (containers) ────────────────────────────────────
   linux:
@@ -253,6 +253,7 @@ jobs:
             *src.tar.gz
             *.AppImage
             WezTerm-*.tar.xz
+            Weezterm-*.tar.xz
 
   # ─── GitHub Release (on tags only) ────────────────────────────────
   release:
