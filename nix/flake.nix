@@ -170,9 +170,24 @@
             mkdir -p $out/nix-support
             echo "${passthru.terminfo}" >> $out/nix-support/propagated-user-env-packages
 
-            install -Dm644 assets/icon/terminal.png $out/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
-            install -Dm644 assets/wezterm.desktop $out/share/applications/org.wezfurlong.wezterm.desktop
-            install -Dm644 assets/wezterm.appdata.xml $out/share/metainfo/org.wezfurlong.wezterm.appdata.xml
+            # --- weezterm remote features ---
+            # Prefer weezterm-branded desktop/appdata/icon if available
+            if [ -f assets/icon/weezterm/terminal.png ]; then
+              install -Dm644 assets/icon/weezterm/terminal.png $out/share/icons/hicolor/128x128/apps/com.vicondoa.weezterm.png
+            else
+              install -Dm644 assets/icon/terminal.png $out/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
+            fi
+            if [ -f assets/weezterm.desktop ]; then
+              install -Dm644 assets/weezterm.desktop $out/share/applications/com.vicondoa.weezterm.desktop
+            else
+              install -Dm644 assets/wezterm.desktop $out/share/applications/org.wezfurlong.wezterm.desktop
+            fi
+            if [ -f assets/weezterm.appdata.xml ]; then
+              install -Dm644 assets/weezterm.appdata.xml $out/share/metainfo/com.vicondoa.weezterm.appdata.xml
+            else
+              install -Dm644 assets/wezterm.appdata.xml $out/share/metainfo/org.wezfurlong.wezterm.appdata.xml
+            fi
+            # --- end weezterm remote features ---
 
             install -Dm644 assets/shell-integration/wezterm.sh -t $out/etc/profile.d
             installShellCompletion --cmd wezterm \

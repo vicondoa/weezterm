@@ -17,6 +17,13 @@ if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.pn
 fi
 # Use extract-and-run to avoid FUSE requirement in containers
 export APPIMAGE_EXTRACT_AND_RUN=1
+# Override desktop/appdata with weezterm-branded versions
+if [ -f "assets/weezterm.desktop" ]; then
+  cp -f assets/weezterm.desktop assets/wezterm.desktop
+fi
+if [ -f "assets/weezterm.appdata.xml" ]; then
+  cp -f assets/weezterm.appdata.xml assets/wezterm.appdata.xml
+fi
 # --- end weezterm remote features ---
 
 mkdir AppDir
