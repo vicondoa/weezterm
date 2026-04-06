@@ -135,7 +135,19 @@
           auditable = false;
 
           preFixup =
-            lib.optionalString stdenv.isLinux /* bash */ ''
+            # --- weezterm remote features ---
+            # The [[bin]] sections rename outputs to weezterm*; create compat
+            # symlinks so patchelf / macOS bundle logic still works.
+            ''
+              for old in wezterm wezterm-gui wezterm-mux-server; do
+                new="''${old/wezterm/weezterm}"
+                if [ -f "$out/bin/$new" ] && [ ! -e "$out/bin/$old" ]; then
+                  ln -s "$new" "$out/bin/$old"
+                fi
+              done
+            ''
+            # --- end weezterm remote features ---
+            + lib.optionalString stdenv.isLinux /* bash */ ''
               patchelf \
                 --add-needed "${pkgs.libGL}/lib/libEGL.so.1" \
                 --add-needed "${pkgs.vulkan-loader}/lib/libvulkan.so.1" \
