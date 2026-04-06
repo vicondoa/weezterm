@@ -73,9 +73,10 @@ jobs:
           PATH C:\Strawberry\perl\bin;%PATH%
           cargo build -p strip-ansi-escapes --release
       - name: "Install cargo-nextest from Cargo"
-        uses: taiki-e/install-action@v2
+        uses: baptiste0928/cargo-install@v3
         with:
-          tool: "cargo-nextest"
+          crate: "cargo-nextest"
+          cache-key: "windows"
       - name: "Test"
         shell: cmd
         run: |
