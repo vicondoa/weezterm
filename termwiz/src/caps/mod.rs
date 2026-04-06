@@ -302,7 +302,9 @@ impl Capabilities {
                         "2.9.20150512",
                     )
                 }
-                Some("WezTerm") => true,
+                // --- weezterm remote features ---
+                Some("WeezTerm") | Some("WezTerm") => true,
+                // --- end weezterm remote features ---
                 _ => false,
             }
         });
