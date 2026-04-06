@@ -42,6 +42,11 @@ fi
 if [ -f "assets/weezterm.appdata.xml" ]; then
   cp -f assets/weezterm.appdata.xml assets/wezterm.appdata.xml
 fi
+# Create icon symlink under new app ID so freedesktop icon lookup works
+if [ -f "assets/icon/terminal.png" ]; then
+  mkdir -p assets/icon
+  ln -sf terminal.png assets/icon/com.vicondoa.weezterm.png
+fi
 # --- end weezterm remote features ---
 
 TAG_NAME=${TAG_NAME:-$(git -c "core.abbrev=8" show -s "--format=%cd-%h" "--date=format:%Y%m%d-%H%M%S")}
