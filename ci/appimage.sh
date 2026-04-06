@@ -15,6 +15,15 @@ done
 if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
   ln -sf weezterm/terminal.png assets/icon/terminal.png
 fi
+# Use extract-and-run to avoid FUSE requirement in containers
+export APPIMAGE_EXTRACT_AND_RUN=1
+# Override desktop/appdata with weezterm-branded versions
+if [ -f "assets/weezterm.desktop" ]; then
+  cp -f assets/weezterm.desktop assets/wezterm.desktop
+fi
+if [ -f "assets/weezterm.appdata.xml" ]; then
+  cp -f assets/weezterm.appdata.xml assets/wezterm.appdata.xml
+fi
 # --- end weezterm remote features ---
 
 mkdir AppDir
@@ -23,7 +32,23 @@ install -Dsm755 -t AppDir/usr/bin target/release/wezterm-mux-server
 install -Dsm755 -t AppDir/usr/bin target/release/wezterm
 install -Dsm755 -t AppDir/usr/bin target/release/wezterm-gui
 install -Dsm755 -t AppDir/usr/bin target/release/strip-ansi-escapes
+# --- weezterm remote features ---
+# Also install under the real weezterm names so the desktop Exec= entry works
+if [ -f "target/release/weezterm" ]; then
+  install -Dsm755 target/release/weezterm AppDir/usr/bin/weezterm
+fi
+if [ -f "target/release/weezterm-gui" ]; then
+  install -Dsm755 target/release/weezterm-gui AppDir/usr/bin/weezterm-gui
+fi
+if [ -f "target/release/weezterm-mux-server" ]; then
+  install -Dsm755 target/release/weezterm-mux-server AppDir/usr/bin/weezterm-mux-server
+fi
+# --- end weezterm remote features ---
 install -Dm644 assets/icon/terminal.png AppDir/usr/share/icons/hicolor/128x128/apps/org.wezfurlong.wezterm.png
+# --- weezterm remote features ---
+# Also install icon under the new app ID so linuxdeploy can find it
+install -Dm644 assets/icon/terminal.png AppDir/usr/share/icons/hicolor/128x128/apps/com.vicondoa.weezterm.png
+# --- end weezterm remote features ---
 install -Dm644 assets/wezterm.desktop AppDir/usr/share/applications/org.wezfurlong.wezterm.desktop
 install -Dm644 assets/wezterm.appdata.xml AppDir/usr/share/metainfo/org.wezfurlong.wezterm.appdata.xml
 install -Dm644 assets/wezterm-nautilus.py AppDir/usr/share/nautilus-python/extensions/wezterm-nautilus.py
@@ -36,13 +61,15 @@ distver=$(lsb_release -rs 2>/dev/null || sh -c "source /etc/os-release && echo \
 
 # Embed appropriate update info
 # https://github.com/AppImage/AppImageSpec/blob/master/draft.md#github-releases
+# --- weezterm remote features ---
 if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-  UPDATE="gh-releases-zsync|wez|wezterm|nightly|WezTerm-*.AppImage.zsync"
-  OUTPUT=WezTerm-nightly-$distro$distver.AppImage
+  UPDATE="gh-releases-zsync|vicondoa|weezterm|nightly|Weezterm-*.AppImage.zsync"
+  OUTPUT=Weezterm-nightly-$distro$distver.AppImage
 else
-  UPDATE="gh-releases-zsync|wez|wezterm|latest|WezTerm-*.AppImage.zsync"
-  OUTPUT=WezTerm-$TAG_NAME-$distro$distver.AppImage
+  UPDATE="gh-releases-zsync|vicondoa|weezterm|latest|Weezterm-*.AppImage.zsync"
+  OUTPUT=Weezterm-$TAG_NAME-$distro$distver.AppImage
 fi
+# --- end weezterm remote features ---
 
 # Munge the path so that it finds our appstreamcli wrapper
 PATH="$PWD/ci:$PATH" \

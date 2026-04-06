@@ -5,13 +5,17 @@
 ; --- weezterm remote features ---
 #define MyAppName "WeezTerm"
 ;#define MyAppVersion "1.5"
-#define MyAppPublisher "Wez Furlong"
-#define MyAppURL "http://wezterm.org"
+; --- weezterm remote features ---
+#define MyAppPublisher "WeezTerm"
+#define MyAppURL "https://github.com/vicondoa/weezterm"
+; --- end weezterm remote features ---
 #define MyAppExeName "weezterm-gui.exe"
 ; --- end weezterm remote features ---
 
 [Setup]
-AppId={{BCF6F0DA-5B9A-408D-8562-F680AE6E1EAF}
+; --- weezterm remote features ---
+AppId={{7A2E8F3B-C4D1-4E5F-9A6B-1D2C3E4F5A6B}
+; --- end weezterm remote features ---
 ArchitecturesAllowed=x64 arm64
 ArchitecturesInstallIn64BitMode=x64 arm64
 AppName={#MyAppName}

@@ -41,7 +41,9 @@ fn get_github_release_info(uri: &str) -> anyhow::Result<Release> {
         .version(HttpVersion::Http10)
         .header(
             "User-Agent",
-            &format!("wezterm/wezterm-{}", wezterm_version()),
+            // --- weezterm remote features ---
+            &format!("vicondoa/weezterm-{}", wezterm_version()),
+            // --- end weezterm remote features ---
         )
         .send(&mut latest)
         .map_err(|e| anyhow!("failed to query github releases: {}", e))?;
@@ -55,14 +57,16 @@ fn get_github_release_info(uri: &str) -> anyhow::Result<Release> {
     Ok(latest)
 }
 
+// --- weezterm remote features ---
 pub fn get_latest_release_info() -> anyhow::Result<Release> {
-    get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/latest")
+    get_github_release_info("https://api.github.com/repos/vicondoa/weezterm/releases/latest")
 }
 
 #[allow(unused)]
 pub fn get_nightly_release_info() -> anyhow::Result<Release> {
-    get_github_release_info("https://api.github.com/repos/wezterm/wezterm/releases/tags/nightly")
+    get_github_release_info("https://api.github.com/repos/vicondoa/weezterm/releases/tags/nightly")
 }
+// --- end weezterm remote features ---
 
 lazy_static::lazy_static! {
     static ref UPDATER_WINDOW: Mutex<Option<ConnectionUI>> = Mutex::new(None);
@@ -92,7 +96,12 @@ pub fn load_last_release_info_and_set_banner() {
 
 fn set_banner_from_release_info(latest: &Release) {
     let mux = crate::Mux::get();
-    let url = format!("https://wezterm.org/changelog.html#{}", latest.tag_name);
+    // --- weezterm remote features ---
+    let url = format!(
+        "https://github.com/vicondoa/weezterm/releases/tag/{}",
+        latest.tag_name
+    );
+    // --- end weezterm remote features ---
 
     let icon = ITermFileData {
         name: None,
@@ -119,7 +128,9 @@ fn set_banner_from_release_info(latest: &Release) {
     let reset = CSI::Sgr(Sgr::Reset);
     let link_off = OperatingSystemCommand::SetHyperlink(None);
     mux.set_banner(Some(format!(
-        "{}{}WezTerm Update Available\r\n{}{}{}{}Click to see what's new{}{}\r\n",
+        // --- weezterm remote features ---
+        "{}{}WeezTerm Update Available\r\n{}{}{}{}Click to see what's new{}{}\r\n",
+        // --- end weezterm remote features ---
         icon,
         top_line_pos,
         second_line_pos,
@@ -191,11 +202,18 @@ fn update_checker() {
                         current
                     );
 
-                    let url = format!("https://wezterm.org/changelog.html#{}", latest.tag_name);
+                    // --- weezterm remote features ---
+                    let url = format!(
+                        "https://github.com/vicondoa/weezterm/releases/tag/{}",
+                        latest.tag_name
+                    );
+                    // --- end weezterm remote features ---
 
                     if force_ui || socks.is_empty() || socks[0] == my_sock {
                         persistent_toast_notification_with_click_to_open_url(
-                            "WezTerm Update Available",
+                            // --- weezterm remote features ---
+                            "WeezTerm Update Available",
+                            // --- end weezterm remote features ---
                             "Click to see what's new",
                             &url,
                         );
