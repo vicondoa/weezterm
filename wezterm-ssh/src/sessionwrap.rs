@@ -115,9 +115,11 @@ impl SessionWrap {
         match self {
             #[cfg(feature = "ssh2")]
             Self::Ssh2(sess) => {
-                let channel = sess
-                    .sess
-                    .channel_direct_tcpip(remote_host, remote_port, Some((src_host, src_port)))?;
+                let channel = sess.sess.channel_direct_tcpip(
+                    remote_host,
+                    remote_port,
+                    Some((src_host, src_port)),
+                )?;
                 Ok(ChannelWrap::Ssh2(channel))
             }
 

@@ -436,7 +436,9 @@ fn get_error_window() -> ConnectionUI {
     }
 
     let ui = ConnectionUI::new_with_no_close_delay();
-    ui.title("wezterm Configuration Error");
+    // --- weezterm remote features ---
+    ui.title("weezterm Configuration Error");
+    // --- end weezterm remote features ---
     err.replace(ui.clone());
     ui
 }

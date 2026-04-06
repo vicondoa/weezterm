@@ -15,11 +15,13 @@ use wezterm_mux_server_impl::update_mux_domains_for_server;
 mod daemonize;
 
 #[derive(Debug, Parser)]
+// --- weezterm remote features ---
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
+    about = "WeezTerm \u{2014} Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
     version = config::wezterm_version(),
     trailing_var_arg = true,
 )]
+// --- end weezterm remote features ---
 struct Opt {
     /// Skip loading wezterm.lua
     #[arg(long, short = 'n')]
@@ -310,7 +312,12 @@ mod ossl;
 pub fn spawn_listener() -> anyhow::Result<()> {
     let config = configuration();
     for unix_dom in &config.unix_domains {
-        std::env::set_var("WEZTERM_UNIX_SOCKET", unix_dom.socket_path());
+        // --- weezterm remote features ---
+        config::branding::set_current_env_with_compat(
+            "UNIX_SOCKET",
+            &unix_dom.socket_path().to_string_lossy(),
+        );
+        // --- end weezterm remote features ---
         let mut listener = wezterm_mux_server_impl::local::LocalListener::with_domain(unix_dom)?;
         thread::spawn(move || {
             listener.run();

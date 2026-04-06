@@ -45,14 +45,12 @@ impl PortForwardProxy {
         preferred_local_port: u16,
     ) -> anyhow::Result<Self> {
         // Try preferred port first, fall back to OS-assigned (blocking bind is fine)
-        let listener = match std::net::TcpListener::bind(format!(
-            "127.0.0.1:{}",
-            preferred_local_port
-        )) {
-            Ok(l) => l,
-            Err(_) => std::net::TcpListener::bind("127.0.0.1:0")
-                .context("failed to bind any local port for forwarding")?,
-        };
+        let listener =
+            match std::net::TcpListener::bind(format!("127.0.0.1:{}", preferred_local_port)) {
+                Ok(l) => l,
+                Err(_) => std::net::TcpListener::bind("127.0.0.1:0")
+                    .context("failed to bind any local port for forwarding")?,
+            };
 
         let local_port = listener.local_addr()?.port();
         let stop_flag = Arc::new(AtomicBool::new(false));
@@ -69,9 +67,7 @@ impl PortForwardProxy {
         let rhost = remote_host.clone();
         std::thread::spawn(move || {
             // Set a short accept timeout so we can check the stop flag
-            listener
-                .set_nonblocking(false)
-                .ok();
+            listener.set_nonblocking(false).ok();
             for incoming in listener.incoming() {
                 if flag.load(Ordering::SeqCst) {
                     break;
@@ -92,10 +88,7 @@ impl PortForwardProxy {
                                     if let Err(e) =
                                         proxy_connection(stream, tunnel.reader, tunnel.writer)
                                     {
-                                        log::debug!(
-                                            "Port forward proxy connection ended: {}",
-                                            e
-                                        );
+                                        log::debug!("Port forward proxy connection ended: {}", e);
                                     }
                                 }
                                 Err(e) => {

@@ -22,12 +22,14 @@ mod cli;
 //    let message = "; ❤ 😍🤢\n\x1b[91;mw00t\n\x1b[37;104;m bleet\x1b[0;m.";
 
 #[derive(Debug, Parser)]
+// --- weezterm remote features ---
 #[command(
-    about = "Wez's Terminal Emulator\nhttp://github.com/wezterm/wezterm",
+    about = "WeezTerm — Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
     version = wezterm_version()
 )]
+// --- end weezterm remote features ---
 pub struct Opt {
-    /// Skip loading wezterm.lua
+    /// Skip loading weezterm.lua
     #[arg(long, short = 'n')]
     skip_config: bool,
 
@@ -771,11 +773,9 @@ fn delegate_to_gui(saver: UmaskSaver) -> anyhow::Result<()> {
     // Restore the original umask
     drop(saver);
 
-    let exe_name = if cfg!(windows) {
-        "wezterm-gui.exe"
-    } else {
-        "wezterm-gui"
-    };
+    // --- weezterm remote features ---
+    let exe_name = config::branding::GUI_BIN;
+    // --- end weezterm remote features ---
 
     let exe = std::env::current_exe()?
         .parent()

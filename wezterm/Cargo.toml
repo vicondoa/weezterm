@@ -59,3 +59,9 @@ workspace = true
 [target.'cfg(windows)'.build-dependencies]
 cc.workspace = true
 embed-resource.workspace = true
+
+# --- weezterm remote features ---
+[[bin]]
+name = "weezterm"
+path = "src/main.rs"
+# --- end weezterm remote features ---

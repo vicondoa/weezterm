@@ -1,8 +1,12 @@
 # Weezterm
 
-<img height="128" alt="WezTerm Icon" src="https://raw.githubusercontent.com/wezterm/wezterm/main/assets/icon/wezterm-icon.svg" align="left">
+<p align="center">
+  <img height="256" alt="WeezTerm Mascot" src="assets/icon/weezterm/mascot.png">
+</p>
 
-*A fork of [WezTerm](https://github.com/wezterm/wezterm) — the GPU-accelerated cross-platform terminal emulator and multiplexer written by [@wez](https://github.com/wez) in [Rust](https://www.rust-lang.org/) — with integrated remote SSH extensions.*
+<p align="center">
+  <em>A fork of <a href="https://github.com/wezterm/wezterm">WezTerm</a> — the GPU-accelerated cross-platform terminal emulator and multiplexer written by <a href="https://github.com/wez">@wez</a> in <a href="https://www.rust-lang.org/">Rust</a> — with integrated remote SSH extensions.</em>
+</p>
 
 Weezterm extends WezTerm with VS Code Remote SSH-style features:
 - **Remote browser opening** — Programs on the remote host can open URLs in your local browser (e.g., `az login` interactive auth)

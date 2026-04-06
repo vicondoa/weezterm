@@ -33,3 +33,9 @@ winapi = { workspace=true, features = [ "winuser" ]}
 [target.'cfg(windows)'.build-dependencies]
 embed-resource.workspace = true
 cc.workspace = true
+
+# --- weezterm remote features ---
+[[bin]]
+name = "weezterm-mux-server"
+path = "src/main.rs"
+# --- end weezterm remote features ---

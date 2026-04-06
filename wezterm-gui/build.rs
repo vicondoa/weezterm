@@ -118,13 +118,15 @@ BEGIN
     BEGIN
         BLOCK "040904E4"
         BEGIN
-            VALUE "CompanyName",      "Wez Furlong\0"
-            VALUE "FileDescription",  "WezTerm - Wez's Terminal Emulator\0"
+            // --- weezterm remote features ---
+            VALUE "CompanyName",      "WeezTerm\0"
+            VALUE "FileDescription",  "WeezTerm - Terminal Emulator\0"
             VALUE "FileVersion",      "{version}\0"
-            VALUE "LegalCopyright",   "Wez Furlong, MIT licensed\0"
+            VALUE "LegalCopyright",   "John Vicondoa, MIT licensed. Based on WezTerm by Wez Furlong (MIT)\0"
+            // --- end weezterm remote features ---
             VALUE "InternalName",     "\0"
             VALUE "OriginalFilename", "\0"
-            VALUE "ProductName",      "WezTerm\0"
+            VALUE "ProductName",      "WeezTerm\0"
             VALUE "ProductVersion",   "{version}\0"
         END
     END

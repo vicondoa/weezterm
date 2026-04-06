@@ -108,7 +108,9 @@ impl TermWizTerminalPane {
         let terminal = Mutex::new(wezterm_term::Terminal::new(
             size,
             term_config.unwrap_or_else(|| Arc::new(config::TermConfig::new())),
-            "WezTerm",
+            // --- weezterm remote features ---
+            config::branding::APP_NAME_DISPLAY,
+            // --- end weezterm remote features ---
             config::wezterm_version(),
             Box::new(Vec::new()), // FIXME: connect to something?
         ));

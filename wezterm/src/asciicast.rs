@@ -62,6 +62,16 @@ impl Header {
     fn new(config: &ConfigHandle, size: PtySize, prog: &[&OsStr]) -> Self {
         let mut env = HashMap::new();
         env.insert("TERM".to_string(), config.term.to_string());
+        // --- weezterm remote features ---
+        env.insert(
+            "WEEZTERM_VERSION".to_string(),
+            config::wezterm_version().to_string(),
+        );
+        env.insert(
+            "WEEZTERM_TARGET_TRIPLE".to_string(),
+            config::wezterm_target_triple().to_string(),
+        );
+        // Compat: also set WEZTERM_ variants
         env.insert(
             "WEZTERM_VERSION".to_string(),
             config::wezterm_version().to_string(),
@@ -70,6 +80,7 @@ impl Header {
             "WEZTERM_TARGET_TRIPLE".to_string(),
             config::wezterm_target_triple().to_string(),
         );
+        // --- end weezterm remote features ---
         if let Ok(shell) = std::env::var("SHELL") {
             env.insert("SHELL".to_string(), shell);
         }
@@ -373,7 +384,9 @@ impl RecordCommand {
             ),
             None => {
                 tempfile::Builder::new()
-                    .prefix("wezterm-recording-")
+                    // --- weezterm remote features ---
+                    .prefix(config::branding::RECORDING_PREFIX)
+                    // --- end weezterm remote features ---
                     // We use a .txt suffix for convenice when uploading to GH
                     .suffix(".cast.txt")
                     .tempfile()?

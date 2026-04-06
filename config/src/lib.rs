@@ -20,6 +20,9 @@ use std::time::Duration;
 use wezterm_dynamic::{FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value};
 use wezterm_term::UnicodeVersion;
 
+// --- weezterm remote features ---
+pub mod branding;
+// --- end weezterm remote features ---
 mod background;
 mod bell;
 mod cell;
@@ -382,7 +385,17 @@ pub fn create_user_owned_dirs(p: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
+// --- weezterm remote features ---
+// Weezterm XDG config dir (primary). Falls through to upstream in load_with_overrides().
 fn xdg_config_home() -> PathBuf {
+    match std::env::var_os("XDG_CONFIG_HOME").map(|s| PathBuf::from(s).join("weezterm")) {
+        Some(p) => p,
+        None => HOME_DIR.join(".config").join("weezterm"),
+    }
+}
+// --- end weezterm remote features ---
+
+fn upstream_xdg_config_home() -> PathBuf {
     match std::env::var_os("XDG_CONFIG_HOME").map(|s| PathBuf::from(s).join("wezterm")) {
         Some(p) => p,
         None => HOME_DIR.join(".config").join("wezterm"),
@@ -395,8 +408,24 @@ fn config_dirs() -> Vec<PathBuf> {
 
     #[cfg(unix)]
     if let Some(d) = std::env::var_os("XDG_CONFIG_DIRS") {
-        dirs.extend(std::env::split_paths(&d).map(|s| PathBuf::from(s).join("wezterm")));
+        dirs.extend(std::env::split_paths(&d).map(|s| PathBuf::from(s).join("weezterm")));
     }
+
+    // --- weezterm remote features ---
+    // Fallback: also search upstream wezterm dirs for migration compat
+    let upstream = upstream_xdg_config_home();
+    if !dirs.contains(&upstream) {
+        dirs.push(upstream);
+    }
+    #[cfg(unix)]
+    if let Some(d) = std::env::var_os("XDG_CONFIG_DIRS") {
+        for p in std::env::split_paths(&d).map(|s| PathBuf::from(s).join("wezterm")) {
+            if !dirs.contains(&p) {
+                dirs.push(p);
+            }
+        }
+    }
+    // --- end weezterm remote features ---
 
     dirs
 }

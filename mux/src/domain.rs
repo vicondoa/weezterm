@@ -476,10 +476,12 @@ impl LocalDomain {
         if let Some(dir) = command_dir {
             cmd.cwd(dir);
         }
-        if let Ok(sock) = std::env::var("WEZTERM_UNIX_SOCKET") {
-            cmd.env("WEZTERM_UNIX_SOCKET", sock);
+        // --- weezterm remote features ---
+        if let Some(sock) = config::branding::get_env_with_compat("UNIX_SOCKET") {
+            config::branding::set_env_with_compat(&mut cmd, "UNIX_SOCKET", &sock.to_string_lossy());
         }
-        cmd.env("WEZTERM_PANE", pane_id.to_string());
+        config::branding::set_env_with_compat(&mut cmd, "PANE", &pane_id.to_string());
+        // --- end weezterm remote features ---
         if let Some(agent) = Mux::get().agent.as_ref() {
             cmd.env("SSH_AUTH_SOCK", agent.path());
         }
@@ -621,7 +623,9 @@ impl Domain for LocalDomain {
         let mut terminal = wezterm_term::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
-            "WezTerm",
+            // --- weezterm remote features ---
+            config::branding::APP_NAME_DISPLAY,
+            // --- end weezterm remote features ---
             config::wezterm_version(),
             Box::new(writer.clone()),
         );

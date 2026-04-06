@@ -148,10 +148,7 @@ pub mod url_scraper {
     use std::sync::LazyLock;
 
     static LOCALHOST_URL_RE: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(
-            r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{1,5})",
-        )
-        .unwrap()
+        Regex::new(r"https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]):(\d{1,5})").unwrap()
     });
 
     /// Extract port numbers from text that contains localhost URLs.

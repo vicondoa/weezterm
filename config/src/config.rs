@@ -1012,10 +1012,18 @@ impl Config {
         // multiple.  In addition, it spawns a lot of subprocesses,
         // so we do this bit "by-hand"
 
-        let mut paths = vec![PathPossibility::optional(HOME_DIR.join(".wezterm.lua"))];
+        // --- weezterm remote features ---
+        // Check .weezterm.lua first, then fall back to .wezterm.lua.
+        // CONFIG_DIRS already includes both weezterm and wezterm directories,
+        // so we just search for wezterm.lua in each (the dir name provides the branding).
+        let mut paths = vec![
+            PathPossibility::optional(HOME_DIR.join(".weezterm.lua")),
+            PathPossibility::optional(HOME_DIR.join(".wezterm.lua")),
+        ];
         for dir in CONFIG_DIRS.iter() {
             paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
         }
+        // --- end weezterm remote features ---
 
         if cfg!(windows) {
             // On Windows, a common use case is to maintain a thumb drive
@@ -1032,10 +1040,14 @@ impl Config {
                 }
             }
         }
-        if let Some(path) = std::env::var_os("WEZTERM_CONFIG_FILE") {
-            log::trace!("Note: WEZTERM_CONFIG_FILE is set in the environment");
+        // --- weezterm remote features ---
+        if let Some(path) = crate::branding::get_env_with_compat("CONFIG_FILE") {
+            log::trace!(
+                "Note: WEEZTERM_CONFIG_FILE / WEZTERM_CONFIG_FILE is set in the environment"
+            );
             paths.insert(0, PathPossibility::required(path.into()));
         }
+        // --- end weezterm remote features ---
 
         if let Some(path) = CONFIG_FILE_OVERRIDE.lock().unwrap().as_ref() {
             log::trace!("Note: config file override is set");
@@ -1061,11 +1073,13 @@ impl Config {
             }
         }
 
-        // We didn't find (or were asked to skip) a wezterm.lua file, so
+        // We didn't find (or were asked to skip) a config file, so
         // update the environment to make it simpler to understand this
         // state.
-        std::env::remove_var("WEZTERM_CONFIG_FILE");
-        std::env::remove_var("WEZTERM_CONFIG_DIR");
+        // --- weezterm remote features ---
+        crate::branding::remove_current_env_with_compat("CONFIG_FILE");
+        crate::branding::remove_current_env_with_compat("CONFIG_DIR");
+        // --- end weezterm remote features ---
 
         match Self::try_default() {
             Err(err) => LoadedConfig {
@@ -1136,10 +1150,15 @@ impl Config {
                 // problems earlier than we use them.
                 let _ = cfg.key_bindings();
 
-                std::env::set_var("WEZTERM_CONFIG_FILE", p);
+                // --- weezterm remote features ---
+                crate::branding::set_current_env_with_compat("CONFIG_FILE", &p.to_string_lossy());
                 if let Some(dir) = p.parent() {
-                    std::env::set_var("WEZTERM_CONFIG_DIR", dir);
+                    crate::branding::set_current_env_with_compat(
+                        "CONFIG_DIR",
+                        &dir.to_string_lossy(),
+                    );
                 }
+                // --- end weezterm remote features ---
                 Ok(cfg)
             });
         let cfg = config?;
@@ -1605,7 +1624,9 @@ impl Config {
         cmd.env("COLORTERM", "truecolor");
         // TERM_PROGRAM and TERM_PROGRAM_VERSION are an emerging
         // de-facto standard for identifying the terminal.
-        cmd.env("TERM_PROGRAM", "WezTerm");
+        // --- weezterm remote features ---
+        cmd.env("TERM_PROGRAM", crate::branding::APP_NAME_DISPLAY);
+        // --- end weezterm remote features ---
         cmd.env("TERM_PROGRAM_VERSION", crate::wezterm_version());
     }
 }
@@ -1745,26 +1766,38 @@ fn default_font_size() -> f64 {
 
 pub(crate) fn compute_cache_dir() -> anyhow::Result<PathBuf> {
     if let Some(runtime) = dirs_next::cache_dir() {
-        return Ok(runtime.join("wezterm"));
+        // --- weezterm remote features ---
+        return Ok(runtime.join("weezterm"));
+        // --- end weezterm remote features ---
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    // --- weezterm remote features ---
+    Ok(crate::HOME_DIR.join(".local/share/weezterm"))
+    // --- end weezterm remote features ---
 }
 
 pub(crate) fn compute_data_dir() -> anyhow::Result<PathBuf> {
     if let Some(runtime) = dirs_next::data_dir() {
-        return Ok(runtime.join("wezterm"));
+        // --- weezterm remote features ---
+        return Ok(runtime.join("weezterm"));
+        // --- end weezterm remote features ---
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    // --- weezterm remote features ---
+    Ok(crate::HOME_DIR.join(".local/share/weezterm"))
+    // --- end weezterm remote features ---
 }
 
 pub(crate) fn compute_runtime_dir() -> anyhow::Result<PathBuf> {
     if let Some(runtime) = dirs_next::runtime_dir() {
-        return Ok(runtime.join("wezterm"));
+        // --- weezterm remote features ---
+        return Ok(runtime.join("weezterm"));
+        // --- end weezterm remote features ---
     }
 
-    Ok(crate::HOME_DIR.join(".local/share/wezterm"))
+    // --- weezterm remote features ---
+    Ok(crate::HOME_DIR.join(".local/share/weezterm"))
+    // --- end weezterm remote features ---
 }
 
 pub fn pki_dir() -> anyhow::Result<PathBuf> {

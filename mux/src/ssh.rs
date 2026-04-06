@@ -186,8 +186,9 @@ pub struct RemoteSshDomain {
     /// Signal to stop the port forwarding orchestrator
     port_forward_stop_tx: Mutex<Option<smol::channel::Sender<()>>>,
     /// Shared port forward manager (accessible from overlay)
-    port_forward_manager:
-        Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<crate::port_forward::PortForwardManager>>>>>,
+    port_forward_manager: Arc<
+        std::sync::Mutex<Option<Arc<std::sync::Mutex<crate::port_forward::PortForwardManager>>>>,
+    >,
     // --- end weezterm remote features ---
 }
 
@@ -217,6 +218,12 @@ pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap
         }
         .to_string(),
     );
+    // --- weezterm remote features ---
+    // Mirror under weezterm_ name so either key works
+    if let Some(v) = ssh_config.get("wezterm_ssh_backend").cloned() {
+        ssh_config.insert("weezterm_ssh_backend".to_string(), v);
+    }
+    // --- end weezterm remote features ---
     for (k, v) in &ssh_dom.ssh_option {
         ssh_config.insert(k.to_string(), v.to_string());
     }
@@ -230,9 +237,15 @@ pub fn ssh_domain_to_ssh_config(ssh_dom: &SshDomain) -> anyhow::Result<ConfigMap
     if ssh_dom.no_agent_auth {
         ssh_config.insert("identitiesonly".to_string(), "yes".to_string());
     }
-    if let Some("true") = ssh_config.get("wezterm_ssh_verbose").map(|s| s.as_str()) {
+    // --- weezterm remote features ---
+    if let Some("true") = ssh_config
+        .get("weezterm_ssh_verbose")
+        .or_else(|| ssh_config.get("wezterm_ssh_verbose"))
+        .map(|s| s.as_str())
+    {
         log::info!("Using ssh config: {ssh_config:#?}");
     }
+    // --- end weezterm remote features ---
     Ok(ssh_config)
 }
 
@@ -287,6 +300,10 @@ impl RemoteSshDomain {
         // One option is to forward the mux via unix domain, another is to
         // embed the mux protocol in an escape sequence and just use the
         // existing terminal connection
+        // --- weezterm remote features ---
+        env.insert("WEEZTERM_REMOTE_PANE".to_string(), pane_id.to_string());
+        // Compat: also set WEZTERM_ variant
+        // --- end weezterm remote features ---
         env.insert("WEZTERM_REMOTE_PANE".to_string(), pane_id.to_string());
 
         // --- weezterm remote features ---
@@ -304,20 +321,23 @@ impl RemoteSshDomain {
             // the server has AcceptEnv BROWSER configured).
             env.insert(
                 "BROWSER".to_string(),
-                "/tmp/.wezterm-browser".to_string(),
+                config::branding::REMOTE_BROWSER_PATH.to_string(),
             );
             // Heredoc with single-quoted delimiter suppresses all expansion,
             // so the script content is written verbatim.
-            r#"_wz_b=/tmp/.wezterm-browser
+            format!(
+                r#"_wz_b={browser_path}
 cat > "$_wz_b" << 'WEZEOF'
 #!/bin/sh
 printf '\033]7457;open-url;%s\033\\' "$1" >/dev/tty
 WEZEOF
 chmod +x "$_wz_b"
 export BROWSER="$_wz_b"
-"#
+"#,
+                browser_path = config::branding::REMOTE_BROWSER_PATH
+            )
         } else {
-            ""
+            String::new()
         };
         // --- end weezterm remote features ---
 
@@ -832,7 +852,9 @@ impl Domain for RemoteSshDomain {
         let terminal = wezterm_term::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
-            "WezTerm",
+            // --- weezterm remote features ---
+            config::branding::APP_NAME_DISPLAY,
+            // --- end weezterm remote features ---
             config::wezterm_version(),
             Box::new(writer.clone()),
         );
@@ -859,8 +881,13 @@ impl Domain for RemoteSshDomain {
                     let (stop_tx, stop_rx) = smol::channel::bounded(1);
                     stop_guard.replace(stop_tx);
 
-                    let excluded: std::collections::HashSet<u16> =
-                        self.dom.port_forwarding.exclude_ports.iter().copied().collect();
+                    let excluded: std::collections::HashSet<u16> = self
+                        .dom
+                        .port_forwarding
+                        .exclude_ports
+                        .iter()
+                        .copied()
+                        .collect();
                     let manager = Arc::new(std::sync::Mutex::new(
                         crate::port_forward::PortForwardManager::new(
                             self.dom.port_forwarding.auto_forward,
@@ -868,7 +895,10 @@ impl Domain for RemoteSshDomain {
                         ),
                     ));
                     // Store manager so the overlay can access it
-                    self.port_forward_manager.lock().unwrap().replace(manager.clone());
+                    self.port_forward_manager
+                        .lock()
+                        .unwrap()
+                        .replace(manager.clone());
                     let pf_config = self.dom.port_forwarding.clone();
 
                     promise::spawn::spawn_into_main_thread(async move {

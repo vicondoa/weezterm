@@ -46,6 +46,21 @@ fn main() {
         }
     }
 
+    // --- weezterm remote features ---
+    // Append fork suffix so versions are distinguishable from upstream.
+    // .tag file from CI already includes the suffix (e.g. "20240203-110809-abc12345+weez.1"),
+    // so only append when auto-derived from git.
+    if !ci_tag.is_empty() && !ci_tag.contains("+weez") {
+        // Read fork patch version from .weez-version if present, else default to 0
+        let patch = std::fs::read_to_string("../.weez-version")
+            .ok()
+            .and_then(|s| s.trim().parse::<u32>().ok())
+            .unwrap_or(0);
+        ci_tag = format!("{}+weez.{}", ci_tag, patch);
+        println!("cargo:rerun-if-changed=../.weez-version");
+    }
+    // --- end weezterm remote features ---
+
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
 
     println!("cargo:rustc-env=WEZTERM_TARGET_TRIPLE={}", target);

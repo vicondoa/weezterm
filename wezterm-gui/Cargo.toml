@@ -126,3 +126,9 @@ windows = { workspace=true, features = [
 benchmarking.workspace = true
 env_logger.workspace = true
 k9.workspace = true
+
+# --- weezterm remote features ---
+[[bin]]
+name = "weezterm-gui"
+path = "src/main.rs"
+# --- end weezterm remote features ---

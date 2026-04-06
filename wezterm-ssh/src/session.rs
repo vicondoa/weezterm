@@ -59,7 +59,10 @@ pub(crate) enum SessionRequest {
     Sftp(SftpRequest),
     SignalChannel(SignalChannel),
     SessionDropped,
-    DirectTcpIp(DirectTcpIpRequest, Sender<anyhow::Result<DirectTcpIpResult>>),
+    DirectTcpIp(
+        DirectTcpIpRequest,
+        Sender<anyhow::Result<DirectTcpIpResult>>,
+    ),
 }
 
 #[derive(Debug)]

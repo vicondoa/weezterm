@@ -3,6 +3,20 @@ set -x
 rm -rf AppDir *.AppImage *.zsync
 set -e
 
+# --- weezterm remote features ---
+# Create compat symlinks for renamed binaries (weezterm* -> wezterm*)
+for old in wezterm wezterm-gui wezterm-mux-server; do
+  new="${old/wezterm/weezterm}"
+  if [ -f "target/release/$new" ] && [ ! -f "target/release/$old" ]; then
+    ln -sf "$new" "target/release/$old"
+  fi
+done
+# Icon compat symlink
+if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
+  ln -sf weezterm/terminal.png assets/icon/terminal.png
+fi
+# --- end weezterm remote features ---
+
 mkdir AppDir
 
 install -Dsm755 -t AppDir/usr/bin target/release/wezterm-mux-server

@@ -116,16 +116,14 @@ impl UnixDomain {
     pub fn serve_command(&self) -> anyhow::Result<Vec<OsString>> {
         match self.serve_command.as_ref() {
             Some(cmd) => Ok(cmd.iter().map(Into::into).collect()),
+            // --- weezterm remote features ---
             None => Ok(vec![
                 std::env::current_exe()?
-                    .with_file_name(if cfg!(windows) {
-                        "wezterm-mux-server.exe"
-                    } else {
-                        "wezterm-mux-server"
-                    })
+                    .with_file_name(crate::branding::MUX_SERVER_BIN)
                     .into_os_string(),
                 OsString::from("--daemonize"),
             ]),
+            // --- end weezterm remote features ---
         }
     }
 }

@@ -1,0 +1,286 @@
+# --- weezterm remote features ---
+# Fork-specific multi-OS build + release pipeline for Weezterm.
+# Based on upstream gen_*.yml workflows, unified into a single file.
+# --- end weezterm remote features ---
+name: weezterm-build
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+      - "ci/**"
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ─── Windows ───────────────────────────────────────────────────────
+  windows:
+    runs-on: windows-2022
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      RUSTUP_WINDOWS_PATH_ADD_BIN: "1"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          target: "x86_64-pc-windows-msvc"
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/cache@v4
+        id: cache-cargo-vendor
+        with:
+          path: |
+            vendor
+            .cargo/config
+          key: "win-cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
+      - name: "Vendor dependencies"
+        if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
+        shell: bash
+        run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
+      - name: "Set version tag"
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
+      - name: "Build (Release)"
+        shell: cmd
+        run: |
+          PATH C:\Strawberry\perl\bin;%PATH%
+          cargo build -p wezterm --release
+          cargo build -p wezterm-gui --release
+          cargo build -p wezterm-mux-server --release
+          cargo build -p strip-ansi-escapes --release
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: "cargo-nextest"
+      - name: "Test"
+        shell: cmd
+        run: |
+          PATH C:\Strawberry\perl\bin;%PATH%
+          cargo nextest run --all --no-fail-fast -E "not test(e2e::)"
+      - name: "Package"
+        shell: bash
+        run: "bash ci/deploy.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "windows"
+          path: |
+            Weezterm-*.zip
+            Weezterm-*.exe
+
+  # ─── macOS (Universal binary) ─────────────────────────────────────
+  macos:
+    runs-on: macos-latest
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+      MACOSX_DEPLOYMENT_TARGET: "10.12"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - name: "Install Rust targets"
+        run: |
+          rustup target add aarch64-apple-darwin
+          rustup target add x86_64-apple-darwin
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/cache@v4
+        id: cache-cargo-vendor
+        with:
+          path: |
+            vendor
+            .cargo/config
+          key: "mac-cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
+      - name: "Vendor dependencies"
+        if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
+        run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
+      - name: "Install system deps"
+        run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Set version tag"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
+      - name: "Build (ARM64)"
+        run: |
+          cargo build -p wezterm --release --target=aarch64-apple-darwin
+          cargo build -p wezterm-gui --release --target=aarch64-apple-darwin
+          cargo build -p wezterm-mux-server --release --target=aarch64-apple-darwin
+          cargo build -p strip-ansi-escapes --release --target=aarch64-apple-darwin
+      - name: "Build (x86_64)"
+        run: |
+          cargo build -p wezterm --release --target=x86_64-apple-darwin
+          cargo build -p wezterm-gui --release --target=x86_64-apple-darwin
+          cargo build -p wezterm-mux-server --release --target=x86_64-apple-darwin
+          cargo build -p strip-ansi-escapes --release --target=x86_64-apple-darwin
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: "cargo-nextest"
+      - name: "Test (x86_64)"
+        run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin -E 'not test(e2e::)'"
+      - name: "Package"
+        run: "bash ci/deploy.sh"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "macos"
+          path: "Weezterm-*.zip"
+
+  # ─── Linux matrix (containers) ────────────────────────────────────
+  linux:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - container: "ubuntu:20.04"
+            artifact: "ubuntu20.04"
+            appimage: true
+          - container: "ubuntu:22.04"
+            artifact: "ubuntu22.04"
+            appimage: false
+          - container: "ubuntu:24.04"
+            artifact: "ubuntu24.04"
+            appimage: false
+          - container: "debian:11"
+            artifact: "debian11"
+            appimage: false
+          - container: "debian:12"
+            artifact: "debian12"
+            appimage: false
+          - container: "fedora:39"
+            artifact: "fedora39"
+            appimage: false
+          - container: "fedora:40"
+            artifact: "fedora40"
+            appimage: false
+          - container: "fedora:41"
+            artifact: "fedora41"
+            appimage: false
+    container:
+      image: ${{ matrix.container }}
+    env:
+      CARGO_INCREMENTAL: "0"
+      SCCACHE_GHA_ENABLED: "true"
+      RUSTC_WRAPPER: "sccache"
+    steps:
+      - name: "Pre-setup (Debian/Ubuntu)"
+        if: contains(matrix.container, 'ubuntu') || contains(matrix.container, 'debian')
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          echo 'debconf debconf/frontend select Noninteractive' | debconf-set-selections
+          apt-get update
+          apt-get install -y git curl openssh-server
+          git config --global safe.directory '*'
+      - name: "Pre-setup (Fedora)"
+        if: contains(matrix.container, 'fedora')
+        run: |
+          dnf install -y 'dnf-command(config-manager)'
+          yum install -y git curl openssh-server
+          git config --global safe.directory '*'
+      - uses: actions/checkout@v4
+        with:
+          submodules: "recursive"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: mozilla-actions/sccache-action@v0.0.9
+      - uses: actions/cache@v4
+        id: cache-cargo-vendor
+        with:
+          path: |
+            vendor
+            .cargo/config
+          key: "${{ matrix.artifact }}-cargo-deps-${{ hashFiles('**/Cargo.lock') }}"
+      - name: "Vendor dependencies"
+        if: steps.cache-cargo-vendor.outputs.cache-hit != 'true'
+        run: "cargo vendor --locked --versioned-dirs >> .cargo/config"
+      - name: "Install system deps"
+        run: "env CI=yes PATH=$PATH ./get-deps"
+      - name: "Set version tag"
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            TAG="${GITHUB_REF#refs/tags/v}"
+            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+            echo "${TAG}+weez.${WEEZ}" > .tag
+            echo "Version: $(cat .tag)"
+          fi
+      - name: "Build (Release)"
+        run: |
+          cargo build -p wezterm --release
+          cargo build -p wezterm-gui --release
+          cargo build -p wezterm-mux-server --release
+          cargo build -p strip-ansi-escapes --release
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: "cargo-nextest"
+      - name: "Test"
+        run: "cargo nextest run --all --no-fail-fast -E 'not test(e2e::)'"
+      - name: "Package"
+        run: "bash ci/deploy.sh"
+      - name: "Build AppImage"
+        if: matrix.appimage
+        run: |
+          apt-get install -y libfuse2
+          bash ci/source-archive.sh
+          bash ci/appimage.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            wezterm-*.deb
+            wezterm-*.rpm
+            wezterm-*.xz
+            *src.tar.gz
+            *.AppImage
+            WezTerm-*.tar.xz
+            Weezterm-*.tar.xz
+
+  # ─── GitHub Release (on tags only) ────────────────────────────────
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: "Collect and checksum"
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.xz' -o -name '*.AppImage' -o -name '*.tar.gz' \) -exec cp {} release/ \;
+          cd release
+          for f in *; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+      - name: "Create GitHub Release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          gh release create "$TAG" \
+            --title "Weezterm $TAG" \
+            --prerelease \
+            --notes "Automated build of Weezterm $TAG.
+
+          See [docs/remote-extensions.md](https://github.com/${{ github.repository }}/blob/main/docs/remote-extensions.md) for remote SSH features documentation." \
+            release/*
