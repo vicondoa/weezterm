@@ -1250,9 +1250,7 @@ impl TermWindow {
                 }
                 MuxNotification::Alert {
                     alert:
-                        Alert::ToastNotification { .. }
-                        | Alert::PortDetected { .. }
-                        | Alert::OpenUrl(_),
+                        Alert::ToastNotification { .. } | Alert::PortDetected { .. } | Alert::OpenUrl(_),
                     ..
                 } => {}
                 MuxNotification::TabAddedToWindow {
@@ -1522,9 +1520,7 @@ impl TermWindow {
             }
             MuxNotification::Alert {
                 alert:
-                    Alert::ToastNotification { .. }
-                    | Alert::PortDetected { .. }
-                    | Alert::OpenUrl(_),
+                    Alert::ToastNotification { .. } | Alert::PortDetected { .. } | Alert::OpenUrl(_),
                 ..
             }
             | MuxNotification::AssignClipboard { .. }
@@ -2393,31 +2389,30 @@ impl TermWindow {
             None => return,
         };
         let domain_id = pane.domain_id();
-        let entries: Vec<PortDisplayEntry> =
-            if let Some(domain) = mux.get_domain(domain_id) {
-                if let Some(ssh_domain) = domain.downcast_ref::<RemoteSshDomain>() {
-                    ssh_domain
-                        .port_forward_entries()
-                        .into_iter()
-                        .map(|e| PortDisplayEntry {
-                            remote_port: e.remote_port,
-                            local_port: e.local_port,
-                            remote_host: e.remote_host,
-                            label: e.label,
-                            is_forwarded: matches!(e.state, ForwardState::Active { .. }),
-                            is_error: matches!(e.state, ForwardState::Error(_)),
-                            error_msg: match &e.state {
-                                ForwardState::Error(msg) => Some(msg.clone()),
-                                _ => None,
-                            },
-                        })
-                        .collect()
-                } else {
-                    vec![]
-                }
+        let entries: Vec<PortDisplayEntry> = if let Some(domain) = mux.get_domain(domain_id) {
+            if let Some(ssh_domain) = domain.downcast_ref::<RemoteSshDomain>() {
+                ssh_domain
+                    .port_forward_entries()
+                    .into_iter()
+                    .map(|e| PortDisplayEntry {
+                        remote_port: e.remote_port,
+                        local_port: e.local_port,
+                        remote_host: e.remote_host,
+                        label: e.label,
+                        is_forwarded: matches!(e.state, ForwardState::Active { .. }),
+                        is_error: matches!(e.state, ForwardState::Error(_)),
+                        error_msg: match &e.state {
+                            ForwardState::Error(msg) => Some(msg.clone()),
+                            _ => None,
+                        },
+                    })
+                    .collect()
             } else {
                 vec![]
-            };
+            }
+        } else {
+            vec![]
+        };
 
         let tab_id = tab.tab_id();
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {

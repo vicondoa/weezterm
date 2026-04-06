@@ -657,7 +657,10 @@ impl Config {
             // have a specific fixed UID so that test expectations
             // are easier to handle with snapshots
             // --- weezterm remote features ---
-            if let Some(uid) = env.get("WEEZTERM_SSH_UID").or_else(|| env.get("WEZTERM_SSH_UID")) {
+            if let Some(uid) = env
+                .get("WEEZTERM_SSH_UID")
+                .or_else(|| env.get("WEZTERM_SSH_UID"))
+            {
                 return uid.to_string();
             }
             // --- end weezterm remote features ---

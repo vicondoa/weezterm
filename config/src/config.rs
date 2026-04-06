@@ -1042,7 +1042,9 @@ impl Config {
         }
         // --- weezterm remote features ---
         if let Some(path) = crate::branding::get_env_with_compat("CONFIG_FILE") {
-            log::trace!("Note: WEEZTERM_CONFIG_FILE / WEZTERM_CONFIG_FILE is set in the environment");
+            log::trace!(
+                "Note: WEEZTERM_CONFIG_FILE / WEZTERM_CONFIG_FILE is set in the environment"
+            );
             paths.insert(0, PathPossibility::required(path.into()));
         }
         // --- end weezterm remote features ---
@@ -1151,7 +1153,10 @@ impl Config {
                 // --- weezterm remote features ---
                 crate::branding::set_current_env_with_compat("CONFIG_FILE", &p.to_string_lossy());
                 if let Some(dir) = p.parent() {
-                    crate::branding::set_current_env_with_compat("CONFIG_DIR", &dir.to_string_lossy());
+                    crate::branding::set_current_env_with_compat(
+                        "CONFIG_DIR",
+                        &dir.to_string_lossy(),
+                    );
                 }
                 // --- end weezterm remote features ---
                 Ok(cfg)

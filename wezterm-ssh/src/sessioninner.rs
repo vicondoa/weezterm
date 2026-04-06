@@ -4,8 +4,8 @@ use crate::dirwrap::DirWrap;
 use crate::filewrap::FileWrap;
 use crate::pty::*;
 use crate::session::{
-    Exec, ExecResult, SessionEvent, SessionRequest, SignalChannel,
-    DirectTcpIpRequest, DirectTcpIpResult,
+    DirectTcpIpRequest, DirectTcpIpResult, Exec, ExecResult, SessionEvent, SessionRequest,
+    SignalChannel,
 };
 use crate::sessionwrap::SessionWrap;
 use crate::sftp::dir::{Dir, DirId, DirRequest};

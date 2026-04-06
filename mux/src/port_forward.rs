@@ -257,9 +257,7 @@ pub async fn run_proc_net_tcp_detection(
     poll_interval: Duration,
     stop_rx: smol::channel::Receiver<()>,
 ) {
-    let mut scanner = ProcNetTcpScanner::new(
-        manager.lock().unwrap().excluded_ports().clone(),
-    );
+    let mut scanner = ProcNetTcpScanner::new(manager.lock().unwrap().excluded_ports().clone());
 
     loop {
         // Check for stop signal
@@ -290,8 +288,7 @@ pub async fn run_proc_net_tcp_detection(
                 // Split output into tcp and tcp6 sections.
                 // Both sections start with a header containing "sl  local_address".
                 // We split on this header to separate the two concatenated outputs.
-                let sections: Vec<&str> =
-                    content.split("  sl  local_address").collect();
+                let sections: Vec<&str> = content.split("  sl  local_address").collect();
 
                 let tcp_content = if sections.len() > 1 {
                     format!(
@@ -390,15 +387,10 @@ pub async fn run_port_forward_orchestrator(
 
     // Main event loop: react to detected ports
     loop {
-        let event = smol::future::or(
-            async {
-                event_rx.recv().await.ok()
-            },
-            async {
-                stop_rx.recv().await.ok();
-                None
-            },
-        )
+        let event = smol::future::or(async { event_rx.recv().await.ok() }, async {
+            stop_rx.recv().await.ok();
+            None
+        })
         .await;
 
         let event = match event {
@@ -438,11 +430,7 @@ pub async fn run_port_forward_orchestrator(
                             .lock()
                             .unwrap()
                             .mark_forwarded(remote_port, local_port);
-                        log::info!(
-                            "Port {} forwarded to localhost:{}",
-                            remote_port,
-                            local_port
-                        );
+                        log::info!("Port {} forwarded to localhost:{}", remote_port, local_port);
                     }
                     Err(e) => {
                         let msg = format!("{:#}", e);
@@ -450,11 +438,7 @@ pub async fn run_port_forward_orchestrator(
                             .lock()
                             .unwrap()
                             .mark_error(entry.remote_port, msg.clone());
-                        log::error!(
-                            "Failed to forward port {}: {}",
-                            entry.remote_port,
-                            msg
-                        );
+                        log::error!("Failed to forward port {}: {}", entry.remote_port, msg);
                     }
                 }
             }
@@ -628,7 +612,10 @@ mod test {
 
         // Should get a PortStopped event for the forwarded port
         let event = rx.try_recv().unwrap();
-        assert!(matches!(event, PortForwardEvent::PortStopped { remote_port: 3000 }));
+        assert!(matches!(
+            event,
+            PortForwardEvent::PortStopped { remote_port: 3000 }
+        ));
     }
 
     #[test]
@@ -641,7 +628,9 @@ mod test {
         assert!(mgr.excluded_ports().contains(&22));
 
         // Port 22 should still be excluded after reset
-        assert!(mgr.port_detected(22, "0.0.0.0".into(), DetectionSource::ProcNetTcp).is_none());
+        assert!(mgr
+            .port_detected(22, "0.0.0.0".into(), DetectionSource::ProcNetTcp)
+            .is_none());
     }
 
     #[test]
@@ -660,11 +649,7 @@ mod test {
         assert_eq!(mgr.entries().len(), 2);
 
         // Duplicate scan produces nothing new
-        let new = scan_terminal_output(
-            &mut scanner,
-            &mut mgr,
-            "Server at http://localhost:3000",
-        );
+        let new = scan_terminal_output(&mut scanner, &mut mgr, "Server at http://localhost:3000");
         assert_eq!(new.len(), 0);
     }
 }

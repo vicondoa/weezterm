@@ -1,6 +1,12 @@
-.PHONY: all fmt build check test docs servedocs
+.PHONY: all fmt build check test docs servedocs precommit
 
 all: build
+
+# --- weezterm remote features ---
+# Run this before creating a PR. Mirrors what CI checks.
+precommit: fmt check test
+	@echo "\n✓ All precommit checks passed. Safe to push."
+# --- end weezterm remote features ---
 
 test:
 	cargo nextest run

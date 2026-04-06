@@ -1251,7 +1251,7 @@ impl Client {
         // --- weezterm remote features ---
         match config::branding::get_env_with_compat("UNIX_SOCKET") {
             Some(path) if !path.is_empty() => Ok(config::UnixDomain {
-        // --- end weezterm remote features ---
+                // --- end weezterm remote features ---
                 socket_path: Some(path.into()),
                 ..Default::default()
             }),

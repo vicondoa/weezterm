@@ -452,7 +452,7 @@ impl Pane for LocalPane {
         // things up a bit by returning the process basename instead
         // --- weezterm remote features ---
         if title == "weezterm" || title == "wezterm" {
-        // --- end weezterm remote features ---
+            // --- end weezterm remote features ---
             if let Some(proc_name) = self.get_foreground_process_name(CachePolicy::AllowStale) {
                 let proc_name = std::path::Path::new(&proc_name);
                 if let Some(name) = proc_name.file_name() {

@@ -2047,9 +2047,8 @@ mod test {
 
     #[test]
     fn test_osc_7457_roundtrip() {
-        let osc = OperatingSystemCommand::WezTermOpenUrl(
-            "https://login.microsoftonline.com/foo".into(),
-        );
+        let osc =
+            OperatingSystemCommand::WezTermOpenUrl("https://login.microsoftonline.com/foo".into());
         let formatted = format!("{}", osc);
         assert!(formatted.contains("7457;open-url;https://login.microsoftonline.com/foo"));
     }

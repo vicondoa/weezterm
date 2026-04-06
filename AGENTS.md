@@ -8,6 +8,7 @@ working on this codebase.
 
 | Task | Command |
 |------|---------|
+| **Pre-commit (run before PR)** | **`make precommit`** |
 | Build | `cargo build -p wezterm -p wezterm-gui -p wezterm-mux-server` |
 | Check (fast) | `cargo check` |
 | Check specific crate | `cargo check -p <crate>` |
@@ -107,6 +108,29 @@ When adding new PDU types to `codec/src/lib.rs`:
 - Append entries at the END of the `pdu!` macro
 - Bump `CODEC_VERSION` if changes are backwards-incompatible
 - Each PDU type needs a unique numeric ID
+
+## Pre-commit Workflow
+
+**Always run `make precommit` before pushing or creating a PR.** This runs the same
+checks that CI will enforce:
+
+1. `cargo +nightly fmt` — format all code (nightly required)
+2. `cargo check` — compile-check the full workspace
+3. `cargo nextest run` + escape-parser no_std tests
+
+On Windows, ensure Strawberry Perl is in your PATH for the OpenSSL build:
+```bash
+export PATH="/c/Strawberry/perl/bin:$HOME/.cargo/bin:$PATH"
+make precommit
+```
+
+If `make` is not available, run the steps manually:
+```bash
+cargo +nightly fmt
+cargo check
+cargo nextest run
+cargo nextest run -p wezterm-escape-parser
+```
 
 ## Weezterm Remote Features
 
