@@ -249,3 +249,46 @@ git merge upstream/main          # or rebase, per preference
 | Add overlay/picker UI | `wezterm-gui/src/overlay/` (follow `launcher.rs` pattern) |
 | Add config option | `config/src/ssh.rs` (for SSH), `config/src/lib.rs` (for global) |
 | Spawn env vars | `mux/src/domain.rs` (local), `mux/src/ssh.rs` (remote SSH) |
+
+## CI/CD Pipelines
+
+### Active workflows (Weezterm fork)
+
+| Workflow | File | Triggers | Purpose |
+|----------|------|----------|---------|
+| **weezterm-build** | `.github/workflows/weezterm_build.yml` | push (main, feature/\*, ci/\*), PR to main, `v*` tags | **Primary CI/CD**: builds Windows + macOS + Linux matrix, runs tests, packages artifacts, creates GitHub Releases on tags |
+| fmt | `.github/workflows/fmt.yml` | push, PR | Checks `cargo +nightly fmt` formatting |
+| termwiz | `.github/workflows/termwiz.yml` | push, PR | Tests the termwiz library |
+| wezterm-ssh | `.github/workflows/wezterm_ssh.yml` | push, PR | Tests SSH features |
+| Nix | `.github/workflows/nix.yml` | push, PR | Nix build check |
+| Lock Threads | `.github/workflows/lock.yml` | scheduled | Auto-locks old issues |
+| No Response | `.github/workflows/no-response.yml` | scheduled | Auto-closes unresponsive issues |
+| Dependabot Updates | (dynamic) | scheduled | Dependency security PRs |
+
+### Disabled workflows (upstream, kept for merge compatibility)
+
+All `gen_*.yml` workflows (33 files) are **disabled via the GitHub Actions API**.
+They are upstream WezTerm per-platform build workflows that our unified
+`weezterm_build.yml` replaces. The files are **kept identical to upstream** so
+that `git merge upstream/main` produces no conflicts.
+
+**Do NOT modify `gen_*.yml` files.** If an upstream merge updates them, accept
+the upstream changes as-is. They will remain disabled.
+
+Also disabled: `nix_continuous.yml`, `nix-update-flake.yml`, `pages.yml`,
+`verify-pages.yml`.
+
+### Release process
+
+1. Bump the number in `.weez-version` if desired
+2. Tag: `git tag -a v0.X.0 -m "WeezTerm v0.X.0"  &&  git push origin v0.X.0`
+3. The `weezterm-build` workflow triggers on `v*` tags
+4. Writes `.tag` file with `0.X.0+weez.N` version
+5. Builds all platforms, runs tests, packages artifacts
+6. `release` job creates a GitHub Release with all binaries
+
+### Branch protection
+
+- `main` requires the `windows` status check to pass before merge
+- Squash-merge only (no merge commits, no rebase)
+- Auto-delete branches after merge

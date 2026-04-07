@@ -34,6 +34,19 @@ done
 if [ -f "assets/icon/weezterm/terminal.png" ] && [ ! -f "assets/icon/terminal.png" ]; then
   ln -sf weezterm/terminal.png assets/icon/terminal.png
 fi
+# Provide weezterm-branded desktop/appdata files under the upstream names
+# so the rest of deploy.sh installs them without modification.
+if [ -f "assets/weezterm.desktop" ]; then
+  cp -f assets/weezterm.desktop assets/wezterm.desktop
+fi
+if [ -f "assets/weezterm.appdata.xml" ]; then
+  cp -f assets/weezterm.appdata.xml assets/wezterm.appdata.xml
+fi
+# Create icon symlink under new app ID so freedesktop icon lookup works
+if [ -f "assets/icon/terminal.png" ]; then
+  mkdir -p assets/icon
+  ln -sf terminal.png assets/icon/com.vicondoa.weezterm.png
+fi
 # --- end weezterm remote features ---
 
 TAG_NAME=${TAG_NAME:-$(git -c "core.abbrev=8" show -s "--format=%cd-%h" "--date=format:%Y%m%d-%H%M%S")}

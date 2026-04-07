@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=WeezTerm
+Comment=WeezTerm Terminal Emulator
+Keywords=shell;prompt;command;commandline;cmd;
+Icon=com.vicondoa.weezterm
+StartupWMClass=com.vicondoa.weezterm
+TryExec=weezterm
+Exec=weezterm start --cwd .
+Type=Application
+Categories=System;TerminalEmulator;Utility;
+Terminal=false
