@@ -68,7 +68,7 @@ pub use termwindow::{set_window_class, set_window_position, TermWindow, ICON_DAT
 #[derive(Debug, Parser)]
 // --- weezterm remote features ---
 #[command(
-    about = "WeezTerm — Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
+    about = "WeezTerm — Terminal Emulator\nhttps://github.com/vicondoa/weezterm",
     version = config::wezterm_version()
 )]
 // --- end weezterm remote features ---

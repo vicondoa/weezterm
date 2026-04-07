@@ -32,7 +32,7 @@ DisableProgramGroupPage=yes
 ;PrivilegesRequired=lowest
 ;PrivilegesRequiredOverridesAllowed=dialog
 OutputDir=..
-OutputBaseFilename=WezTerm-Setup
+OutputBaseFilename=WeezTerm-Setup
 ; --- weezterm remote features ---
 SetupIconFile=..\assets\icon\weezterm\terminal.ico
 ; --- end weezterm remote features ---

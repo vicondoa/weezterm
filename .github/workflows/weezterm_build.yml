@@ -1,5 +1,5 @@
 # --- weezterm remote features ---
-# Fork-specific multi-OS build + release pipeline for Weezterm.
+# Fork-specific multi-OS build + release pipeline for WeezTerm.
 # Based on upstream gen_*.yml workflows, unified into a single file.
 # --- end weezterm remote features ---
 name: weezterm-build
@@ -83,8 +83,8 @@ jobs:
         with:
           name: "windows"
           path: |
-            Weezterm-*.zip
-            Weezterm-*.exe
+            WeezTerm-*.zip
+            WeezTerm-*.exe
 
   # ─── macOS (Universal binary) ─────────────────────────────────────
   macos:
@@ -145,7 +145,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: "macos"
-          path: "Weezterm-*.zip"
+          path: "WeezTerm-*.zip"
 
   # ─── Linux matrix (containers) ────────────────────────────────────
   linux:
@@ -253,7 +253,7 @@ jobs:
             *src.tar.gz
             *.AppImage
             WezTerm-*.tar.xz
-            Weezterm-*.tar.xz
+            WeezTerm-*.tar.xz
 
   # ─── GitHub Release (on tags only) ────────────────────────────────
   release:
@@ -278,9 +278,9 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           gh release create "$TAG" \
-            --title "Weezterm $TAG" \
+            --title "WeezTerm $TAG" \
             --prerelease \
-            --notes "Automated build of Weezterm $TAG.
+            --notes "Automated build of WeezTerm $TAG.
 
           See [docs/remote-extensions.md](https://github.com/${{ github.repository }}/blob/main/docs/remote-extensions.md) for remote SSH features documentation." \
             release/*

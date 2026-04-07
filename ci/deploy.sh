@@ -65,9 +65,9 @@ fi
 case $OSTYPE in
   darwin*)
     # --- weezterm remote features ---
-    zipdir=Weezterm-macos-$TAG_NAME
+    zipdir=WeezTerm-macos-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=Weezterm-macos-nightly.zip
+      zipname=WeezTerm-macos-nightly.zip
     else
       zipname=$zipdir.zip
     fi
@@ -149,13 +149,13 @@ case $OSTYPE in
     ;;
   msys)
     # --- weezterm remote features ---
-    zipdir=Weezterm-windows-$TAG_NAME
+    zipdir=WeezTerm-windows-$TAG_NAME
     if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-      zipname=Weezterm-windows-nightly.zip
-      instname=Weezterm-nightly-setup
+      zipname=WeezTerm-windows-nightly.zip
+      instname=WeezTerm-nightly-setup
     else
       zipname=$zipdir.zip
-      instname=Weezterm-${TAG_NAME}-setup
+      instname=WeezTerm-${TAG_NAME}-setup
     fi
     # --- end weezterm remote features ---
     rm -rf $zipdir $zipname

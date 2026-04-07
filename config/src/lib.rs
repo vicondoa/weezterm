@@ -386,7 +386,7 @@ pub fn create_user_owned_dirs(p: &Path) -> anyhow::Result<()> {
 }
 
 // --- weezterm remote features ---
-// Weezterm XDG config dir (primary). Falls through to upstream in load_with_overrides().
+// WeezTerm XDG config dir (primary). Falls through to upstream in load_with_overrides().
 fn xdg_config_home() -> PathBuf {
     match std::env::var_os("XDG_CONFIG_HOME").map(|s| PathBuf::from(s).join("weezterm")) {
         Some(p) => p,

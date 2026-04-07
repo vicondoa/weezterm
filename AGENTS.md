@@ -1,6 +1,6 @@
 # AGENTS.md — Guide for AI Coding Agents
 
-This is **Weezterm**, a fork of [WezTerm](https://github.com/wezterm/wezterm) with
+This is **WeezTerm**, a fork of [WezTerm](https://github.com/wezterm/wezterm) with
 remote SSH extensions. This document contains essential information for AI agents
 working on this codebase.
 
@@ -20,7 +20,7 @@ working on this codebase.
 
 ## Project Structure
 
-Weezterm is a Cargo workspace with 16 members. Key crates:
+WeezTerm is a Cargo workspace with 16 members. Key crates:
 
 ### Binaries
 - `wezterm/` — CLI entrypoint
@@ -132,9 +132,9 @@ cargo nextest run
 cargo nextest run -p wezterm-escape-parser
 ```
 
-## Weezterm Remote Features
+## WeezTerm Remote Features
 
-All Weezterm-specific additions (as opposed to upstream WezTerm code) are marked with:
+All WeezTerm-specific additions (as opposed to upstream WezTerm code) are marked with:
 ```rust
 // --- weezterm remote features ---
 ```
@@ -154,11 +154,11 @@ and always delimited with the `// --- weezterm remote features ---` comment.
 
 ## Adding Code That Merges Cleanly with Upstream
 
-Weezterm is a fork of WezTerm. All fork-specific code must be structured for easy merging.
+WeezTerm is a fork of WezTerm. All fork-specific code must be structured for easy merging.
 Follow these rules strictly:
 
 ### Rule 1: Mark every change with begin AND end sentinel comments
-Every block of Weezterm-specific code in an upstream file **must** be wrapped
+Every block of WeezTerm-specific code in an upstream file **must** be wrapped
 with both a begin and end sentinel. This is mandatory for **all** multi-line
 additions — no exceptions:
 ```rust
@@ -221,7 +221,7 @@ This lets upstream compile without the fork code entirely.
 - Never modify existing dependency versions.
 
 ### Rule 7: New Makefile targets
-Add Weezterm-specific Makefile targets at the **end** of the file, after a
+Add WeezTerm-specific Makefile targets at the **end** of the file, after a
 `# --- weezterm remote features ---` comment. Never modify existing targets.
 
 ### Merge workflow
@@ -230,7 +230,7 @@ git remote add upstream https://github.com/wezterm/wezterm.git
 git fetch upstream
 git merge upstream/main          # or rebase, per preference
 # Search for conflict markers, resolve by keeping both sides:
-#   upstream code stays as-is, Weezterm additions stay in sentinel blocks
+#   upstream code stays as-is, WeezTerm additions stay in sentinel blocks
 ```
 
 ## Key File Locations for Common Tasks
@@ -252,7 +252,7 @@ git merge upstream/main          # or rebase, per preference
 
 ## CI/CD Pipelines
 
-### Active workflows (Weezterm fork)
+### Active workflows (WeezTerm fork)
 
 | Workflow | File | Triggers | Purpose |
 |----------|------|----------|---------|
