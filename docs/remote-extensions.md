@@ -2,9 +2,9 @@
 
 ## Overview
 
-Weezterm extends WezTerm with **VS Code Remote SSH-style features** that make
+WeezTerm extends WezTerm with **VS Code Remote SSH-style features** that make
 working on remote machines feel native. When you connect to a remote host via
-`wezterm ssh`, Weezterm can:
+`wezterm ssh`, WeezTerm can:
 
 1. **Open URLs from the remote host in your local browser** — no X11 forwarding
    or manual copy-paste required.
@@ -22,9 +22,9 @@ to bring the same quality-of-life improvements to a terminal-first workflow.
 
 ### How It Works
 
-When you connect via `wezterm ssh`, Weezterm sets the `$BROWSER` environment
+When you connect via `wezterm ssh`, WeezTerm sets the `$BROWSER` environment
 variable on the remote host to a small helper that sends an
-**OSC 7457 escape sequence** back through the terminal. The local Weezterm
+**OSC 7457 escape sequence** back through the terminal. The local WeezTerm
 instance intercepts this sequence and opens the URL in your default browser.
 
 The flow looks like this:
@@ -36,7 +36,7 @@ Remote process ─▸ $BROWSER <url>
             Writes OSC 7457 escape sequence to stdout
                      │
                      ▼
-            Terminal (Weezterm) intercepts the sequence
+            Terminal (WeezTerm) intercepts the sequence
                      │
                      ▼
             Opens <url> in local default browser
@@ -94,16 +94,16 @@ config.ssh_domains = {
 
 ### How It Works
 
-Weezterm monitors the remote host for listening TCP ports and automatically
+WeezTerm monitors the remote host for listening TCP ports and automatically
 creates SSH port forwards so those ports are accessible on `localhost`.
 
 #### Detection Methods
 
-1. **`/proc/net/tcp` polling** — On Linux remotes, Weezterm periodically reads
+1. **`/proc/net/tcp` polling** — On Linux remotes, WeezTerm periodically reads
    `/proc/net/tcp` (and `/proc/net/tcp6`) to discover ports in the `LISTEN`
    state. This is lightweight and requires no extra tools.
 
-2. **Terminal URL scraping** — Weezterm watches terminal output for patterns
+2. **Terminal URL scraping** — WeezTerm watches terminal output for patterns
    that look like local URLs (e.g., `http://localhost:3000`,
    `http://127.0.0.1:8080`). When a match is found, the referenced port is
    forwarded automatically.
@@ -116,7 +116,7 @@ configuration.
 
 When a new listening port is detected:
 
-1. Weezterm checks whether the port is already forwarded or excluded.
+1. WeezTerm checks whether the port is already forwarded or excluded.
 2. If eligible, an SSH port forward (`localhost:<port>` → `remote:<port>`) is
    created.
 3. A transient notification informs you that the port has been forwarded.
@@ -198,12 +198,12 @@ opening and automatic port forwarding work together.
    Or, in the default (interactive) mode, it attempts to open a browser
    pointing at `http://localhost:8400/...`.
 
-3. **What Weezterm does automatically:**
+3. **What WeezTerm does automatically:**
 
    - **Port forwarding:** The auto-port-forward feature detects port `8400`
      (via `/proc/net/tcp` or URL scraping) and forwards it to your local
      machine.
-   - **Browser opening:** If `az login` invokes `$BROWSER`, Weezterm opens the
+   - **Browser opening:** If `az login` invokes `$BROWSER`, WeezTerm opens the
      login URL in your local browser — which can now reach
      `http://localhost:8400` thanks to the port forward.
 
@@ -212,7 +212,7 @@ opening and automatic port forwarding work together.
    completes successfully.
 
 5. **Clean-up:** Once `az login` finishes and stops listening on port `8400`,
-   Weezterm automatically removes the port forward.
+   WeezTerm automatically removes the port forward.
 
 No manual SSH tunnels. No copy-pasting URLs. It just works.
 
@@ -282,7 +282,7 @@ other systems, this file does not exist.
 ### Port conflicts
 
 If a port is already in use on your local machine, the auto-forward for that
-port will fail. Weezterm will log a warning and skip the forward.
+port will fail. WeezTerm will log a warning and skip the forward.
 
 **Solutions:**
 

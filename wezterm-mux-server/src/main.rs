@@ -17,7 +17,7 @@ mod daemonize;
 #[derive(Debug, Parser)]
 // --- weezterm remote features ---
 #[command(
-    about = "WeezTerm \u{2014} Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
+    about = "WeezTerm \u{2014} Terminal Emulator\nhttps://github.com/vicondoa/weezterm",
     version = config::wezterm_version(),
     trailing_var_arg = true,
 )]

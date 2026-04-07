@@ -37,10 +37,10 @@ servedocs:
 # --- weezterm remote features ---
 .PHONY: weezterm-windows-setup
 weezterm-windows-setup: build
-	@echo "Packaging Weezterm for Windows..."
+	@echo "Packaging WeezTerm for Windows..."
 	$(eval TAG_NAME ?= nightly)
-	$(eval ZIPDIR := Weezterm-windows-$(TAG_NAME))
-	$(eval INSTNAME := Weezterm-$(TAG_NAME)-setup)
+	$(eval ZIPDIR := WeezTerm-windows-$(TAG_NAME))
+	$(eval INSTNAME := WeezTerm-$(TAG_NAME)-setup)
 	rm -rf $(ZIPDIR)
 	mkdir -p $(ZIPDIR)
 	cp target/release/weezterm.exe $(ZIPDIR)/
@@ -52,7 +52,7 @@ weezterm-windows-setup: build
 	-cp assets/windows/angle/libEGL.dll $(ZIPDIR)/ 2>/dev/null
 	-cp assets/windows/angle/libGLESv2.dll $(ZIPDIR)/ 2>/dev/null
 	-mkdir -p $(ZIPDIR)/mesa && cp target/release/mesa/opengl32.dll $(ZIPDIR)/mesa/ 2>/dev/null
-	@echo "Created $(ZIPDIR)/ with Weezterm binaries"
+	@echo "Created $(ZIPDIR)/ with WeezTerm binaries"
 	@echo "To create ZIP: 7z a -tzip $(ZIPDIR).zip $(ZIPDIR)"
 	@echo "To create installer: iscc.exe -DMyAppVersion=$(TAG_NAME) -F$(INSTNAME) ci/windows-installer.iss"
 

@@ -77,9 +77,9 @@ example shows how to specify the private key to use when connecting to
 wezterm ssh -oIdentityFile=/secret/id_ed25519 some-host
 ```
 
-## Remote Extensions (Weezterm)
+## Remote Extensions (WeezTerm)
 
-Weezterm adds VS Code Remote SSH-style features to SSH connections:
+WeezTerm adds VS Code Remote SSH-style features to SSH connections:
 
 - **Remote browser opening** — Opens URLs from the remote host in your local browser
 - **Automatic port forwarding** — Detects and forwards remote ports to localhost

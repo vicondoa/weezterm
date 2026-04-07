@@ -63,11 +63,11 @@ distver=$(lsb_release -rs 2>/dev/null || sh -c "source /etc/os-release && echo \
 # https://github.com/AppImage/AppImageSpec/blob/master/draft.md#github-releases
 # --- weezterm remote features ---
 if [[ "$BUILD_REASON" == "Schedule" ]] ; then
-  UPDATE="gh-releases-zsync|vicondoa|weezterm|nightly|Weezterm-*.AppImage.zsync"
-  OUTPUT=Weezterm-nightly-$distro$distver.AppImage
+  UPDATE="gh-releases-zsync|vicondoa|weezterm|nightly|WeezTerm-*.AppImage.zsync"
+  OUTPUT=WeezTerm-nightly-$distro$distver.AppImage
 else
-  UPDATE="gh-releases-zsync|vicondoa|weezterm|latest|Weezterm-*.AppImage.zsync"
-  OUTPUT=Weezterm-$TAG_NAME-$distro$distver.AppImage
+  UPDATE="gh-releases-zsync|vicondoa|weezterm|latest|WeezTerm-*.AppImage.zsync"
+  OUTPUT=WeezTerm-$TAG_NAME-$distro$distver.AppImage
 fi
 # --- end weezterm remote features ---
 

@@ -24,7 +24,7 @@ mod cli;
 #[derive(Debug, Parser)]
 // --- weezterm remote features ---
 #[command(
-    about = "WeezTerm — Terminal Emulator\nhttps://github.com/jvicondo/weezterm",
+    about = "WeezTerm — Terminal Emulator\nhttps://github.com/vicondoa/weezterm",
     version = wezterm_version()
 )]
 // --- end weezterm remote features ---
