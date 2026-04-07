@@ -6734,8 +6734,11 @@ dependencies = [
  "async_ossl",
  "codec",
  "config",
+ "dirs-next",
  "filedescriptor",
+ "flate2",
  "futures",
+ "http_req",
  "lazy_static",
  "libc",
  "log",
@@ -6749,6 +6752,8 @@ dependencies = [
  "rangeset",
  "ratelim",
  "smol",
+ "tar",
+ "tempfile",
  "termwiz",
  "textwrap",
  "thiserror 1.0.69",
@@ -6759,6 +6764,7 @@ dependencies = [
  "wezterm-ssh",
  "wezterm-term",
  "wezterm-uds",
+ "wezterm-version",
  "winapi",
 ]
 

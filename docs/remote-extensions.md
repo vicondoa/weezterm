@@ -11,6 +11,8 @@ working on remote machines feel native. When you connect to a remote host via
 2. **Automatically detect and forward remote ports to localhost** — so you can
    access development servers, dashboards, and OAuth callbacks without manually
    setting up SSH tunnels.
+3. **Auto-install weezterm on the remote host** for multiplexing mode — no
+   manual setup required on the server.
 
 These extensions are inspired by
 [VS Code Remote - SSH](https://code.visualstudio.com/docs/remote/ssh) and aim
@@ -218,6 +220,82 @@ No manual SSH tunnels. No copy-pasting URLs. It just works.
 
 ---
 
+## Auto-Install for Multiplexing
+
+### How It Works
+
+When you connect to a remote host using SSH multiplexing mode (`SSHMUX:`),
+Weezterm needs its `weezterm` CLI and `weezterm-mux-server` binaries on the
+remote host. The auto-install feature handles this automatically:
+
+1. **Version check** — On each connection, Weezterm reads a version marker
+   file (`~/.weezterm/bin/.version`) on the remote host. This is fast and
+   avoids running a binary.
+2. **Same version** — If the remote version matches the local client, no
+   action is needed (fast path).
+3. **Version mismatch** — If versions differ, Weezterm prompts you before
+   updating. This is important because the mux protocol is version-sensitive,
+   and replacing binaries could affect other active sessions.
+4. **Not installed** — If no version marker is found, Weezterm installs
+   automatically without prompting.
+
+### Installation Strategy
+
+- **Same architecture** (e.g., Linux x86_64 → Linux x86_64): Weezterm
+  copies its own local binaries to the remote host via SFTP. No internet
+  access required on either side.
+- **Cross-architecture** (e.g., macOS arm64 → Linux x86_64): Weezterm
+  downloads the correct-architecture release tarball from a configured URL
+  on the local machine, then uploads it to the remote via SFTP. The download
+  is cached locally in `~/.weezterm/cache/` to avoid re-downloading.
+
+Binaries are installed to `~/.weezterm/bin/` on the remote host (configurable
+via `remote_install_dir`). No root access is required.
+
+### Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `auto_install_mux` | boolean | `true` | Automatically install/update weezterm on the remote host when using multiplexing mode. |
+| `remote_install_dir` | string | `~/.weezterm/bin` | Directory on the remote host to install weezterm binaries. |
+| `remote_install_url` | string | `""` | URL template for downloading cross-arch release artifacts. Placeholders: `{version}`, `{os}`, `{arch}`. Required for cross-architecture installs. |
+
+Example configuration (inside an `ssh_domains` entry):
+
+```lua
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    auto_install_mux = true,  -- default: true
+    remote_install_dir = "~/.weezterm/bin",  -- default
+    remote_install_url = "https://github.com/user/weezterm/releases/download/v{version}/weezterm-mux-{os}-{arch}.tar.gz",
+  },
+}
+```
+
+### Troubleshooting
+
+#### Cross-arch install fails with empty `remote_install_url`
+
+If your local machine and remote host have different architectures (common:
+macOS → Linux), you must configure `remote_install_url` pointing to your
+release artifacts. The URL template supports `{version}`, `{os}`, and
+`{arch}` placeholders.
+
+#### Version mismatch prompts on every connection
+
+This happens when the local and remote versions don't match. Either:
+- Accept the update to sync versions, or
+- Set `auto_install_mux = false` and manage remote installation manually.
+
+#### SFTP upload fails
+
+Some locked-down SSH servers disable SFTP. In this case, install weezterm
+on the remote host manually and set `remote_wezterm_path` to point to it.
+
+---
+
 ## Full Configuration Reference
 
 Below is a consolidated reference of all remote extension configuration
@@ -242,6 +320,11 @@ config.ssh_domains = {
       exclude_ports = { 22 },
       include_ports = {},
     },
+
+    -- Auto-Install for Multiplexing
+    auto_install_mux = true,
+    remote_install_dir = "~/.weezterm/bin",
+    remote_install_url = "",  -- set to release URL for cross-arch installs
   },
 }
 ```

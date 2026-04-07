@@ -115,6 +115,25 @@ pub struct SshDomain {
     /// Configuration for automatic port forwarding.
     #[dynamic(default)]
     pub port_forwarding: PortForwardConfig,
+
+    /// Whether to automatically install weezterm binaries on the remote host
+    /// when using multiplexing mode. If the remote doesn't have weezterm or
+    /// has a different version, the client will download (if cross-arch) and
+    /// SFTP the correct binaries.
+    /// Default: true (only applies when multiplexing = "WezTerm").
+    #[dynamic(default = "default_true_bool")]
+    pub auto_install_mux: bool,
+
+    /// Remote directory to install weezterm binaries into.
+    /// Default: "~/.weezterm/bin"
+    #[dynamic(default = "default_remote_install_dir")]
+    pub remote_install_dir: String,
+
+    /// URL template for downloading cross-architecture release artifacts.
+    /// Placeholders: {version}, {os}, {arch}
+    /// When empty, cross-arch auto-install is disabled (same-arch SFTP only).
+    #[dynamic(default = "default_remote_install_url")]
+    pub remote_install_url: String,
 }
 
 fn default_true() -> Option<bool> {
@@ -131,6 +150,16 @@ fn default_poll_interval() -> u64 {
 
 fn default_exclude_ports() -> Vec<u16> {
     vec![22]
+}
+
+fn default_remote_install_dir() -> String {
+    "~/.weezterm/bin".to_string()
+}
+
+fn default_remote_install_url() -> String {
+    // Placeholder — users should set this to their fork's release URL.
+    // Example: "https://github.com/user/weezterm/releases/download/v{version}/weezterm-mux-{os}-{arch}.tar.gz"
+    String::new()
 }
 
 /// Configuration for automatic port forwarding on SSH domains.
