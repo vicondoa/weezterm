@@ -206,6 +206,27 @@ fn run() -> anyhow::Result<()> {
         std::env::remove_var(name);
     }
 
+    // --- weezterm remote features ---
+    // Set $BROWSER to a helper script that sends URLs back to the client
+    // via OSC 7457, so that programs running inside the terminal (e.g.
+    // `az login`) can open URLs in the local browser.
+    // Only set if the user hasn't already configured BROWSER.
+    #[cfg(unix)]
+    {
+        if std::env::var_os("BROWSER").is_none() {
+            match config::branding::ensure_browser_helper() {
+                Ok(path) => {
+                    log::info!("Setting BROWSER={}", path);
+                    std::env::set_var("BROWSER", &path);
+                }
+                Err(err) => {
+                    log::warn!("Failed to set up browser helper: {:#}", err);
+                }
+            }
+        }
+    }
+    // --- end weezterm remote features ---
+
     wezterm_blob_leases::register_storage(Arc::new(
         wezterm_blob_leases::simple_tempdir::SimpleTempDir::new_in(&*config::CACHE_DIR)?,
     ))?;
