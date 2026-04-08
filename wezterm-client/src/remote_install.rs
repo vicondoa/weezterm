@@ -76,16 +76,10 @@ pub fn ensure_remote_weezterm(
     // Step 3: Obtain binaries
     let binaries_dir = if let Some(ref dir) = ssh_dom.remote_install_binaries_dir {
         // Explicit local directory with pre-built binaries for the remote platform
-        ui.output_str(&format!(
-            "Using pre-built binaries from: {}\n",
-            dir
-        ));
+        ui.output_str(&format!("Using pre-built binaries from: {}\n", dir));
         let p = PathBuf::from(dir);
         if !p.exists() {
-            bail!(
-                "remote_install_binaries_dir '{}' does not exist",
-                dir
-            );
+            bail!("remote_install_binaries_dir '{}' does not exist", dir);
         }
         p
     } else if is_same_arch(&remote_os, &remote_arch) {
@@ -564,10 +558,7 @@ mod test {
         fs::write(dir.path().join("weezterm-mux-server"), b"fake").unwrap();
         let result = find_local_binary(dir.path(), "weezterm-mux-server");
         assert!(result.is_ok());
-        assert_eq!(
-            result.unwrap(),
-            dir.path().join("weezterm-mux-server")
-        );
+        assert_eq!(result.unwrap(), dir.path().join("weezterm-mux-server"));
     }
 
     #[test]
