@@ -17,7 +17,7 @@ use config::SshDomain;
 use flate2::read::GzDecoder;
 use mux::connui::ConnectionUI;
 use std::convert::TryFrom;
-use std::io::Read;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use wezterm_ssh::Session;
 
@@ -34,8 +34,12 @@ pub fn ensure_remote_weezterm(
         return Ok(None);
     }
 
-    let install_dir = &ssh_dom.remote_install_dir;
+    let raw_install_dir = &ssh_dom.remote_install_dir;
     let local_version = wezterm_version::wezterm_version();
+
+    // Resolve ~ to the remote $HOME up front so all commands use an absolute path.
+    // This avoids issues with ~ inside single quotes (which prevents shell expansion).
+    let install_dir = &resolve_remote_dir(sess, raw_install_dir)?;
 
     // Step 1: Check remote version
     ui.output_str("Checking remote weezterm installation...\n");
@@ -70,7 +74,21 @@ pub fn ensure_remote_weezterm(
     log::info!("Remote platform: {}-{}", remote_os, remote_arch);
 
     // Step 3: Obtain binaries
-    let binaries_dir = if is_same_arch(&remote_os, &remote_arch) {
+    let binaries_dir = if let Some(ref dir) = ssh_dom.remote_install_binaries_dir {
+        // Explicit local directory with pre-built binaries for the remote platform
+        ui.output_str(&format!(
+            "Using pre-built binaries from: {}\n",
+            dir
+        ));
+        let p = PathBuf::from(dir);
+        if !p.exists() {
+            bail!(
+                "remote_install_binaries_dir '{}' does not exist",
+                dir
+            );
+        }
+        p
+    } else if is_same_arch(&remote_os, &remote_arch) {
         ui.output_str("Same architecture — using local binaries.\n");
         local_binaries_dir()?
     } else {
@@ -78,7 +96,8 @@ pub fn ensure_remote_weezterm(
             bail!(
                 "Cross-architecture install required ({}-{}) but \
                  remote_install_url is not configured.\n\
-                 Set `remote_install_url` in your SSH domain config \
+                 Set `remote_install_url` or `remote_install_binaries_dir` \
+                 in your SSH domain config, \
                  or install weezterm on the remote host manually.",
                 remote_os,
                 remote_arch
@@ -100,12 +119,10 @@ pub fn ensure_remote_weezterm(
         download_and_extract(&url, &cache_dir)?
     };
 
-    // Step 4: SFTP upload
+    // Step 4: Upload via SSH exec
     ui.output_str("Uploading weezterm binaries to remote host...\n");
 
-    // Expand ~ in install_dir — we ask the remote shell for $HOME
-    let resolved_dir = resolve_remote_dir(sess, install_dir)?;
-    sftp_upload_binaries(sess, &binaries_dir, &resolved_dir, local_version, ui)?;
+    sftp_upload_binaries(sess, &binaries_dir, install_dir, local_version, ui)?;
 
     ui.output_str("Remote weezterm installation complete.\n");
     Ok(Some(format!("{}/weezterm", install_dir)))
@@ -307,7 +324,9 @@ fn has_cached_binaries(dir: &Path) -> bool {
 
 // ─── SFTP Upload ────────────────────────────────────────────────────
 
-/// Upload binaries to the remote host via SFTP and write a version marker.
+/// Upload binaries to the remote host via SSH exec+stdin and write a version marker.
+/// We pipe binary data through `cat > file` instead of SFTP, which is more
+/// reliable across SSH backends on Windows.
 fn sftp_upload_binaries(
     sess: &Session,
     local_dir: &Path,
@@ -315,8 +334,6 @@ fn sftp_upload_binaries(
     version: &str,
     ui: &ConnectionUI,
 ) -> anyhow::Result<()> {
-    let sftp = sess.sftp();
-
     // Create remote directory (ignore error if it already exists)
     ensure_remote_dir(sess, remote_dir)?;
 
@@ -333,20 +350,8 @@ fn sftp_upload_binaries(
             binary_name, size_mb
         ));
 
-        // Upload via SFTP
-        let mut remote_file = smol::block_on(sftp.create(&remote_path))
-            .map_err(|e| anyhow!("Failed to create remote file {}: {}", remote_path, e))?;
-
-        // Write in chunks to avoid memory issues with large files
-        let chunk_size = 256 * 1024; // 256 KB chunks
-        for chunk in data.chunks(chunk_size) {
-            smol::block_on(smol::io::AsyncWriteExt::write_all(&mut remote_file, chunk))
-                .map_err(|e| anyhow!("Failed writing to {}: {}", remote_path, e))?;
-        }
-        smol::block_on(smol::io::AsyncWriteExt::flush(&mut remote_file))
-            .map_err(|e| anyhow!("Failed flushing {}: {}", remote_path, e))?;
-        smol::block_on(smol::io::AsyncWriteExt::close(&mut remote_file))
-            .map_err(|e| anyhow!("Failed closing {}: {}", remote_path, e))?;
+        upload_via_exec(sess, &data, &remote_path)
+            .with_context(|| format!("Failed to upload {}", remote_path))?;
 
         // Set executable permissions
         exec_remote(sess, &format!("chmod +x '{}'", remote_path))
@@ -355,15 +360,33 @@ fn sftp_upload_binaries(
 
     // Write version marker
     let version_path = format!("{}/.version", remote_dir);
-    let mut version_file = smol::block_on(sftp.create(&version_path))
-        .map_err(|e| anyhow!("Failed to create version marker: {}", e))?;
-    smol::block_on(smol::io::AsyncWriteExt::write_all(
-        &mut version_file,
-        version.as_bytes(),
-    ))?;
-    smol::block_on(smol::io::AsyncWriteExt::flush(&mut version_file))?;
-    smol::block_on(smol::io::AsyncWriteExt::close(&mut version_file))?;
+    upload_via_exec(sess, version.as_bytes(), &version_path)
+        .with_context(|| "Failed to write version marker")?;
 
+    Ok(())
+}
+
+/// Upload data to a remote file by piping it through `cat > path`.
+fn upload_via_exec(sess: &Session, data: &[u8], remote_path: &str) -> anyhow::Result<()> {
+    validate_path(remote_path)?;
+    let cmd = format!("cat > '{}'", remote_path);
+    let exec = smol::block_on(sess.exec(&cmd, None))
+        .with_context(|| format!("Failed to exec upload command for {}", remote_path))?;
+
+    let mut stdin = exec.stdin;
+    // Write in chunks
+    let chunk_size = 256 * 1024;
+    for chunk in data.chunks(chunk_size) {
+        stdin
+            .write_all(chunk)
+            .with_context(|| format!("Failed writing to {}", remote_path))?;
+    }
+    stdin.flush()?;
+    drop(stdin); // Close stdin to signal EOF to cat
+
+    // Wait for cat to finish
+    let mut child = exec.child;
+    let _ = smol::block_on(child.async_wait());
     Ok(())
 }
 
@@ -418,11 +441,35 @@ fn resolve_remote_dir(sess: &Session, dir: &str) -> anyhow::Result<String> {
     }
 }
 
-/// Ensure a remote directory exists, creating it if necessary.
+/// Ensure a remote directory exists, creating it and parents if necessary.
+/// Uses SSH exec with mkdir -p and waits for the child process to fully
+/// exit before returning, so the SFTP subsystem sees the directory.
 fn ensure_remote_dir(sess: &Session, dir: &str) -> anyhow::Result<()> {
     validate_path(dir)?;
-    let cmd = format!("mkdir -p '{}'", dir);
-    exec_remote(sess, &cmd)?;
+    // Single command: create dir, verify it exists, echo a sentinel.
+    // We read stdout for the sentinel to be sure the command completed.
+    let cmd = format!("mkdir -p '{}' && test -d '{}' && echo MKDIR_OK", dir, dir);
+    let exec = smol::block_on(sess.exec(&cmd, None))
+        .with_context(|| format!("Failed to exec mkdir for {}", dir))?;
+
+    let mut stdout = exec.stdout;
+    let mut output = String::new();
+    stdout
+        .read_to_string(&mut output)
+        .with_context(|| format!("Failed to read mkdir output for {}", dir))?;
+
+    // Wait for the child process to fully exit
+    let mut child = exec.child;
+    let _ = smol::block_on(child.async_wait());
+
+    if !output.trim().contains("MKDIR_OK") {
+        bail!(
+            "Failed to create remote directory '{}': output was '{}'",
+            dir,
+            output.trim()
+        );
+    }
+    log::info!("Remote directory ensured: {}", dir);
     Ok(())
 }
 
@@ -436,4 +483,148 @@ fn validate_path(path: &str) -> anyhow::Result<()> {
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod test {
+    use super::*;
+    use std::fs;
+
+    #[test]
+    fn test_normalize_os() {
+        assert_eq!(normalize_os("Linux"), "linux");
+        assert_eq!(normalize_os("linux"), "linux");
+        assert_eq!(normalize_os("Darwin"), "darwin");
+        assert_eq!(normalize_os("DARWIN"), "darwin");
+        assert_eq!(normalize_os("  Linux  "), "linux");
+        // Unknown OS passed through as-is (trimmed)
+        assert_eq!(normalize_os("FreeBSD"), "FreeBSD");
+    }
+
+    #[test]
+    fn test_normalize_arch() {
+        assert_eq!(normalize_arch("x86_64"), "x86_64");
+        assert_eq!(normalize_arch("amd64"), "x86_64");
+        assert_eq!(normalize_arch("aarch64"), "aarch64");
+        assert_eq!(normalize_arch("arm64"), "aarch64");
+        assert_eq!(normalize_arch("  x86_64  "), "x86_64");
+        // Unknown arch passed through as-is
+        assert_eq!(normalize_arch("riscv64"), "riscv64");
+    }
+
+    #[test]
+    fn test_validate_path_safe() {
+        assert!(validate_path("/home/user/.weezterm/bin").is_ok());
+        assert!(validate_path("/tmp/test-dir").is_ok());
+        assert!(validate_path("relative/path").is_ok());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_single_quotes() {
+        assert!(validate_path("/home/user'; rm -rf /").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_backticks() {
+        assert!(validate_path("/home/`whoami`/bin").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_dollar() {
+        assert!(validate_path("/home/$USER/bin").is_err());
+    }
+
+    #[test]
+    fn test_validate_path_rejects_null() {
+        assert!(validate_path("/home/user\0/bin").is_err());
+    }
+
+    #[test]
+    fn test_find_local_binary_weezterm_name() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("weezterm"), b"fake").unwrap();
+        let result = find_local_binary(dir.path(), "weezterm");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), dir.path().join("weezterm"));
+    }
+
+    #[test]
+    fn test_find_local_binary_compat_name() {
+        let dir = tempfile::tempdir().unwrap();
+        // Only the upstream name exists
+        fs::write(dir.path().join("wezterm"), b"fake").unwrap();
+        let result = find_local_binary(dir.path(), "weezterm");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap(), dir.path().join("wezterm"));
+    }
+
+    #[test]
+    fn test_find_local_binary_mux_server() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("weezterm-mux-server"), b"fake").unwrap();
+        let result = find_local_binary(dir.path(), "weezterm-mux-server");
+        assert!(result.is_ok());
+        assert_eq!(
+            result.unwrap(),
+            dir.path().join("weezterm-mux-server")
+        );
+    }
+
+    #[test]
+    fn test_find_local_binary_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let result = find_local_binary(dir.path(), "weezterm");
+        assert!(result.is_err());
+        let msg = result.unwrap_err().to_string();
+        assert!(msg.contains("not found"), "error: {}", msg);
+    }
+
+    #[test]
+    fn test_has_cached_binaries_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!has_cached_binaries(dir.path()));
+    }
+
+    #[test]
+    fn test_has_cached_binaries_partial() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("weezterm"), b"fake").unwrap();
+        assert!(!has_cached_binaries(dir.path()));
+    }
+
+    #[test]
+    fn test_has_cached_binaries_complete() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("weezterm"), b"fake").unwrap();
+        fs::write(dir.path().join("weezterm-mux-server"), b"fake").unwrap();
+        assert!(has_cached_binaries(dir.path()));
+    }
+
+    #[test]
+    fn test_is_same_arch_windows_vs_linux() {
+        // On any platform, windows != linux
+        let local_triple = wezterm_version::wezterm_target_triple();
+        if local_triple.contains("windows") {
+            assert!(!is_same_arch("linux", "x86_64"));
+        } else if local_triple.contains("linux") {
+            assert!(!is_same_arch("windows", "x86_64"));
+        }
+    }
+
+    #[test]
+    fn test_is_same_arch_matching() {
+        let local_triple = wezterm_version::wezterm_target_triple();
+        let parts: Vec<&str> = local_triple.split('-').collect();
+        let local_arch = normalize_arch(parts[0]);
+        let local_os = if local_triple.contains("linux") {
+            "linux"
+        } else if local_triple.contains("darwin") || local_triple.contains("apple") {
+            "darwin"
+        } else if local_triple.contains("windows") {
+            "windows"
+        } else {
+            "unknown"
+        };
+        assert!(is_same_arch(local_os, &local_arch));
+    }
 }

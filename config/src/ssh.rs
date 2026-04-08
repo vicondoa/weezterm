@@ -134,6 +134,14 @@ pub struct SshDomain {
     /// When empty, cross-arch auto-install is disabled (same-arch SFTP only).
     #[dynamic(default = "default_remote_install_url")]
     pub remote_install_url: String,
+
+    /// Local directory containing pre-built binaries for the remote platform.
+    /// When set, auto-install uploads binaries from this directory instead of
+    /// using the running executable's directory or downloading from a URL.
+    /// Useful for cross-platform development (e.g., Windows host → Linux remote)
+    /// where you build Linux binaries via WSL or cross-compilation.
+    #[dynamic(default)]
+    pub remote_install_binaries_dir: Option<String>,
 }
 
 fn default_true() -> Option<bool> {

@@ -258,7 +258,8 @@ via `remote_install_dir`). No root access is required.
 |--------|------|---------|-------------|
 | `auto_install_mux` | boolean | `true` | Automatically install/update weezterm on the remote host when using multiplexing mode. |
 | `remote_install_dir` | string | `~/.weezterm/bin` | Directory on the remote host to install weezterm binaries. |
-| `remote_install_url` | string | `""` | URL template for downloading cross-arch release artifacts. Placeholders: `{version}`, `{os}`, `{arch}`. Required for cross-architecture installs. |
+| `remote_install_url` | string | `""` | URL template for downloading cross-arch release artifacts. Placeholders: `{version}`, `{os}`, `{arch}`. Required for cross-architecture installs (unless `remote_install_binaries_dir` is set). |
+| `remote_install_binaries_dir` | string | `nil` | Local directory containing pre-built binaries for the remote platform. Overrides both same-arch detection and URL download. Useful for cross-platform dev (e.g., Windows host → Linux remote via WSL build). |
 
 Example configuration (inside an `ssh_domains` entry):
 
@@ -270,6 +271,8 @@ config.ssh_domains = {
     auto_install_mux = true,  -- default: true
     remote_install_dir = "~/.weezterm/bin",  -- default
     remote_install_url = "https://github.com/user/weezterm/releases/download/v{version}/weezterm-mux-{os}-{arch}.tar.gz",
+    -- Or point to locally-built Linux binaries for cross-platform dev:
+    -- remote_install_binaries_dir = "//wsl$/Ubuntu/home/user/weezterm/target/release",
   },
 }
 ```
@@ -279,9 +282,11 @@ config.ssh_domains = {
 #### Cross-arch install fails with empty `remote_install_url`
 
 If your local machine and remote host have different architectures (common:
-macOS → Linux), you must configure `remote_install_url` pointing to your
-release artifacts. The URL template supports `{version}`, `{os}`, and
-`{arch}` placeholders.
+macOS → Linux, Windows → Linux), you must either:
+- Set `remote_install_binaries_dir` to a local directory containing pre-built
+  binaries for the remote platform (e.g., built via WSL or cross-compilation), or
+- Set `remote_install_url` pointing to your release artifacts. The URL template
+  supports `{version}`, `{os}`, and `{arch}` placeholders.
 
 #### Version mismatch prompts on every connection
 
@@ -325,6 +330,7 @@ config.ssh_domains = {
     auto_install_mux = true,
     remote_install_dir = "~/.weezterm/bin",
     remote_install_url = "",  -- set to release URL for cross-arch installs
+    remote_install_binaries_dir = nil,  -- or path to pre-built binaries for remote platform
   },
 }
 ```
