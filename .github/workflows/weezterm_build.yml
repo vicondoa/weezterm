@@ -95,14 +95,9 @@ jobs:
         with:
           name: "windows"
           path: |
-<<<<<<< Updated upstream
             WeezTerm-*.zip
             WeezTerm-*.exe
-=======
-            WezTerm-*.zip
-            WezTerm-*.exe
             weezterm-mux-*.tar.gz
->>>>>>> Stashed changes
 
   # ─── macOS (Universal binary) ─────────────────────────────────────
   macos:
@@ -177,13 +172,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: "macos"
-<<<<<<< Updated upstream
-          path: "WeezTerm-*.zip"
-=======
           path: |
-            WezTerm-*.zip
+            WeezTerm-*.zip
             weezterm-mux-*.tar.gz
->>>>>>> Stashed changes
 
   # ─── Linux matrix (containers) ────────────────────────────────────
   linux:
@@ -304,11 +295,8 @@ jobs:
             *src.tar.gz
             *.AppImage
             WezTerm-*.tar.xz
-<<<<<<< Updated upstream
             WeezTerm-*.tar.xz
-=======
             weezterm-mux-*.tar.gz
->>>>>>> Stashed changes
 
   # ─── GitHub Release (on tags only) ────────────────────────────────
   release:
