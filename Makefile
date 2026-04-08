@@ -84,4 +84,12 @@ ifeq ($(OS),Windows_NT)
 	@echo "Build environment ready. PATH includes Strawberry Perl."
 	@echo "Run: set PATH=C:\Strawberry\perl\bin;%PATH%"
 endif
+
+.PHONY: cross-build
+cross-build:
+	bash ci/build-cross.sh
+
+.PHONY: cross-build-release
+cross-build-release:
+	bash ci/build-cross.sh --release
 # --- end weezterm remote features ---

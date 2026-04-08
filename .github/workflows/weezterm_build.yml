@@ -56,8 +56,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-            echo "${TAG}+weez.${WEEZ}" > .tag
+            if [[ "$TAG" != *".weez."* ]]; then
+              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+              TAG="${TAG}.weez.${WEEZ}"
+            fi
+            echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
       - name: "Build (Release)"
@@ -79,12 +82,22 @@ jobs:
       - name: "Package"
         shell: bash
         run: "bash ci/deploy.sh"
+      # --- weezterm remote features ---
+      - name: "Package mux-only tarball"
+        shell: bash
+        run: |
+          mkdir -p mux-pkg
+          cp target/release/weezterm.exe mux-pkg/ 2>/dev/null || cp target/release/wezterm.exe mux-pkg/weezterm.exe
+          cp target/release/weezterm-mux-server.exe mux-pkg/ 2>/dev/null || cp target/release/wezterm-mux-server.exe mux-pkg/weezterm-mux-server.exe
+          cd mux-pkg && tar czf ../weezterm-mux-windows-x86_64.tar.gz *
+      # --- end weezterm remote features ---
       - uses: actions/upload-artifact@v4
         with:
           name: "windows"
           path: |
             WeezTerm-*.zip
             WeezTerm-*.exe
+            weezterm-mux-*.tar.gz
 
   # ─── macOS (Universal binary) ─────────────────────────────────────
   macos:
@@ -119,8 +132,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-            echo "${TAG}+weez.${WEEZ}" > .tag
+            if [[ "$TAG" != *".weez."* ]]; then
+              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+              TAG="${TAG}.weez.${WEEZ}"
+            fi
+            echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
       - name: "Build (ARM64)"
@@ -142,10 +158,23 @@ jobs:
         run: "cargo nextest run --all --no-fail-fast --target=x86_64-apple-darwin -E 'not test(e2e::)'"
       - name: "Package"
         run: "bash ci/deploy.sh"
+      # --- weezterm remote features ---
+      - name: "Package mux-only tarballs"
+        run: |
+          for arch in aarch64 x86_64; do
+            target="${arch}-apple-darwin"
+            mkdir -p "mux-pkg-${arch}"
+            cp "target/${target}/release/weezterm" "mux-pkg-${arch}/" 2>/dev/null || cp "target/${target}/release/wezterm" "mux-pkg-${arch}/weezterm"
+            cp "target/${target}/release/weezterm-mux-server" "mux-pkg-${arch}/" 2>/dev/null || cp "target/${target}/release/wezterm-mux-server" "mux-pkg-${arch}/weezterm-mux-server"
+            (cd "mux-pkg-${arch}" && tar czf "../weezterm-mux-darwin-${arch}.tar.gz" *)
+          done
+      # --- end weezterm remote features ---
       - uses: actions/upload-artifact@v4
         with:
           name: "macos"
-          path: "WeezTerm-*.zip"
+          path: |
+            WeezTerm-*.zip
+            weezterm-mux-*.tar.gz
 
   # ─── Linux matrix (containers) ────────────────────────────────────
   linux:
@@ -220,8 +249,11 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-            echo "${TAG}+weez.${WEEZ}" > .tag
+            if [[ "$TAG" != *".weez."* ]]; then
+              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
+              TAG="${TAG}.weez.${WEEZ}"
+            fi
+            echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
       - name: "Build (Release)"
@@ -237,6 +269,16 @@ jobs:
         run: "cargo nextest run --all --no-fail-fast -E 'not test(e2e::)'"
       - name: "Package"
         run: "bash ci/deploy.sh"
+      # --- weezterm remote features ---
+      - name: "Package mux-only tarball"
+        if: matrix.artifact == 'ubuntu20.04'
+        run: |
+          ARCH=$(uname -m)
+          mkdir -p mux-pkg
+          cp target/release/weezterm mux-pkg/ 2>/dev/null || cp target/release/wezterm mux-pkg/weezterm
+          cp target/release/weezterm-mux-server mux-pkg/ 2>/dev/null || cp target/release/wezterm-mux-server mux-pkg/weezterm-mux-server
+          (cd mux-pkg && tar czf "../weezterm-mux-linux-${ARCH}.tar.gz" *)
+      # --- end weezterm remote features ---
       - name: "Build AppImage"
         if: matrix.appimage
         run: |
@@ -254,6 +296,7 @@ jobs:
             *.AppImage
             WezTerm-*.tar.xz
             WeezTerm-*.tar.xz
+            weezterm-mux-*.tar.gz
 
   # ─── GitHub Release (on tags only) ────────────────────────────────
   release:

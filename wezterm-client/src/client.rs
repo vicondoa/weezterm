@@ -708,7 +708,18 @@ impl Reconnectable {
         let ssh_config = mux::ssh::ssh_domain_to_ssh_config(&ssh_dom)?;
 
         let sess = ssh_connect_with_ui(ssh_config, ui)?;
-        let proxy_bin = Self::wezterm_bin_path(&ssh_dom.remote_wezterm_path);
+
+        // --- weezterm remote features ---
+        // Auto-install weezterm on the remote host if needed.
+        // This must happen before we try to run the proxy command.
+        let installed_path = crate::remote_install::ensure_remote_weezterm(&sess, &ssh_dom, ui)?;
+        // --- end weezterm remote features ---
+
+        let proxy_bin = if let Some(ref path) = installed_path {
+            path.clone()
+        } else {
+            Self::wezterm_bin_path(&ssh_dom.remote_wezterm_path)
+        };
 
         let cmd = if let Some(cmd) = ssh_dom.override_proxy_command.clone() {
             cmd

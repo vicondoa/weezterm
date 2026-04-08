@@ -40,6 +40,15 @@ wezterm-term = { workspace=true, features=["use_serde"] }
 wezterm-open-url.workspace = true
 wezterm-uds.workspace = true
 
+# --- weezterm remote features ---
+flate2.workspace = true
+http_req.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+wezterm-version = { path = "../wezterm-version" }
+dirs-next.workspace = true
+# --- end weezterm remote features ---
+
 [target."cfg(windows)".dependencies]
 winapi = { workspace=true, features = [
     "winuser",
