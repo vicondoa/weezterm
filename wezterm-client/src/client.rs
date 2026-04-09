@@ -30,6 +30,7 @@ use std::os::unix::process::CommandExt;
 #[cfg(windows)]
 use std::os::windows::io::{AsRawSocket, AsSocket, BorrowedSocket, RawSocket};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use thiserror::Error;
@@ -59,6 +60,11 @@ pub struct Client {
     client_domain_config: ClientDomainConfig,
     pub is_reconnectable: bool,
     pub is_local: bool,
+    // --- weezterm remote features ---
+    /// SSH session for port forwarding, shared with background thread
+    /// so it can be updated on reconnection.
+    ssh_session: Arc<std::sync::Mutex<Option<wezterm_ssh::Session>>>,
+    // --- end weezterm remote features ---
 }
 
 #[derive(Error, Debug, Clone, PartialEq, Eq)]
@@ -560,11 +566,29 @@ where
     }
 }
 
-#[derive(Debug)]
 struct Reconnectable {
     config: ClientDomainConfig,
     stream: Option<Box<dyn AsyncReadAndWrite>>,
     tls_creds: Option<GetTlsCredsResponse>,
+    // --- weezterm remote features ---
+    /// SSH session kept alive for port forwarding (direct-tcpip tunnels)
+    /// and remote command execution (port detection).
+    ssh_session: Option<wezterm_ssh::Session>,
+    // --- end weezterm remote features ---
+}
+
+impl std::fmt::Debug for Reconnectable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Reconnectable")
+            .field("config", &self.config)
+            .field("stream", &self.stream)
+            .field("tls_creds", &self.tls_creds)
+            .field(
+                "ssh_session",
+                &self.ssh_session.as_ref().map(|_| "<Session>"),
+            )
+            .finish()
+    }
 }
 
 struct SshStream {
@@ -629,6 +653,9 @@ impl Reconnectable {
             config,
             stream,
             tls_creds: None,
+            // --- weezterm remote features ---
+            ssh_session: None,
+            // --- end weezterm remote features ---
         }
     }
 
@@ -666,7 +693,9 @@ impl Reconnectable {
             // we sent CTRL-D to close the last session, or whether it was a network
             // level disconnect, because we will otherwise throw up authentication
             // dialogs that would be annoying
-            ClientDomainConfig::Ssh(_) => false,
+            // --- weezterm remote features ---
+            ClientDomainConfig::Ssh(_) => true,
+            // --- end weezterm remote features ---
         }
     }
 
@@ -761,6 +790,15 @@ impl Reconnectable {
             stdout: exec.stdout,
         })?);
         self.stream.replace(stream);
+
+        // --- weezterm remote features ---
+        // Keep the SSH session alive for port forwarding (direct-tcpip)
+        // and remote port detection (exec). The session is ref-counted;
+        // the exec channel already keeps it alive, but we store an
+        // explicit clone so ClientDomain can use it independently.
+        self.ssh_session = Some(sess);
+        // --- end weezterm remote features ---
+
         Ok(())
     }
 
@@ -1081,6 +1119,11 @@ impl Client {
         let (sender, mut receiver) = unbounded();
         let client_id = ClientId::new();
 
+        // --- weezterm remote features ---
+        let ssh_session = Arc::new(std::sync::Mutex::new(reconnectable.ssh_session.take()));
+        let ssh_session_bg = ssh_session.clone();
+        // --- end weezterm remote features ---
+
         thread::spawn(move || {
             const BASE_INTERVAL: Duration = Duration::from_secs(1);
             const MAX_INTERVAL: Duration = Duration::from_secs(10);
@@ -1123,6 +1166,15 @@ impl Client {
                             Ok(_) => {
                                 backoff = BASE_INTERVAL;
                                 log::error!("Reconnected!");
+
+                                // --- weezterm remote features ---
+                                // Update the shared SSH session so ClientDomain
+                                // can restart port forwarding with the new session.
+                                if let Some(new_sess) = reconnectable.ssh_session.clone() {
+                                    *ssh_session_bg.lock().unwrap() = Some(new_sess);
+                                }
+                                // --- end weezterm remote features ---
+
                                 promise::spawn::spawn_into_main_thread(async move {
                                     ClientDomain::reattach(local_domain_id, ui).await.ok();
                                 })
@@ -1174,8 +1226,19 @@ impl Client {
             is_local,
             client_id,
             client_domain_config,
+            // --- weezterm remote features ---
+            ssh_session,
+            // --- end weezterm remote features ---
         }
     }
+
+    // --- weezterm remote features ---
+    /// Get the SSH session, if this client was created via SSH.
+    /// Used by ClientDomain for port forwarding.
+    pub fn ssh_session(&self) -> Option<wezterm_ssh::Session> {
+        self.ssh_session.lock().unwrap().clone()
+    }
+    // --- end weezterm remote features ---
 
     pub fn into_client_domain_config(self) -> ClientDomainConfig {
         self.client_domain_config

@@ -73,8 +73,9 @@ pub fn write_browser_helper_script(path: &std::path::Path) -> std::io::Result<()
 pub fn ensure_browser_helper() -> anyhow::Result<String> {
     let path = remote_browser_path();
     if !path.exists() {
-        write_browser_helper_script(&path)
-            .map_err(|e| anyhow::anyhow!("failed to write browser helper {}: {}", path.display(), e))?;
+        write_browser_helper_script(&path).map_err(|e| {
+            anyhow::anyhow!("failed to write browser helper {}: {}", path.display(), e)
+        })?;
     }
     Ok(path.to_string_lossy().into_owned())
 }

@@ -20,6 +20,7 @@ pub struct PortDisplayEntry {
     pub label: Option<String>,
     pub is_forwarded: bool,
     pub is_error: bool,
+    pub is_skipped: bool,
     pub error_msg: Option<String>,
 }
 
@@ -35,7 +36,7 @@ pub fn run_port_forward_overlay(
         entries,
         selected: 0,
         filter: String::new(),
-        action: None,
+        port_input: None,
     };
 
     term.set_raw_mode()?;
@@ -45,124 +46,192 @@ pub fn run_port_forward_overlay(
         render_overlay(&mut term, &state)?;
 
         match term.poll_input(None) {
-            Ok(Some(input)) => match input {
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Escape,
-                    ..
-                })
-                | InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('q'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    return Ok(PortForwardAction::Close);
-                }
-
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::UpArrow,
-                    ..
-                })
-                | InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('k'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    if state.selected > 0 {
-                        state.selected -= 1;
-                    } else if !state.filtered_entries().is_empty() {
-                        state.selected = state.filtered_entries().len() - 1;
+            Ok(Some(input)) => {
+                // If we're in port input mode, handle input there
+                if let Some(ref mut input_state) = state.port_input {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            // Cancel port input mode
+                            state.port_input = None;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            // Submit the user-chosen port
+                            if let Ok(port) = input_state.port_text.parse::<u16>() {
+                                if port > 0 {
+                                    return Ok(PortForwardAction::StartForwardOnPort {
+                                        remote_port: input_state.remote_port,
+                                        remote_host: input_state.remote_host.clone(),
+                                        local_port: port,
+                                    });
+                                }
+                            }
+                            // Invalid port, stay in input mode
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Backspace,
+                            ..
+                        }) => {
+                            input_state.port_text.pop();
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(c),
+                            ..
+                        }) if c.is_ascii_digit() && input_state.port_text.len() < 5 => {
+                            input_state.port_text.push(c);
+                        }
+                        _ => {}
                     }
+                    continue;
                 }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::DownArrow,
-                    ..
-                })
-                | InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('j'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    let max = state.filtered_entries().len().saturating_sub(1);
-                    if state.selected < max {
-                        state.selected += 1;
-                    } else {
-                        state.selected = 0;
+                // Normal mode key handling
+                match input {
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Escape,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('q'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        return Ok(PortForwardAction::Close);
                     }
-                }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Enter,
-                    ..
-                }) => {
-                    if let Some(entry) = state.selected_entry() {
-                        if entry.is_forwarded {
-                            return Ok(PortForwardAction::StopForward {
-                                remote_port: entry.remote_port,
-                            });
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::UpArrow,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('k'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        if state.selected > 0 {
+                            state.selected -= 1;
+                        } else if !state.filtered_entries().is_empty() {
+                            state.selected = state.filtered_entries().len() - 1;
+                        }
+                    }
+
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::DownArrow,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('j'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        let max = state.filtered_entries().len().saturating_sub(1);
+                        if state.selected < max {
+                            state.selected += 1;
                         } else {
-                            return Ok(PortForwardAction::StartForward {
+                            state.selected = 0;
+                        }
+                    }
+
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Enter,
+                        ..
+                    }) => {
+                        if let Some(entry) = state.selected_entry() {
+                            if entry.is_forwarded {
+                                return Ok(PortForwardAction::StopForward {
+                                    remote_port: entry.remote_port,
+                                });
+                            } else if entry.is_skipped {
+                                // Port is skipped — enter port input mode so user can choose
+                                state.port_input = Some(PortInputState {
+                                    remote_port: entry.remote_port,
+                                    remote_host: entry.remote_host.clone(),
+                                    port_text: String::new(),
+                                });
+                            } else {
+                                return Ok(PortForwardAction::StartForward {
+                                    remote_port: entry.remote_port,
+                                    remote_host: entry.remote_host.clone(),
+                                    preferred_local_port: entry.remote_port,
+                                });
+                            }
+                        }
+                    }
+
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('p'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        // Enter port input mode for selected entry
+                        if let Some(entry) = state.selected_entry() {
+                            state.port_input = Some(PortInputState {
                                 remote_port: entry.remote_port,
                                 remote_host: entry.remote_host.clone(),
-                                preferred_local_port: entry.remote_port,
+                                port_text: String::new(),
                             });
                         }
                     }
-                }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('f'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    return Ok(PortForwardAction::ManualForward);
-                }
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('f'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        return Ok(PortForwardAction::ManualForward);
+                    }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('s'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    if let Some(entry) = state.selected_entry() {
-                        if entry.is_forwarded {
-                            return Ok(PortForwardAction::StopForward {
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('s'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        if let Some(entry) = state.selected_entry() {
+                            if entry.is_forwarded {
+                                return Ok(PortForwardAction::StopForward {
+                                    remote_port: entry.remote_port,
+                                });
+                            }
+                        }
+                    }
+
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('d'),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) => {
+                        if let Some(entry) = state.selected_entry() {
+                            return Ok(PortForwardAction::Exclude {
                                 remote_port: entry.remote_port,
                             });
                         }
                     }
-                }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char('d'),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) => {
-                    if let Some(entry) = state.selected_entry() {
-                        return Ok(PortForwardAction::Exclude {
-                            remote_port: entry.remote_port,
-                        });
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Backspace,
+                        ..
+                    }) => {
+                        state.filter.pop();
+                        state.selected = 0;
                     }
-                }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Backspace,
-                    ..
-                }) => {
-                    state.filter.pop();
-                    state.selected = 0;
-                }
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char(c),
+                        modifiers: Modifiers::NONE,
+                        ..
+                    }) if c.is_ascii_digit() => {
+                        state.filter.push(c);
+                        state.selected = 0;
+                    }
 
-                InputEvent::Key(KeyEvent {
-                    key: KeyCode::Char(c),
-                    modifiers: Modifiers::NONE,
-                    ..
-                }) if c.is_ascii_digit() => {
-                    state.filter.push(c);
-                    state.selected = 0;
+                    _ => {}
                 }
-
-                _ => {}
-            },
+            }
             Ok(None) => {}
             Err(_) => break,
         }
@@ -180,6 +249,11 @@ pub enum PortForwardAction {
         remote_host: String,
         preferred_local_port: u16,
     },
+    StartForwardOnPort {
+        remote_port: u16,
+        remote_host: String,
+        local_port: u16,
+    },
     StopForward {
         remote_port: u16,
     },
@@ -189,11 +263,18 @@ pub enum PortForwardAction {
     ManualForward,
 }
 
+/// State for the port number input sub-mode
+struct PortInputState {
+    remote_port: u16,
+    remote_host: String,
+    port_text: String,
+}
+
 struct OverlayState {
     entries: Vec<PortDisplayEntry>,
     selected: usize,
     filter: String,
-    action: Option<PortForwardAction>,
+    port_input: Option<PortInputState>,
 }
 
 impl OverlayState {
@@ -278,6 +359,11 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
                     AnsiColor::Green.into(),
                 )));
                 changes.push(Change::Text("● ".into()));
+            } else if entry.is_skipped {
+                changes.push(Change::Attribute(AttributeChange::Foreground(
+                    AnsiColor::Grey.into(),
+                )));
+                changes.push(Change::Text("⊘ ".into()));
             } else {
                 changes.push(Change::Attribute(AttributeChange::Foreground(
                     AnsiColor::Yellow.into(),
@@ -305,16 +391,19 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
                 changes.push(Change::Text(format!("  ({})", label)));
             }
 
-            // Error message
+            // Error/skip message
             if let Some(ref err) = entry.error_msg {
-                changes.push(Change::Attribute(AttributeChange::Foreground(
-                    AnsiColor::Red.into(),
-                )));
+                let color = if entry.is_skipped {
+                    AnsiColor::Grey
+                } else {
+                    AnsiColor::Red
+                };
+                changes.push(Change::Attribute(AttributeChange::Foreground(color.into())));
                 changes.push(Change::Text(format!("  [{}]", err)));
             }
 
             // State hint
-            if !entry.is_forwarded && !entry.is_error {
+            if !entry.is_forwarded && !entry.is_error && !entry.is_skipped {
                 changes.push(Change::Attribute(AttributeChange::Foreground(
                     AnsiColor::Grey.into(),
                 )));
@@ -333,11 +422,17 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
         " ──────────────────────────────────────────────────\r\n".into(),
     ));
     changes.push(Change::Text(
-        " [Enter] toggle  [F]orward new  [S]top  [D]elete  ".into(),
+        " [Enter] toggle  [P]ort  [F]orward new  [S]top  [D]elete  ".into(),
     ));
 
-    // Filter display
-    if !state.filter.is_empty() {
+    // Port input mode display
+    if let Some(ref input_state) = state.port_input {
+        changes.push(Change::Text(format!(
+            "\r\n Local port for :{}: {}▏",
+            input_state.remote_port, input_state.port_text
+        )));
+    } else if !state.filter.is_empty() {
+        // Filter display
         changes.push(Change::Text(format!("\r\n Filter: {}", state.filter)));
     }
 
@@ -361,6 +456,7 @@ mod test {
                     label: None,
                     is_forwarded: true,
                     is_error: false,
+                    is_skipped: false,
                     error_msg: None,
                 },
                 PortDisplayEntry {
@@ -370,12 +466,13 @@ mod test {
                     label: Some("webpack".into()),
                     is_forwarded: false,
                     is_error: false,
+                    is_skipped: false,
                     error_msg: None,
                 },
             ],
             selected: 0,
             filter: "80".into(),
-            action: None,
+            port_input: None,
         };
 
         let filtered = state.filtered_entries();
@@ -394,6 +491,7 @@ mod test {
                     label: None,
                     is_forwarded: true,
                     is_error: false,
+                    is_skipped: false,
                     error_msg: None,
                 },
                 PortDisplayEntry {
@@ -403,12 +501,13 @@ mod test {
                     label: None,
                     is_forwarded: false,
                     is_error: false,
+                    is_skipped: false,
                     error_msg: None,
                 },
             ],
             selected: 1,
             filter: String::new(),
-            action: None,
+            port_input: None,
         };
 
         assert_eq!(state.selected_entry().unwrap().remote_port, 8080);

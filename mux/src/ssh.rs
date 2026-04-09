@@ -320,10 +320,7 @@ impl RemoteSshDomain {
         let browser_setup = if self.dom.set_remote_browser.unwrap_or(true) {
             // Also put the path in env so setenv is attempted (works if
             // the server has AcceptEnv BROWSER configured).
-            env.insert(
-                "BROWSER".to_string(),
-                browser_path_str.clone(),
-            );
+            env.insert("BROWSER".to_string(), browser_path_str.clone());
             // Create ~/.weezterm/ and write the helper script via heredoc.
             // Single-quoted delimiter suppresses all expansion, so the
             // script content is written verbatim.
