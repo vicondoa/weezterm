@@ -334,8 +334,23 @@ fn process_unilateral(
             return Ok(());
         }
         Pdu::OpenUrlOnClient(req) => {
-            log::info!("Remote requests opening URL: {}", req.url);
-            wezterm_open_url::open_url(&req.url);
+            // --- weezterm remote features ---
+            use config::{check_open_url_policy, OpenUrlPolicy};
+            match check_open_url_policy(&req.url, None) {
+                OpenUrlPolicy::Allow => {
+                    log::info!("Opening URL (allow-listed): {}", req.url);
+                    wezterm_open_url::open_url(&req.url);
+                }
+                OpenUrlPolicy::Confirm => {
+                    log::info!("URL requires confirmation: {}", req.url);
+                    let timeout_secs = config::configuration().open_url.confirm_timeout_secs;
+                    wezterm_toast_notification::show_confirm_open_url(&req.url, timeout_secs);
+                }
+                OpenUrlPolicy::Deny => {
+                    log::warn!("Blocked URL from remote host: {}", req.url);
+                }
+            }
+            // --- end weezterm remote features ---
             return Ok(());
         }
         // These are request/response PDUs, not unilateral.

@@ -6763,6 +6763,7 @@ dependencies = [
  "wezterm-open-url",
  "wezterm-ssh",
  "wezterm-term",
+ "wezterm-toast-notification",
  "wezterm-uds",
  "wezterm-version",
  "winapi",

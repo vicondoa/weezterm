@@ -38,6 +38,7 @@ wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
 wezterm-open-url.workspace = true
+wezterm-toast-notification = { path = "../wezterm-toast-notification" }
 wezterm-uds.workspace = true
 
 # --- weezterm remote features ---

@@ -37,21 +37,28 @@ fn get_github_release_info(uri: &str) -> anyhow::Result<Release> {
     let uri = Uri::try_from(uri)?;
 
     let mut latest = Vec::new();
-    let _res = Request::new(&uri)
-        .version(HttpVersion::Http10)
-        .header(
-            "User-Agent",
-            // --- weezterm remote features ---
-            &format!("vicondoa/weezterm-{}", wezterm_version()),
-            // --- end weezterm remote features ---
-        )
-        .send(&mut latest)
-        .map_err(|e| anyhow!("failed to query github releases: {}", e))?;
-
-    /*
-    println!("Status: {} {}", _res.status_code(), _res.reason());
-    println!("{}", String::from_utf8_lossy(&latest));
-    */
+    // --- weezterm remote features ---
+    // Wrap in catch_unwind because http_req can panic on TLS/network
+    // errors (e.g., behind corporate proxies). See http_req issue.
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        Request::new(&uri)
+            .version(HttpVersion::Http10)
+            .header(
+                "User-Agent",
+                &format!("vicondoa/weezterm-{}", wezterm_version()),
+            )
+            .send(&mut latest)
+    }));
+    match result {
+        Ok(Ok(_res)) => {}
+        Ok(Err(e)) => return Err(anyhow!("failed to query github releases: {}", e)),
+        Err(_) => {
+            return Err(anyhow!(
+                "http_req panicked during release check (network/TLS error)"
+            ))
+        }
+    }
+    // --- end weezterm remote features ---
 
     let latest: Release = serde_json::from_slice(&latest)?;
     Ok(latest)
@@ -195,7 +202,18 @@ fn update_checker() {
             if let Ok(latest) = get_latest_release_info() {
                 schedule_set_banner_from_release_info(&latest);
                 let current = wezterm_version();
-                if latest.tag_name.as_str() > current || force_ui {
+                // --- weezterm remote features ---
+                // Strip "v" prefix from tag for comparison, and strip
+                // "-dev.*" suffix from current version so we compare
+                // base versions: "0.2.0" vs "0.2.0".
+                let release_ver = latest
+                    .tag_name
+                    .strip_prefix('v')
+                    .unwrap_or(&latest.tag_name);
+                let current_base = current.split("-dev.").next().unwrap_or(current);
+                let is_newer = release_ver > current_base;
+                // --- end weezterm remote features ---
+                if is_newer || force_ui {
                     log::info!(
                         "latest release {} is newer than current build {}",
                         latest.tag_name,
