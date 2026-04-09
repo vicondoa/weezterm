@@ -56,10 +56,6 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            if [[ "$TAG" != *".weez."* ]]; then
-              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-              TAG="${TAG}.weez.${WEEZ}"
-            fi
             echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
@@ -132,10 +128,6 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            if [[ "$TAG" != *".weez."* ]]; then
-              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-              TAG="${TAG}.weez.${WEEZ}"
-            fi
             echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
@@ -249,10 +241,6 @@ jobs:
         run: |
           if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
             TAG="${GITHUB_REF#refs/tags/v}"
-            if [[ "$TAG" != *".weez."* ]]; then
-              WEEZ=$(cat .weez-version 2>/dev/null || echo 0)
-              TAG="${TAG}.weez.${WEEZ}"
-            fi
             echo "${TAG}" > .tag
             echo "Version: $(cat .tag)"
           fi
@@ -322,8 +310,55 @@ jobs:
           TAG="${GITHUB_REF_NAME}"
           gh release create "$TAG" \
             --title "WeezTerm $TAG" \
-            --prerelease \
-            --notes "Automated build of WeezTerm $TAG.
+            --notes "Release build of WeezTerm $TAG.
 
           See [docs/remote-extensions.md](https://github.com/${{ github.repository }}/blob/main/docs/remote-extensions.md) for remote SSH features documentation." \
             release/*
+
+  # --- weezterm remote features ---
+  # ─── Dev Pre-release (on every push to main) ─────────────────────
+  dev-release:
+    if: github.ref == 'refs/heads/main' && !startsWith(github.ref, 'refs/tags/') && !cancelled()
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: "Derive dev version"
+        id: version
+        run: |
+          # Read base version from wezterm-version/Cargo.toml
+          BASE=$(grep '^version' wezterm-version/Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          DATE=$(date -u +%Y%m%d)
+          HASH=$(git rev-parse --short=8 HEAD)
+          DEV_TAG="v${BASE}-dev.${DATE}.${HASH}"
+          echo "dev_tag=${DEV_TAG}" >> "$GITHUB_OUTPUT"
+          echo "Dev version: ${DEV_TAG}"
+      - name: "Collect and checksum"
+        run: |
+          mkdir -p release
+          find artifacts -type f \( -name '*.zip' -o -name '*.exe' -o -name '*.deb' -o -name '*.rpm' -o -name '*.xz' -o -name '*.AppImage' -o -name '*.tar.gz' \) -exec cp {} release/ \;
+          cd release
+          for f in *; do sha256sum "$f" > "$f.sha256"; done
+          ls -la
+      - name: "Create dev pre-release"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          DEV_TAG="${{ steps.version.outputs.dev_tag }}"
+          # Create lightweight tag for this commit
+          git tag "$DEV_TAG"
+          git push origin "$DEV_TAG"
+          gh release create "$DEV_TAG" \
+            --title "WeezTerm $DEV_TAG" \
+            --prerelease \
+            --notes "Dev build of WeezTerm from main branch.
+          Commit: ${{ github.sha }}
+
+          **This is a pre-release build — not recommended for production use.**
+
+          See [docs/remote-extensions.md](https://github.com/${{ github.repository }}/blob/main/docs/remote-extensions.md) for remote SSH features documentation." \
+            release/*
+  # --- end weezterm remote features ---

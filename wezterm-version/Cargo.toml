@@ -1,6 +1,10 @@
 [package]
 name = "wezterm-version"
-version = "0.1.0"
+# --- weezterm remote features ---
+# This is the single source of truth for the WeezTerm version.
+# Dev builds append "-dev.YYYYMMDD.HASH"; tagged release builds use this as-is.
+version = "0.2.0"
+# --- end weezterm remote features ---
 edition = "2021"
 build = "build.rs"
 publish = false
