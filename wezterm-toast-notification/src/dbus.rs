@@ -92,13 +92,12 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
 
     let proxy = NotificationsProxy::new(&connection).await?;
     let caps = proxy.get_capabilities().await?;
+    let has_actions = caps.iter().any(|cap| cap == "actions");
 
-    if notif.url.is_some() && !caps.iter().any(|cap| cap == "actions") {
-        // Server doesn't support actions, so skip showing this notification
-        // because it might have text that says "click to see more"
-        // and that just wouldn't work.
-        return Ok(());
-    }
+    // --- weezterm remote features ---
+    // If the server doesn't support actions, still show the notification
+    // (just without the clickable button) instead of silently dropping it.
+    // --- end weezterm remote features ---
 
     let mut hints = HashMap::new();
     hints.insert("urgency", Value::U8(2 /* Critical */));
@@ -111,7 +110,7 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
             // --- end weezterm remote features ---
             &notif.title,
             &notif.message,
-            if notif.url.is_some() {
+            if notif.url.is_some() && has_actions {
                 &["show", "Show"]
             } else {
                 &[]
@@ -121,8 +120,50 @@ async fn show_notif_impl(notif: ToastNotification) -> Result<(), Box<dyn std::er
         )
         .await?;
 
+    // --- weezterm remote features ---
+    // Only listen for action invocations if we actually added actions.
+    // Without actions (no URL or server doesn't support them), we're done.
+    if notif.url.is_none() || !has_actions {
+        return Ok(());
+    }
+    // --- end weezterm remote features ---
+
     let (mut invoked_stream, abort_invoked) = abortable(proxy.receive_action_invoked().await?);
     let (mut closed_stream, abort_closed) = abortable(proxy.receive_notification_closed().await?);
+
+    // --- weezterm remote features ---
+    // Spawn a task to handle cancel_flag and timeout: close the notification
+    // when either fires, which will trigger the closed_stream signal.
+    {
+        let cancel_flag = notif.cancel_flag.clone();
+        let timeout_duration = notif.timeout;
+        let nid = notification;
+        let conn = connection.clone();
+        std::thread::spawn(move || {
+            let deadline = timeout_duration
+                .map(|d| std::time::Instant::now() + d)
+                .unwrap_or_else(|| std::time::Instant::now() + std::time::Duration::from_secs(120));
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(100));
+                if std::time::Instant::now() >= deadline {
+                    break;
+                }
+                if let Some(ref flag) = cancel_flag {
+                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                        break;
+                    }
+                }
+            }
+            // Close the notification (will trigger NotificationClosed signal)
+            async_io::block_on(async {
+                let proxy = NotificationsProxy::new(&conn).await.ok();
+                if let Some(proxy) = proxy {
+                    proxy.close_notification(nid).await.ok();
+                }
+            });
+        });
+    }
+    // --- end weezterm remote features ---
 
     futures_util::try_join!(
         async {

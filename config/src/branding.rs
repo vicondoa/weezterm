@@ -18,6 +18,10 @@ pub const APP_NAME: &str = "weezterm";
 /// Human-readable product name (title case)
 pub const APP_NAME_DISPLAY: &str = "WeezTerm";
 
+/// Application ID / AUMID for platform integration (notifications, window class).
+/// Must match the ID registered in the Windows installer and Linux .desktop files.
+pub const APP_ID: &str = "com.vicondoa.weezterm";
+
 // ---------------------------------------------------------------------------
 // Binary names (platform-appropriate)
 // ---------------------------------------------------------------------------

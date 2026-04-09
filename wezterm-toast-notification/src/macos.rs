@@ -177,21 +177,35 @@ pub fn show_notif(toast: ToastNotification) -> Result<(), Box<dyn std::error::Er
             &*request,
             Some(&RcBlock::new(move |err: *mut NSError| {
                 if err.is_null() {
-                    if let Some(timeout) = toast.timeout {
-                        // Spawn a thread to wait. This could be more efficient.
-                        // We cannot simply use performSelector:withObject:afterDelay:
-                        // because we're not guaranteed to be called from the main
-                        // thread.  We also don't have access to the executor machinery
-                        // from the window crate here, so we just do this basic take.
+                    // --- weezterm remote features ---
+                    // Handle timeout and cancel_flag: remove notification when either fires.
+                    let timeout = toast.timeout;
+                    let cancel_flag = toast.cancel_flag.clone();
+                    if timeout.is_some() || cancel_flag.is_some() {
                         let identifier = identifier.clone();
                         std::thread::spawn(move || {
-                            std::thread::sleep(timeout);
-                            // Remove this notification
+                            let deadline = timeout
+                                .map(|d| std::time::Instant::now() + d)
+                                .unwrap_or_else(|| {
+                                    std::time::Instant::now() + std::time::Duration::from_secs(120)
+                                });
+                            loop {
+                                std::thread::sleep(std::time::Duration::from_millis(100));
+                                if std::time::Instant::now() >= deadline {
+                                    break;
+                                }
+                                if let Some(ref flag) = cancel_flag {
+                                    if flag.load(std::sync::atomic::Ordering::SeqCst) {
+                                        break;
+                                    }
+                                }
+                            }
                             let ident_array =
                                 NSArray::from_retained_slice(&[NSString::from_str(&identifier)]);
                             CENTER.removeDeliveredNotificationsWithIdentifiers(&ident_array);
                         });
                     }
+                    // --- end weezterm remote features ---
                 } else {
                     log::error!("notif failed {}. {NEEDS_SIGN}", ns_error_to_string(err));
                 }

@@ -892,6 +892,12 @@ pub struct Config {
 
     #[dynamic(default = "default_ulimit_nproc")]
     pub ulimit_nproc: u64,
+
+    // --- weezterm remote features ---
+    /// Security policy for the remote open-URL feature.
+    #[dynamic(default)]
+    pub open_url: crate::ssh::OpenUrlConfig,
+    // --- end weezterm remote features ---
 }
 impl_lua_conversion_dynamic!(Config);
 

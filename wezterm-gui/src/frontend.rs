@@ -143,12 +143,22 @@ impl GuiFrontEnd {
                     pane_id: _,
                     alert: Alert::OpenUrl(url),
                 } => {
-                    log::info!("Opening URL on local browser: {}", url);
-                    wezterm_open_url::open_url(&url);
-                    persistent_toast_notification(
-                        "Opening URL",
-                        &format!("Opened {} in browser", url),
-                    );
+                    use config::{check_open_url_policy, OpenUrlPolicy};
+                    match check_open_url_policy(&url, None) {
+                        OpenUrlPolicy::Allow => {
+                            log::info!("Opening URL (allow-listed): {}", url);
+                            wezterm_open_url::open_url(&url);
+                        }
+                        OpenUrlPolicy::Confirm => {
+                            log::info!("URL requires confirmation: {}", url);
+                            let timeout_secs =
+                                config::configuration().open_url.confirm_timeout_secs;
+                            wezterm_toast_notification::show_confirm_open_url(&url, timeout_secs);
+                        }
+                        OpenUrlPolicy::Deny => {
+                            log::warn!("Blocked URL from remote host: {}", url);
+                        }
+                    }
                 }
                 // --- weezterm remote features ---
                 MuxNotification::Alert {

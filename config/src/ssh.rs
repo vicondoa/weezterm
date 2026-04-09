@@ -142,6 +142,12 @@ pub struct SshDomain {
     /// where you build Linux binaries via WSL or cross-compilation.
     #[dynamic(default)]
     pub remote_install_binaries_dir: Option<String>,
+
+    /// Open URL security policy for this domain.
+    /// If not set, falls back to the global `open_url` config.
+    #[dynamic(default)]
+    pub open_url: Option<OpenUrlConfig>,
+    // --- end weezterm remote features ---
 }
 
 fn default_true() -> Option<bool> {
@@ -276,6 +282,130 @@ impl Default for PortForwardConfig {
 
 impl_lua_conversion_dynamic!(PortForwardConfig);
 impl_lua_conversion_dynamic!(SshDomain);
+// --- weezterm remote features ---
+impl_lua_conversion_dynamic!(OpenUrlConfig);
+
+/// Policy for URLs not on the allow-list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum OpenUrlPolicy {
+    /// Open immediately without prompting.
+    Allow,
+    /// Show a toast notification; user must click to open.
+    Confirm,
+    /// Silently block the URL (log a warning).
+    Deny,
+}
+
+impl Default for OpenUrlPolicy {
+    fn default() -> Self {
+        Self::Confirm
+    }
+}
+
+fn default_open_url_allow_list() -> Vec<String> {
+    vec![
+        "https://login.microsoftonline.com/".to_string(),
+        "https://login.live.com/".to_string(),
+    ]
+}
+
+fn default_confirm_timeout_secs() -> u64 {
+    15
+}
+
+/// Security policy for the remote open-URL feature ($BROWSER / OSC 7457).
+///
+/// Controls which URLs from remote hosts are allowed to open in the local browser.
+/// Non-http(s) schemes (file://, javascript:, data:, etc.) are always blocked.
+#[derive(Debug, Clone, FromDynamic, ToDynamic)]
+pub struct OpenUrlConfig {
+    /// Policy for URLs NOT on the allow_list.
+    /// Default: "Confirm" (show toast, user clicks to open)
+    #[dynamic(default)]
+    pub default_policy: OpenUrlPolicy,
+
+    /// URL prefixes that are auto-approved (opened without confirmation).
+    /// Uses prefix matching against the full URL.
+    /// Default: ["https://login.microsoftonline.com/", "https://login.live.com/"]
+    #[dynamic(default = "default_open_url_allow_list")]
+    pub allow_list: Vec<String>,
+
+    /// How long the confirmation toast stays visible (seconds).
+    /// Default: 15
+    #[dynamic(default = "default_confirm_timeout_secs")]
+    pub confirm_timeout_secs: u64,
+}
+
+impl Default for OpenUrlConfig {
+    fn default() -> Self {
+        Self {
+            default_policy: OpenUrlPolicy::Confirm,
+            allow_list: default_open_url_allow_list(),
+            confirm_timeout_secs: 15,
+        }
+    }
+}
+
+/// Check the open-URL policy for a given URL.
+///
+/// Returns the policy to apply:
+/// - Non-http(s) schemes → always `Deny`
+/// - URL matches an allow_list entry (prefix) → `Allow`
+/// - Otherwise → the configured `default_policy`
+///
+/// If `domain_config` is provided, its allow_list and default_policy are checked
+/// first. If the URL doesn't match the domain allow_list, the global config is
+/// checked as a fallback.
+pub fn check_open_url_policy(url: &str, domain_config: Option<&OpenUrlConfig>) -> OpenUrlPolicy {
+    let global_cfg = crate::configuration().open_url.clone();
+    check_open_url_policy_with(url, domain_config, &global_cfg)
+}
+
+/// Inner implementation that takes the global config explicitly (for testing).
+pub fn check_open_url_policy_with(
+    url: &str,
+    domain_config: Option<&OpenUrlConfig>,
+    global_config: &OpenUrlConfig,
+) -> OpenUrlPolicy {
+    // Step 1: Reject non-http(s) schemes
+    let lower = url.to_ascii_lowercase();
+    if !lower.starts_with("http://") && !lower.starts_with("https://") {
+        log::warn!(
+            "Blocked URL with disallowed scheme: {}",
+            url.chars().take(80).collect::<String>()
+        );
+        return OpenUrlPolicy::Deny;
+    }
+
+    // Step 2: Check domain-level allow_list (if present)
+    if let Some(domain_cfg) = domain_config {
+        if domain_cfg
+            .allow_list
+            .iter()
+            .any(|prefix| url.starts_with(prefix.as_str()))
+        {
+            return OpenUrlPolicy::Allow;
+        }
+    }
+
+    // Step 3: Check global allow_list
+    if global_config
+        .allow_list
+        .iter()
+        .any(|prefix| url.starts_with(prefix.as_str()))
+    {
+        return OpenUrlPolicy::Allow;
+    }
+
+    // Step 4: Return the most specific default_policy
+    if let Some(domain_cfg) = domain_config {
+        domain_cfg.default_policy
+    } else {
+        global_config.default_policy
+    }
+}
+// --- end weezterm remote features ---
+// --- end weezterm remote features ---
 
 impl SshDomain {
     pub fn default_domains() -> Vec<Self> {
@@ -353,3 +483,145 @@ impl FromStr for SshParameters {
         }
     }
 }
+
+// --- weezterm remote features ---
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    fn global_config() -> OpenUrlConfig {
+        OpenUrlConfig {
+            default_policy: OpenUrlPolicy::Confirm,
+            allow_list: vec![
+                "https://login.microsoftonline.com/".to_string(),
+                "https://login.live.com/".to_string(),
+            ],
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn test_allow_listed_url_is_allowed() {
+        let global = global_config();
+        let policy = check_open_url_policy_with(
+            "https://login.microsoftonline.com/oauth2/authorize?client_id=abc",
+            None,
+            &global,
+        );
+        assert_eq!(policy, OpenUrlPolicy::Allow);
+    }
+
+    #[test]
+    fn test_non_listed_https_url_gets_default_policy() {
+        let global = global_config();
+        let policy = check_open_url_policy_with("https://example.com/page", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Confirm);
+    }
+
+    #[test]
+    fn test_file_scheme_always_denied() {
+        let global = global_config();
+        let policy = check_open_url_policy_with("file:///etc/passwd", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+
+    #[test]
+    fn test_javascript_scheme_denied() {
+        let global = global_config();
+        let policy = check_open_url_policy_with("javascript:alert(1)", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+
+    #[test]
+    fn test_data_scheme_denied() {
+        let global = global_config();
+        let policy =
+            check_open_url_policy_with("data:text/html,<script>alert(1)</script>", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+
+    #[test]
+    fn test_empty_string_denied() {
+        let global = global_config();
+        let policy = check_open_url_policy_with("", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+
+    #[test]
+    fn test_domain_allow_list_takes_precedence() {
+        let global = global_config();
+        let domain = OpenUrlConfig {
+            default_policy: OpenUrlPolicy::Deny,
+            allow_list: vec!["https://internal.corp.com/".to_string()],
+            ..Default::default()
+        };
+        let policy = check_open_url_policy_with(
+            "https://internal.corp.com/dashboard",
+            Some(&domain),
+            &global,
+        );
+        assert_eq!(policy, OpenUrlPolicy::Allow);
+    }
+
+    #[test]
+    fn test_domain_default_policy_used_when_not_listed() {
+        let global = global_config();
+        let domain = OpenUrlConfig {
+            default_policy: OpenUrlPolicy::Allow,
+            allow_list: vec![],
+            ..Default::default()
+        };
+        // URL not in domain or global allow_list, but domain says Allow
+        let policy =
+            check_open_url_policy_with("https://some-random-site.com", Some(&domain), &global);
+        assert_eq!(policy, OpenUrlPolicy::Allow);
+    }
+
+    #[test]
+    fn test_global_allow_list_used_when_domain_has_no_match() {
+        let global = global_config();
+        let domain = OpenUrlConfig {
+            default_policy: OpenUrlPolicy::Deny,
+            allow_list: vec!["https://other.com/".to_string()],
+            ..Default::default()
+        };
+        // URL matches global allow_list but not domain's
+        let policy = check_open_url_policy_with(
+            "https://login.microsoftonline.com/oauth2",
+            Some(&domain),
+            &global,
+        );
+        assert_eq!(policy, OpenUrlPolicy::Allow);
+    }
+
+    #[test]
+    fn test_case_insensitive_scheme_check() {
+        let global = global_config();
+        // Uppercase scheme should be ok (scheme check is case-insensitive)
+        let policy = check_open_url_policy_with("HTTPS://example.com", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Confirm); // Not denied, just not allow-listed
+
+        let policy = check_open_url_policy_with("FILE:///etc/passwd", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+
+    #[test]
+    fn test_http_url_allowed_through() {
+        let global = global_config();
+        // http:// (not https) should pass scheme check (gets default policy)
+        let policy = check_open_url_policy_with("http://localhost:3000", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Confirm);
+    }
+
+    #[test]
+    fn test_deny_default_policy() {
+        let global = OpenUrlConfig {
+            default_policy: OpenUrlPolicy::Deny,
+            allow_list: vec![],
+            ..Default::default()
+        };
+        let policy = check_open_url_policy_with("https://example.com", None, &global);
+        assert_eq!(policy, OpenUrlPolicy::Deny);
+    }
+}
+// --- end weezterm remote features ---
