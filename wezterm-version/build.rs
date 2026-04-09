@@ -1,66 +1,27 @@
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
 
-    // If a file named `.tag` is present, we'll take its contents for the
-    // version number that we report in wezterm -h.
-    let mut ci_tag = String::new();
-    if let Ok(tag) = std::fs::read("../.tag") {
-        if let Ok(s) = String::from_utf8(tag) {
-            ci_tag = s.trim().to_string();
-            println!("cargo:rerun-if-changed=../.tag");
-        }
-    } else {
-        // Otherwise we'll derive it from the git information
-
-        if let Ok(repo) = git2::Repository::discover(".") {
-            if let Ok(ref_head) = repo.find_reference("HEAD") {
-                let repo_path = repo.path().to_path_buf();
-
-                if let Ok(resolved) = ref_head.resolve() {
-                    if let Some(name) = resolved.name() {
-                        let path = repo_path.join(name);
-                        if path.exists() {
-                            println!(
-                                "cargo:rerun-if-changed={}",
-                                path.canonicalize().unwrap().display()
-                            );
-                        }
-                    }
-                }
-            }
-
-            if let Ok(output) = std::process::Command::new("git")
-                .args(&[
-                    "-c",
-                    "core.abbrev=8",
-                    "show",
-                    "-s",
-                    "--format=%cd-%h",
-                    "--date=format:%Y%m%d-%H%M%S",
-                ])
-                .output()
-            {
-                let info = String::from_utf8_lossy(&output.stdout);
-                ci_tag = info.trim().to_string();
-            }
-        }
-    }
-
     // --- weezterm remote features ---
-    // Append fork suffix so versions are distinguishable from upstream.
-    // Use ".weez.N" (not "+weez.N") so the version string is safe for use
-    // in URLs and git tags without escaping.
-    // .tag file from CI already includes the suffix (e.g. "20240203-110809-abc12345.weez.1"),
-    // so only append when auto-derived from git.
-    if !ci_tag.is_empty() && !ci_tag.contains(".weez") {
-        // Read fork patch version from .weez-version if present, else default to 0
-        let patch = std::fs::read_to_string("../.weez-version")
-            .ok()
-            .and_then(|s| s.trim().parse::<u32>().ok())
-            .unwrap_or(0);
-        ci_tag = format!("{}.weez.{}", ci_tag, patch);
-        println!("cargo:rerun-if-changed=../.weez-version");
-    }
+    // The version comes from Cargo.toml (CARGO_PKG_VERSION).
+    // For release builds, CI writes a .tag file with the exact version.
+    // For dev builds, we append "-dev.YYYYMMDD.HASH" from git.
+    let base_version = std::env::var("CARGO_PKG_VERSION").unwrap_or_else(|_| "0.0.0".to_string());
+
+    let ci_tag = if let Ok(tag) = std::fs::read("../.tag") {
+        // CI release build: .tag contains the version (e.g., "0.2.0")
+        println!("cargo:rerun-if-changed=../.tag");
+        String::from_utf8(tag)
+            .map(|s| s.trim().to_string())
+            .unwrap_or(base_version)
+    } else {
+        // Dev build: derive suffix from git
+        let git_suffix = git_dev_suffix();
+        if git_suffix.is_empty() {
+            base_version
+        } else {
+            format!("{}-dev.{}", base_version, git_suffix)
+        }
+    };
     // --- end weezterm remote features ---
 
     let target = std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string());
@@ -68,3 +29,43 @@ fn main() {
     println!("cargo:rustc-env=WEZTERM_TARGET_TRIPLE={}", target);
     println!("cargo:rustc-env=WEZTERM_CI_TAG={}", ci_tag);
 }
+
+// --- weezterm remote features ---
+/// Derive a dev build suffix from git: "YYYYMMDD.SHORTHASH"
+fn git_dev_suffix() -> String {
+    if let Ok(repo) = git2::Repository::discover(".") {
+        // Set up cargo rerun-if-changed for HEAD
+        if let Ok(ref_head) = repo.find_reference("HEAD") {
+            let repo_path = repo.path().to_path_buf();
+            if let Ok(resolved) = ref_head.resolve() {
+                if let Some(name) = resolved.name() {
+                    let path = repo_path.join(name);
+                    if path.exists() {
+                        println!(
+                            "cargo:rerun-if-changed={}",
+                            path.canonicalize().unwrap().display()
+                        );
+                    }
+                }
+            }
+        }
+
+        // Get date and short hash: "20240203.abc12345"
+        if let Ok(output) = std::process::Command::new("git")
+            .args(&[
+                "-c",
+                "core.abbrev=8",
+                "show",
+                "-s",
+                "--format=%cd.%h",
+                "--date=format:%Y%m%d",
+            ])
+            .output()
+        {
+            let info = String::from_utf8_lossy(&output.stdout);
+            return info.trim().to_string();
+        }
+    }
+    String::new()
+}
+// --- end weezterm remote features ---

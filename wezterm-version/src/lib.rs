@@ -10,8 +10,7 @@ pub fn wezterm_target_triple() -> &'static str {
 
 // --- weezterm remote features ---
 /// Derive the GitHub release tag from the version string.
-/// The version is something like "20240203-110809-abc12345.weez.1"
-/// and the release tag is "v20240203-110809-abc12345.weez.1".
+/// For release builds this is "v0.2.0"; for dev builds "v0.2.0-dev.20240203.abc12345".
 pub fn release_tag() -> String {
     format!("v{}", wezterm_version())
 }

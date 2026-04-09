@@ -280,12 +280,18 @@ Also disabled: `nix_continuous.yml`, `nix-update-flake.yml`, `pages.yml`,
 
 ### Release process
 
-1. Bump the number in `.weez-version` if desired
-2. Tag: `git tag -a v0.X.0 -m "WeezTerm v0.X.0"  &&  git push origin v0.X.0`
-3. The `weezterm-build` workflow triggers on `v*` tags
-4. Writes `.tag` file with `0.X.0+weez.N` version
-5. Builds all platforms, runs tests, packages artifacts
-6. `release` job creates a GitHub Release with all binaries
+1. Bump `version` in `wezterm-version/Cargo.toml` (e.g., `0.2.0` → `0.3.0`)
+2. Commit: `git commit -am "chore: bump version to 0.3.0"`
+3. Tag: `git tag -a v0.3.0 -m "WeezTerm v0.3.0"  &&  git push origin v0.3.0`
+4. The `weezterm-build` workflow triggers on `v*` tags
+5. Writes `.tag` file with the version (e.g., `0.3.0`)
+6. Builds all platforms, runs tests, packages artifacts
+7. `release` job creates a GitHub Release titled `WeezTerm v0.3.0`
+
+**Version format:**
+- Release builds: `0.3.0` (from `.tag` file)
+- Dev builds: `0.3.0-dev.YYYYMMDD.SHORTHASH` (auto-derived from git)
+- The single source of truth is `wezterm-version/Cargo.toml`
 
 ### Branch protection
 
