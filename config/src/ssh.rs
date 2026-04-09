@@ -170,6 +170,45 @@ fn default_remote_install_url() -> String {
     String::new()
 }
 
+// --- weezterm remote features ---
+/// What to do when a detected remote port's preferred local port is already in use.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum PortConflictHandling {
+    /// Skip forwarding and show the port as inactive with a reason.
+    /// The port will be re-checked periodically and auto-forwarded when freed.
+    Skip,
+    /// Forward on a random available local port instead.
+    RandomPort,
+}
+
+impl Default for PortConflictHandling {
+    fn default() -> Self {
+        Self::Skip
+    }
+}
+// --- end weezterm remote features ---
+
+// --- weezterm remote features ---
+/// Controls how /proc/net/tcp port detection behaves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+pub enum PortDetectionMode {
+    /// Disable /proc/net/tcp detection entirely.
+    None,
+    /// Detect and forward all listening ports, including those already open
+    /// when weezterm connects.
+    All,
+    /// Only detect and forward ports that are opened AFTER weezterm connects.
+    /// Ports that are closed and re-opened will also be forwarded.
+    OnlyNew,
+}
+
+impl Default for PortDetectionMode {
+    fn default() -> Self {
+        Self::OnlyNew
+    }
+}
+// --- end weezterm remote features ---
+
 /// Configuration for automatic port forwarding on SSH domains.
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
 pub struct PortForwardConfig {
@@ -183,10 +222,12 @@ pub struct PortForwardConfig {
     #[dynamic(default = "default_true_bool")]
     pub auto_forward: bool,
 
-    /// Enable detection via /proc/net/tcp polling (Linux only).
-    /// Default: true
-    #[dynamic(default = "default_true_bool")]
-    pub detect_with_proc_net_tcp: bool,
+    /// Detection mode for /proc/net/tcp polling (Linux only).
+    /// "None": disabled. "All": forward all ports. "OnlyNew": only ports
+    /// opened after weezterm connects (closed+reopened ports also detected).
+    /// Default: "OnlyNew"
+    #[dynamic(default)]
+    pub detect_with_proc_net_tcp: PortDetectionMode,
 
     /// Enable detection via terminal output URL scraping.
     /// Default: true
@@ -207,6 +248,15 @@ pub struct PortForwardConfig {
     /// Default: []
     #[dynamic(default)]
     pub include_ports: Vec<u16>,
+
+    // --- weezterm remote features ---
+    /// What to do when the preferred local port is already in use.
+    /// "Skip": don't forward, show as inactive (re-checked periodically).
+    /// "RandomPort": forward on a random available local port.
+    /// Default: "Skip"
+    #[dynamic(default)]
+    pub port_conflict_handling: PortConflictHandling,
+    // --- end weezterm remote features ---
 }
 
 impl Default for PortForwardConfig {
@@ -214,11 +264,12 @@ impl Default for PortForwardConfig {
         Self {
             enabled: true,
             auto_forward: true,
-            detect_with_proc_net_tcp: true,
+            detect_with_proc_net_tcp: PortDetectionMode::OnlyNew,
             detect_with_terminal_scrape: true,
             poll_interval_secs: 2,
             exclude_ports: vec![22],
             include_ports: vec![],
+            port_conflict_handling: PortConflictHandling::Skip,
         }
     }
 }

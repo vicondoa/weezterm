@@ -6,6 +6,7 @@
 
 use portable_pty::CommandBuilder;
 use std::ffi::OsString;
+use std::path::PathBuf;
 
 // ---------------------------------------------------------------------------
 // App identity
@@ -34,10 +35,50 @@ pub const MUX_SERVER_BIN: &str = if cfg!(windows) {
 };
 
 // ---------------------------------------------------------------------------
-// Remote browser helper path (fork-only feature)
+// Remote browser helper — shared between mux-server and non-mux SSH paths
 // ---------------------------------------------------------------------------
 
-pub const REMOTE_BROWSER_PATH: &str = "/tmp/.weezterm-browser";
+/// Path to the browser helper script, relative to $HOME.
+pub const REMOTE_BROWSER_RELATIVE: &str = ".weezterm/browser.sh";
+
+/// Resolve the absolute path to the browser helper script (`$HOME/.weezterm/browser.sh`).
+pub fn remote_browser_path() -> PathBuf {
+    crate::HOME_DIR.join(REMOTE_BROWSER_RELATIVE)
+}
+
+/// The shell script content for the remote browser helper.
+/// Sends URLs back to the client via OSC 7457 so they open in the local browser.
+#[cfg(unix)]
+const BROWSER_HELPER_SCRIPT: &str = "\
+#!/bin/sh\nprintf '\\033]7457;open-url;%s\\033\\\\' \"$1\" >/dev/tty\n";
+
+/// Write the browser helper script to `path`, creating parent directories
+/// and setting the executable bit.  This is the single source of truth for
+/// the script content.
+#[cfg(unix)]
+pub fn write_browser_helper_script(path: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::PermissionsExt;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, BROWSER_HELPER_SCRIPT)?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755))?;
+    Ok(())
+}
+
+/// Ensure the browser helper script exists at `$HOME/.weezterm/browser.sh`.
+/// Returns the absolute path.  Idempotent — only writes if the file is
+/// missing.  Returns `Err` only on I/O failure during write.
+#[cfg(unix)]
+pub fn ensure_browser_helper() -> anyhow::Result<String> {
+    let path = remote_browser_path();
+    if !path.exists() {
+        write_browser_helper_script(&path).map_err(|e| {
+            anyhow::anyhow!("failed to write browser helper {}: {}", path.display(), e)
+        })?;
+    }
+    Ok(path.to_string_lossy().into_owned())
+}
 
 // ---------------------------------------------------------------------------
 // Recording temp-file prefix

@@ -34,6 +34,12 @@ pub enum ForwardState {
     Stopped,
     /// Error during forwarding
     Error(String),
+    /// Skipped because the local port is already in use.
+    /// Will be re-checked periodically and auto-forwarded when freed.
+    Skipped {
+        /// Human-readable reason (e.g., "Local port already in use")
+        reason: String,
+    },
 }
 
 /// An entry in the port forwarding table
@@ -66,6 +72,8 @@ pub enum PortForwardEvent {
     PortRemoved { remote_port: u16 },
     /// An error occurred with a port forward
     PortError { remote_port: u16, error: String },
+    /// A port was skipped (local port in use)
+    PortSkipped { remote_port: u16, reason: String },
 }
 
 /// Manages the state of port forwarding for a single SSH domain/session.
@@ -151,6 +159,31 @@ impl PortForwardManager {
                 .event_tx
                 .try_send(PortForwardEvent::PortError { remote_port, error });
         }
+    }
+
+    /// Mark a port as skipped (local port already in use).
+    /// The port will be re-checked periodically by the orchestrator.
+    pub fn mark_skipped(&mut self, remote_port: u16, reason: String) {
+        if let Some(entry) = self.entries.get_mut(&remote_port) {
+            entry.state = ForwardState::Skipped {
+                reason: reason.clone(),
+            };
+            let _ = self.event_tx.try_send(PortForwardEvent::PortSkipped {
+                remote_port,
+                reason,
+            });
+        }
+    }
+
+    /// Get the list of remote ports currently in Skipped state.
+    pub fn skipped_ports(&self) -> Vec<(u16, String)> {
+        self.entries
+            .values()
+            .filter_map(|e| match &e.state {
+                ForwardState::Skipped { .. } => Some((e.remote_port, e.remote_host.clone())),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Stop forwarding a port (user action).
@@ -256,8 +289,10 @@ pub async fn run_proc_net_tcp_detection(
     manager: std::sync::Arc<std::sync::Mutex<PortForwardManager>>,
     poll_interval: Duration,
     stop_rx: smol::channel::Receiver<()>,
+    mode: config::PortDetectionMode,
 ) {
     let mut scanner = ProcNetTcpScanner::new(manager.lock().unwrap().excluded_ports().clone());
+    let mut is_first_scan = true;
 
     loop {
         // Check for stop signal
@@ -308,7 +343,15 @@ pub async fn run_proc_net_tcp_detection(
                     String::new()
                 };
 
-                let new_ports = scanner.scan(&tcp_content, &tcp6_content);
+                let new_ports = if is_first_scan && mode == config::PortDetectionMode::OnlyNew {
+                    // OnlyNew: seed the scanner with existing ports, don't report them
+                    scanner.seed(&tcp_content, &tcp6_content);
+                    is_first_scan = false;
+                    Vec::new()
+                } else {
+                    is_first_scan = false;
+                    scanner.scan(&tcp_content, &tcp6_content)
+                };
                 if !new_ports.is_empty() {
                     let mut mgr = manager.lock().unwrap();
                     for port in &new_ports {
@@ -363,21 +406,24 @@ pub async fn run_port_forward_orchestrator(
     config: config::PortForwardConfig,
     stop_rx: smol::channel::Receiver<()>,
 ) {
-    use crate::port_forward_proxy::PortForwardProxy;
+    use crate::port_forward_proxy::{is_local_port_available, PortForwardProxy};
+    use config::PortConflictHandling;
     use std::collections::HashMap;
 
     log::info!("Port forwarding orchestrator started");
 
     let event_rx = manager.lock().unwrap().event_receiver();
+    let poll_interval = Duration::from_secs(config.poll_interval_secs);
 
     // Start /proc/net/tcp detection loop if enabled
-    if config.detect_with_proc_net_tcp {
+    if config.detect_with_proc_net_tcp != config::PortDetectionMode::None {
         let sess = session.clone();
         let mgr = manager.clone();
-        let interval = Duration::from_secs(config.poll_interval_secs);
+        let interval = poll_interval;
         let stop = stop_rx.clone();
+        let mode = config.detect_with_proc_net_tcp;
         smol::spawn(async move {
-            run_proc_net_tcp_detection(sess, mgr, interval, stop).await;
+            run_proc_net_tcp_detection(sess, mgr, interval, stop, mode).await;
         })
         .detach();
     }
@@ -385,76 +431,163 @@ pub async fn run_port_forward_orchestrator(
     // Track active proxies so we can stop them
     let mut proxies: HashMap<u16, PortForwardProxy> = HashMap::new();
 
-    // Main event loop: react to detected ports
+    /// Try to forward a port, handling conflict policy.
+    /// Returns the proxy on success.
+    async fn try_forward_port(
+        session: &wezterm_ssh::Session,
+        remote_host: &str,
+        remote_port: u16,
+        preferred_local_port: u16,
+        conflict_handling: PortConflictHandling,
+        manager: &std::sync::Arc<std::sync::Mutex<PortForwardManager>>,
+    ) -> Option<PortForwardProxy> {
+        // Pre-check: is the preferred local port available?
+        if !is_local_port_available(preferred_local_port) {
+            match conflict_handling {
+                PortConflictHandling::Skip => {
+                    let reason = "Local port already in use".to_string();
+                    manager
+                        .lock()
+                        .unwrap()
+                        .mark_skipped(remote_port, reason.clone());
+                    log::info!("Port {} skipped: {}", remote_port, reason);
+                    return None;
+                }
+                PortConflictHandling::RandomPort => {
+                    // Allow fallback to random port
+                }
+            }
+        }
+
+        let allow_random = matches!(conflict_handling, PortConflictHandling::RandomPort);
+        match PortForwardProxy::start(
+            session.clone(),
+            remote_host.to_string(),
+            remote_port,
+            preferred_local_port,
+            allow_random,
+        )
+        .await
+        {
+            Ok(proxy) => {
+                let local_port = proxy.local_port();
+                manager
+                    .lock()
+                    .unwrap()
+                    .mark_forwarded(remote_port, local_port);
+                log::info!("Port {} forwarded to localhost:{}", remote_port, local_port);
+                Some(proxy)
+            }
+            Err(e) => {
+                let msg = format!("{:#}", e);
+                manager.lock().unwrap().mark_error(remote_port, msg.clone());
+                log::error!("Failed to forward port {}: {}", remote_port, msg);
+                None
+            }
+        }
+    }
+
+    // Main event loop: react to detected ports, and periodically re-check
+    // skipped ports.
     loop {
-        let event = smol::future::or(async { event_rx.recv().await.ok() }, async {
-            stop_rx.recv().await.ok();
-            None
-        })
+        // Race: next event OR periodic re-check timer OR stop signal
+        enum Action {
+            Event(PortForwardEvent),
+            RecheckSkipped,
+            Stop,
+        }
+
+        let action = smol::future::or(
+            smol::future::or(
+                async {
+                    match event_rx.recv().await {
+                        Ok(e) => Action::Event(e),
+                        Err(_) => Action::Stop,
+                    }
+                },
+                async {
+                    smol::Timer::after(poll_interval).await;
+                    Action::RecheckSkipped
+                },
+            ),
+            async {
+                stop_rx.recv().await.ok();
+                Action::Stop
+            },
+        )
         .await;
 
-        let event = match event {
-            Some(e) => e,
-            None => break, // stop signal or channel closed
-        };
+        match action {
+            Action::Stop => break,
 
-        match event {
-            PortForwardEvent::PortDetected(entry) => {
-                let auto = manager.lock().unwrap().is_auto_forward();
-                if !auto {
+            Action::RecheckSkipped => {
+                // Re-check all skipped ports to see if they've become available
+                let skipped = manager.lock().unwrap().skipped_ports();
+                for (remote_port, remote_host) in skipped {
+                    if is_local_port_available(remote_port) {
+                        log::info!(
+                            "Skipped port {} is now available, auto-forwarding",
+                            remote_port
+                        );
+                        if let Some(proxy) = try_forward_port(
+                            &session,
+                            &remote_host,
+                            remote_port,
+                            remote_port,
+                            config.port_conflict_handling,
+                            &manager,
+                        )
+                        .await
+                        {
+                            proxies.insert(remote_port, proxy);
+                        }
+                    }
+                }
+            }
+
+            Action::Event(event) => match event {
+                PortForwardEvent::PortDetected(entry) => {
+                    let auto = manager.lock().unwrap().is_auto_forward();
+                    if !auto {
+                        log::info!(
+                            "Port {} detected but auto-forward is off",
+                            entry.remote_port
+                        );
+                        continue;
+                    }
                     log::info!(
-                        "Port {} detected but auto-forward is off",
+                        "Auto-forwarding port {} ({}:{})",
+                        entry.remote_port,
+                        entry.remote_host,
                         entry.remote_port
                     );
-                    continue;
-                }
-                log::info!(
-                    "Auto-forwarding port {} ({}:{})",
-                    entry.remote_port,
-                    entry.remote_host,
-                    entry.remote_port
-                );
-                match PortForwardProxy::start(
-                    session.clone(),
-                    entry.remote_host.clone(),
-                    entry.remote_port,
-                    entry.remote_port,
-                )
-                .await
-                {
-                    Ok(proxy) => {
-                        let local_port = proxy.local_port();
-                        let remote_port = entry.remote_port;
-                        proxies.insert(remote_port, proxy);
-                        manager
-                            .lock()
-                            .unwrap()
-                            .mark_forwarded(remote_port, local_port);
-                        log::info!("Port {} forwarded to localhost:{}", remote_port, local_port);
-                    }
-                    Err(e) => {
-                        let msg = format!("{:#}", e);
-                        manager
-                            .lock()
-                            .unwrap()
-                            .mark_error(entry.remote_port, msg.clone());
-                        log::error!("Failed to forward port {}: {}", entry.remote_port, msg);
+                    if let Some(proxy) = try_forward_port(
+                        &session,
+                        &entry.remote_host,
+                        entry.remote_port,
+                        entry.remote_port,
+                        config.port_conflict_handling,
+                        &manager,
+                    )
+                    .await
+                    {
+                        proxies.insert(entry.remote_port, proxy);
                     }
                 }
-            }
-            PortForwardEvent::PortStopped { remote_port } => {
-                if let Some(proxy) = proxies.remove(&remote_port) {
-                    proxy.stop();
-                    log::info!("Stopped forward for port {}", remote_port);
+                PortForwardEvent::PortStopped { remote_port } => {
+                    if let Some(proxy) = proxies.remove(&remote_port) {
+                        proxy.stop();
+                        log::info!("Stopped forward for port {}", remote_port);
+                    }
                 }
-            }
-            PortForwardEvent::PortRemoved { remote_port } => {
-                if let Some(proxy) = proxies.remove(&remote_port) {
-                    proxy.stop();
-                    log::info!("Removed forward for port {}", remote_port);
+                PortForwardEvent::PortRemoved { remote_port } => {
+                    if let Some(proxy) = proxies.remove(&remote_port) {
+                        proxy.stop();
+                        log::info!("Removed forward for port {}", remote_port);
+                    }
                 }
-            }
-            _ => {}
+                _ => {}
+            },
         }
     }
 
@@ -651,5 +784,69 @@ mod test {
         // Duplicate scan produces nothing new
         let new = scan_terminal_output(&mut scanner, &mut mgr, "Server at http://localhost:3000");
         assert_eq!(new.len(), 0);
+    }
+
+    #[test]
+    fn test_mark_skipped() {
+        let mut mgr = PortForwardManager::new(true, HashSet::new());
+        let rx = mgr.event_receiver();
+
+        mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
+        // Drain the PortDetected event
+        let _ = rx.try_recv();
+
+        mgr.mark_skipped(3000, "Local port already in use".into());
+
+        let entries = mgr.entries();
+        assert!(matches!(
+            &entries[0].state,
+            ForwardState::Skipped { reason } if reason == "Local port already in use"
+        ));
+
+        let event = rx.try_recv().unwrap();
+        assert!(matches!(
+            event,
+            PortForwardEvent::PortSkipped {
+                remote_port: 3000,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn test_skipped_ports() {
+        let mut mgr = PortForwardManager::new(true, HashSet::new());
+
+        mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
+        mgr.port_detected(8080, "0.0.0.0".into(), DetectionSource::ProcNetTcp);
+        mgr.port_detected(5432, "0.0.0.0".into(), DetectionSource::ProcNetTcp);
+
+        mgr.mark_skipped(3000, "in use".into());
+        mgr.mark_skipped(5432, "in use".into());
+        mgr.mark_forwarded(8080, 8080);
+
+        let skipped = mgr.skipped_ports();
+        assert_eq!(skipped.len(), 2);
+        let ports: Vec<u16> = skipped.iter().map(|(p, _)| *p).collect();
+        assert!(ports.contains(&3000));
+        assert!(ports.contains(&5432));
+        assert!(!ports.contains(&8080));
+    }
+
+    #[test]
+    fn test_skipped_then_forwarded() {
+        let mut mgr = PortForwardManager::new(true, HashSet::new());
+
+        mgr.port_detected(3000, "127.0.0.1".into(), DetectionSource::ProcNetTcp);
+        mgr.mark_skipped(3000, "in use".into());
+        assert_eq!(mgr.skipped_ports().len(), 1);
+
+        // Port becomes available, mark as forwarded
+        mgr.mark_forwarded(3000, 3000);
+        assert_eq!(mgr.skipped_ports().len(), 0);
+        assert!(matches!(
+            mgr.entries()[0].state,
+            ForwardState::Active { local_port: 3000 }
+        ));
     }
 }

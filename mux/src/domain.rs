@@ -481,6 +481,23 @@ impl LocalDomain {
             config::branding::set_env_with_compat(&mut cmd, "UNIX_SOCKET", &sock.to_string_lossy());
         }
         config::branding::set_env_with_compat(&mut cmd, "PANE", &pane_id.to_string());
+
+        // Ensure the browser helper script exists if BROWSER points to our
+        // helper path.  Long-running mux servers may outlive /tmp or home
+        // dir cleanups, so we re-create the script if it's missing.
+        #[cfg(unix)]
+        {
+            let browser_path = config::branding::remote_browser_path();
+            if std::env::var_os("BROWSER")
+                .map(|v| std::path::PathBuf::from(v) == browser_path)
+                .unwrap_or(false)
+                && !browser_path.exists()
+            {
+                if let Err(err) = config::branding::write_browser_helper_script(&browser_path) {
+                    log::warn!("Failed to re-create browser helper: {:#}", err);
+                }
+            }
+        }
         // --- end weezterm remote features ---
         if let Some(agent) = Mux::get().agent.as_ref() {
             cmd.env("SSH_AUTH_SOCK", agent.path());

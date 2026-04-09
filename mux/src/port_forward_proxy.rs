@@ -13,6 +13,12 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
+/// Check if a local port is available by attempting to bind to it.
+/// Returns true if the port is free, false if it's already in use.
+pub fn is_local_port_available(port: u16) -> bool {
+    std::net::TcpListener::bind(("127.0.0.1", port)).is_ok()
+}
+
 /// A single port forward proxy instance.
 ///
 /// Manages the lifecycle of a forwarded port: binding, accepting connections,
@@ -32,7 +38,8 @@ impl PortForwardProxy {
     /// Start a new port forward proxy.
     ///
     /// Binds to `preferred_local_port` on localhost. If that port is already
-    /// in use, falls back to an OS-assigned port.
+    /// in use and `allow_random_port` is true, falls back to an OS-assigned
+    /// port. If `allow_random_port` is false, returns an error.
     ///
     /// Spawns a background accept loop that, for each incoming TCP connection,
     /// opens an SSH `direct-tcpip` channel and proxies data bidirectionally.
@@ -43,13 +50,24 @@ impl PortForwardProxy {
         remote_host: String,
         remote_port: u16,
         preferred_local_port: u16,
+        allow_random_port: bool,
     ) -> anyhow::Result<Self> {
-        // Try preferred port first, fall back to OS-assigned (blocking bind is fine)
+        // Try preferred port first
         let listener =
             match std::net::TcpListener::bind(format!("127.0.0.1:{}", preferred_local_port)) {
                 Ok(l) => l,
-                Err(_) => std::net::TcpListener::bind("127.0.0.1:0")
-                    .context("failed to bind any local port for forwarding")?,
+                Err(e) => {
+                    if allow_random_port {
+                        std::net::TcpListener::bind("127.0.0.1:0")
+                            .context("failed to bind any local port for forwarding")?
+                    } else {
+                        return Err(anyhow::anyhow!(
+                            "Local port {} already in use",
+                            preferred_local_port
+                        ))
+                        .context(e);
+                    }
+                }
             };
 
         let local_port = listener.local_addr()?.port();
@@ -232,5 +250,18 @@ mod test {
         let mut buf = vec![0u8; 64];
         let n = b_read.read(&mut buf).unwrap();
         assert_eq!(&buf[..n], data);
+    }
+
+    #[test]
+    fn test_is_local_port_available() {
+        // Bind a port, then check it's unavailable
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        assert!(!is_local_port_available(port));
+
+        // Drop the listener, port should become available
+        drop(listener);
+        assert!(is_local_port_available(port));
     }
 }

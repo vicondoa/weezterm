@@ -26,6 +26,13 @@ pub struct ClientInner {
     remote_to_local_tab: Mutex<HashMap<TabId, TabId>>,
     remote_to_local_pane: Mutex<HashMap<PaneId, PaneId>>,
     pub focused_remote_pane_id: Mutex<Option<PaneId>>,
+    // --- weezterm remote features ---
+    /// Port forwarding manager, shared with the orchestrator and overlay.
+    pub port_forward_manager:
+        Arc<std::sync::Mutex<Option<Arc<std::sync::Mutex<mux::port_forward::PortForwardManager>>>>>,
+    /// Stop signal for the port forwarding orchestrator.
+    pub port_forward_stop_tx: Mutex<Option<smol::channel::Sender<()>>>,
+    // --- end weezterm remote features ---
 }
 
 impl ClientInner {
@@ -246,6 +253,10 @@ impl ClientInner {
             remote_to_local_tab: Mutex::new(HashMap::new()),
             remote_to_local_pane: Mutex::new(HashMap::new()),
             focused_remote_pane_id: Mutex::new(None),
+            // --- weezterm remote features ---
+            port_forward_manager: Arc::new(std::sync::Mutex::new(None)),
+            port_forward_stop_tx: Mutex::new(None),
+            // --- end weezterm remote features ---
         }
     }
 }
@@ -418,10 +429,88 @@ impl ClientDomain {
 
     pub fn perform_detach(&self) {
         log::info!("detached domain {}", self.local_domain_id);
+
+        // --- weezterm remote features ---
+        // Stop port forwarding orchestrator before dropping inner
+        if let Some(inner) = self.inner() {
+            if let Some(stop_tx) = inner.port_forward_stop_tx.lock().unwrap().take() {
+                let _ = stop_tx.try_send(());
+                log::info!(
+                    "Port forwarding stopped for domain {}",
+                    self.local_domain_id
+                );
+            }
+            *inner.port_forward_manager.lock().unwrap() = None;
+        }
+        // --- end weezterm remote features ---
+
         self.inner.lock().unwrap().take();
         let mux = Mux::get();
         mux.domain_was_detached(self.local_domain_id);
     }
+
+    // --- weezterm remote features ---
+    /// Get port forwarding entries for the overlay UI.
+    pub fn port_forward_entries(&self) -> Vec<mux::port_forward::PortForwardEntry> {
+        if let Some(inner) = self.inner() {
+            if let Some(mgr) = inner.port_forward_manager.lock().unwrap().as_ref() {
+                return mgr.lock().unwrap().entries();
+            }
+        }
+        vec![]
+    }
+
+    /// Restart port forwarding with the current SSH session.
+    /// Called after reconnection to re-establish tunnels.
+    pub fn restart_port_forwarding(&self) {
+        if let ClientDomainConfig::Ssh(ref ssh_dom) = self.config {
+            if !ssh_dom.port_forwarding.enabled {
+                return;
+            }
+            if let Some(inner) = self.inner() {
+                // Stop existing orchestrator
+                if let Some(stop_tx) = inner.port_forward_stop_tx.lock().unwrap().take() {
+                    let _ = stop_tx.try_send(());
+                }
+                if let Some(mgr) = inner.port_forward_manager.lock().unwrap().as_ref() {
+                    mgr.lock().unwrap().reset_for_reconnect();
+                }
+
+                // Start new orchestrator with the (possibly new) session
+                if let Some(session) = inner.client.ssh_session() {
+                    let excluded: std::collections::HashSet<u16> = ssh_dom
+                        .port_forwarding
+                        .exclude_ports
+                        .iter()
+                        .copied()
+                        .collect();
+                    let manager = Arc::new(std::sync::Mutex::new(
+                        mux::port_forward::PortForwardManager::new(
+                            ssh_dom.port_forwarding.auto_forward,
+                            excluded,
+                        ),
+                    ));
+                    *inner.port_forward_manager.lock().unwrap() = Some(manager.clone());
+
+                    let (stop_tx, stop_rx) = smol::channel::bounded(1);
+                    *inner.port_forward_stop_tx.lock().unwrap() = Some(stop_tx);
+
+                    let pf_config = ssh_dom.port_forwarding.clone();
+                    let domain_name = ssh_dom.name.clone();
+                    promise::spawn::spawn_into_main_thread(async move {
+                        mux::port_forward::run_port_forward_orchestrator(
+                            session, manager, pf_config, stop_rx,
+                        )
+                        .await;
+                    })
+                    .detach();
+
+                    log::info!("Port forwarding restarted for SSH domain '{}'", domain_name);
+                }
+            }
+        }
+    }
+    // --- end weezterm remote features ---
 
     pub fn remote_to_local_pane_id(&self, remote_pane_id: TabId) -> Option<TabId> {
         let inner = self.inner()?;
@@ -468,6 +557,16 @@ impl ClientDomain {
 
         let panes = inner.client.list_panes().await?;
         Self::process_pane_list(inner, panes, None)?;
+
+        // --- weezterm remote features ---
+        // Restart port forwarding with the (possibly new) SSH session.
+        let mux = Mux::get();
+        if let Some(domain) = mux.get_domain(domain_id) {
+            if let Some(cd) = domain.downcast_ref::<Self>() {
+                cd.restart_port_forwarding();
+            }
+        }
+        // --- end weezterm remote features ---
 
         ui.close();
         Ok(())
@@ -990,6 +1089,46 @@ impl Domain for ClientDomain {
         })?;
 
         ui.output_str("Attached!\n");
+
+        // --- weezterm remote features ---
+        // Start port forwarding for SSH domains after successful attach
+        if let ClientDomainConfig::Ssh(ref ssh_dom) = self.config {
+            if ssh_dom.port_forwarding.enabled {
+                if let Some(inner) = self.inner() {
+                    if let Some(session) = inner.client.ssh_session() {
+                        let excluded: std::collections::HashSet<u16> = ssh_dom
+                            .port_forwarding
+                            .exclude_ports
+                            .iter()
+                            .copied()
+                            .collect();
+                        let manager = Arc::new(std::sync::Mutex::new(
+                            mux::port_forward::PortForwardManager::new(
+                                ssh_dom.port_forwarding.auto_forward,
+                                excluded,
+                            ),
+                        ));
+                        *inner.port_forward_manager.lock().unwrap() = Some(manager.clone());
+
+                        let (stop_tx, stop_rx) = smol::channel::bounded(1);
+                        *inner.port_forward_stop_tx.lock().unwrap() = Some(stop_tx);
+
+                        let pf_config = ssh_dom.port_forwarding.clone();
+                        promise::spawn::spawn_into_main_thread(async move {
+                            mux::port_forward::run_port_forward_orchestrator(
+                                session, manager, pf_config, stop_rx,
+                            )
+                            .await;
+                        })
+                        .detach();
+
+                        log::info!("Port forwarding started for SSH domain '{}'", ssh_dom.name);
+                    }
+                }
+            }
+        }
+        // --- end weezterm remote features ---
+
         drop(activity);
         ui.close();
         Ok(())

@@ -316,17 +316,17 @@ impl RemoteSshDomain {
         // splitting.  A script path works for both direct invocation
         // (`$BROWSER url`) and programs that run it via `os.system()`
         // (like Python's webbrowser module used by `az login`).
+        let browser_path_str = format!("$HOME/{}", config::branding::REMOTE_BROWSER_RELATIVE);
         let browser_setup = if self.dom.set_remote_browser.unwrap_or(true) {
             // Also put the path in env so setenv is attempted (works if
             // the server has AcceptEnv BROWSER configured).
-            env.insert(
-                "BROWSER".to_string(),
-                config::branding::REMOTE_BROWSER_PATH.to_string(),
-            );
-            // Heredoc with single-quoted delimiter suppresses all expansion,
-            // so the script content is written verbatim.
+            env.insert("BROWSER".to_string(), browser_path_str.clone());
+            // Create ~/.weezterm/ and write the helper script via heredoc.
+            // Single-quoted delimiter suppresses all expansion, so the
+            // script content is written verbatim.
             format!(
-                r#"_wz_b={browser_path}
+                r#"mkdir -p "$HOME/.weezterm"
+_wz_b={browser_path}
 cat > "$_wz_b" << 'WEZEOF'
 #!/bin/sh
 printf '\033]7457;open-url;%s\033\\' "$1" >/dev/tty
@@ -334,7 +334,7 @@ WEZEOF
 chmod +x "$_wz_b"
 export BROWSER="$_wz_b"
 "#,
-                browser_path = config::branding::REMOTE_BROWSER_PATH
+                browser_path = browser_path_str
             )
         } else {
             String::new()

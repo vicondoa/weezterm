@@ -2373,9 +2373,10 @@ impl TermWindow {
 
     // --- weezterm remote features ---
     fn show_port_forward_overlay(&mut self) {
-        use crate::overlay::port_forward::{PortDisplayEntry, PortForwardAction};
+        use crate::overlay::port_forward::PortDisplayEntry;
         use mux::port_forward::{ForwardState, PortForwardEntry};
         use mux::ssh::RemoteSshDomain;
+        use wezterm_client::domain::ClientDomain;
 
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
@@ -2389,23 +2390,36 @@ impl TermWindow {
             None => return,
         };
         let domain_id = pane.domain_id();
+
+        fn map_entry(e: PortForwardEntry) -> PortDisplayEntry {
+            PortDisplayEntry {
+                remote_port: e.remote_port,
+                local_port: e.local_port,
+                remote_host: e.remote_host,
+                label: e.label,
+                is_forwarded: matches!(e.state, ForwardState::Active { .. }),
+                is_error: matches!(e.state, ForwardState::Error(_)),
+                is_skipped: matches!(e.state, ForwardState::Skipped { .. }),
+                error_msg: match &e.state {
+                    ForwardState::Error(msg) => Some(msg.clone()),
+                    ForwardState::Skipped { reason } => Some(reason.clone()),
+                    _ => None,
+                },
+            }
+        }
+
         let entries: Vec<PortDisplayEntry> = if let Some(domain) = mux.get_domain(domain_id) {
             if let Some(ssh_domain) = domain.downcast_ref::<RemoteSshDomain>() {
                 ssh_domain
                     .port_forward_entries()
                     .into_iter()
-                    .map(|e| PortDisplayEntry {
-                        remote_port: e.remote_port,
-                        local_port: e.local_port,
-                        remote_host: e.remote_host,
-                        label: e.label,
-                        is_forwarded: matches!(e.state, ForwardState::Active { .. }),
-                        is_error: matches!(e.state, ForwardState::Error(_)),
-                        error_msg: match &e.state {
-                            ForwardState::Error(msg) => Some(msg.clone()),
-                            _ => None,
-                        },
-                    })
+                    .map(map_entry)
+                    .collect()
+            } else if let Some(client_domain) = domain.downcast_ref::<ClientDomain>() {
+                client_domain
+                    .port_forward_entries()
+                    .into_iter()
+                    .map(map_entry)
                     .collect()
             } else {
                 vec![]

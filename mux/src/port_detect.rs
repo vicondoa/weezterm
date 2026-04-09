@@ -108,6 +108,20 @@ impl ProcNetTcpScanner {
         }
     }
 
+    /// Seed the scanner with existing ports so they won't be reported as new.
+    /// Used by `OnlyNew` mode: run one scan to learn the baseline, then
+    /// subsequent scans only report genuinely new ports.
+    pub fn seed(&mut self, tcp_content: &str, tcp6_content: &str) {
+        let mut all_ports = parse_proc_net_tcp(tcp_content);
+        all_ports.extend(parse_proc_net_tcp(tcp6_content));
+        self.known_ports = all_ports.iter().map(|p| p.port).collect();
+        log::info!(
+            "Port detection: seeded with {} existing port(s): {:?}",
+            self.known_ports.len(),
+            self.known_ports
+        );
+    }
+
     /// Given fresh /proc/net/tcp content, return newly-detected listening ports.
     pub fn scan(&mut self, tcp_content: &str, tcp6_content: &str) -> Vec<DetectedPort> {
         let mut all_ports = parse_proc_net_tcp(tcp_content);
@@ -402,5 +416,51 @@ mod test {
         // After reset, the port should be detected again
         let results = scanner.scan_text("http://localhost:3000");
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_scanner_seed_suppresses_existing() {
+        let mut scanner = ProcNetTcpScanner::new(HashSet::new());
+
+        // Seed with existing ports — should NOT report them
+        scanner.seed(SAMPLE_PROC_NET_TCP, "");
+        assert_eq!(scanner.known_ports().len(), 2);
+
+        // Same scan should find nothing new
+        let new = scanner.scan(SAMPLE_PROC_NET_TCP, "");
+        assert_eq!(new.len(), 0);
+    }
+
+    #[test]
+    fn test_scanner_seed_then_new_port() {
+        let mut scanner = ProcNetTcpScanner::new(HashSet::new());
+
+        // Seed with port 3000 and 8080
+        scanner.seed(SAMPLE_PROC_NET_TCP, "");
+
+        // Add a new port (5000 = 0x1388) to the data
+        let extended = format!(
+            "{}\n   2: 00000000:1388 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 99999 1 0000000000000000 100 0 0 10 0",
+            SAMPLE_PROC_NET_TCP
+        );
+        let new = scanner.scan(&extended, "");
+        assert_eq!(new.len(), 1);
+        assert_eq!(new[0].port, 5000);
+    }
+
+    #[test]
+    fn test_scanner_closed_and_reopened_detected() {
+        let mut scanner = ProcNetTcpScanner::new(HashSet::new());
+
+        // First scan: detect ports 3000 and 8080
+        scanner.scan(SAMPLE_PROC_NET_TCP, "");
+
+        // Second scan: port 3000 disappears (only header)
+        let header_only = "  sl  local_address rem_address   st\n";
+        scanner.scan(header_only, "");
+
+        // Third scan: port 3000 comes back — should be detected as new
+        let new = scanner.scan(SAMPLE_PROC_NET_TCP, "");
+        assert!(new.iter().any(|p| p.port == 3000));
     }
 }
