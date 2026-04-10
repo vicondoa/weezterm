@@ -1,0 +1,547 @@
+//! Config overlay — a three-panel TUI for browsing and editing WezTerm settings.
+//!
+//! Opens via the command palette or `ShowConfigOverlay` key assignment.
+//! Proposes config values; Lua remains the source of truth.
+//!
+//! --- weezterm remote features ---
+
+use std::collections::HashMap;
+use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
+use termwiz::surface::{Change, CursorVisibility};
+use termwiz::terminal::Terminal;
+use wezterm_dynamic::Value;
+
+pub mod data;
+pub mod persistence;
+mod render;
+
+pub use data::{FieldDef, FieldKind, Section};
+
+/// Result returned by the config overlay to the caller.
+#[derive(Debug, Clone)]
+pub enum ConfigOverlayAction {
+    /// User closed the overlay without saving.
+    Close,
+    /// User chose to save proposals.
+    Save(HashMap<String, Value>),
+    /// User chose to preview proposals (apply as window overrides).
+    Preview(HashMap<String, Value>),
+}
+
+/// Which panel currently has focus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Panel {
+    Sections,
+    Settings,
+}
+
+/// Status of a config field relative to the overlay proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldStatus {
+    /// No proposal — using the default/Lua value.
+    Inherited,
+    /// Proposal matches effective value.
+    Editable,
+    /// Proposal differs from effective value — Lua overrode it.
+    FixedByLua,
+}
+
+/// A displayable setting row.
+#[derive(Debug, Clone)]
+struct SettingRow {
+    field_name: String,
+    display_name: String,
+    current_value: String,
+    proposed_value: Option<String>,
+    status: FieldStatus,
+    kind: FieldKind,
+}
+
+/// Internal state for the overlay.
+struct OverlayState {
+    active_panel: Panel,
+    sections: Vec<Section>,
+    selected_section: usize,
+    selected_setting: usize,
+    settings_scroll_offset: usize,
+    filter: String,
+    filter_active: bool,
+    proposals: HashMap<String, Value>,
+    effective_values: HashMap<String, Value>,
+    #[allow(dead_code)]
+    default_values: HashMap<String, Value>,
+    field_defs: Vec<FieldDef>,
+    dirty: bool,
+    /// Inline edit mode: field name + buffer
+    inline_edit: Option<InlineEdit>,
+}
+
+/// State for inline editing of a field value.
+struct InlineEdit {
+    field_name: String,
+    buffer: String,
+    kind: FieldKind,
+}
+
+impl OverlayState {
+    fn new(
+        effective_values: HashMap<String, Value>,
+        default_values: HashMap<String, Value>,
+        saved_proposals: HashMap<String, Value>,
+    ) -> Self {
+        let field_defs = data::get_field_defs();
+        let sections = data::get_sections();
+
+        let mut proposals = HashMap::new();
+        for (k, v) in saved_proposals {
+            proposals.insert(k, v);
+        }
+
+        Self {
+            active_panel: Panel::Settings,
+            sections,
+            selected_section: 0,
+            selected_setting: 0,
+            settings_scroll_offset: 0,
+            filter: String::new(),
+            filter_active: false,
+            proposals,
+            effective_values,
+            default_values,
+            field_defs,
+            dirty: false,
+            inline_edit: None,
+        }
+    }
+
+    fn current_section(&self) -> Section {
+        self.sections[self.selected_section]
+    }
+
+    /// Get the setting rows for the currently selected section, filtered.
+    fn visible_settings(&self) -> Vec<SettingRow> {
+        let section = self.current_section();
+        let filter_lower = self.filter.to_lowercase();
+
+        self.field_defs
+            .iter()
+            .filter(|f| f.section == section)
+            .filter(|f| {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                f.display_name.to_lowercase().contains(&filter_lower)
+                    || f.name.to_lowercase().contains(&filter_lower)
+            })
+            .map(|f| {
+                let effective_val = self.effective_values.get(f.name);
+                let proposed_val = self.proposals.get(f.name);
+
+                let current_value = effective_val
+                    .map(|v| data::value_to_display_string(v))
+                    .unwrap_or_else(|| "—".to_string());
+
+                let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
+
+                let status = match proposed_val {
+                    None => FieldStatus::Inherited,
+                    Some(pv) => match effective_val {
+                        Some(ev) if data::values_equal(pv, ev) => FieldStatus::Editable,
+                        _ => FieldStatus::FixedByLua,
+                    },
+                };
+
+                SettingRow {
+                    field_name: f.name.to_string(),
+                    display_name: f.display_name.to_string(),
+                    current_value,
+                    proposed_value,
+                    status,
+                    kind: f.kind.clone(),
+                }
+            })
+            .collect()
+    }
+
+    fn clamp_selection(&mut self) {
+        let count = self.visible_settings().len();
+        if count == 0 {
+            self.selected_setting = 0;
+        } else if self.selected_setting >= count {
+            self.selected_setting = count.saturating_sub(1);
+        }
+    }
+
+    fn selected_row(&self) -> Option<SettingRow> {
+        let settings = self.visible_settings();
+        settings.into_iter().nth(self.selected_setting)
+    }
+
+    /// Apply an edit: toggle bool, cycle enum, or accept inline text.
+    fn apply_edit_for_field(&mut self, field_name: &str, new_value: Value) {
+        self.proposals.insert(field_name.to_string(), new_value);
+        self.dirty = true;
+    }
+
+    fn remove_proposal(&mut self, field_name: &str) {
+        self.proposals.remove(field_name);
+        self.dirty = true;
+    }
+
+    fn toggle_bool(&mut self, field_name: &str) {
+        let current = self
+            .proposals
+            .get(field_name)
+            .or_else(|| self.effective_values.get(field_name));
+        let new_val = match current {
+            Some(Value::Bool(b)) => Value::Bool(!b),
+            _ => Value::Bool(true),
+        };
+        self.apply_edit_for_field(field_name, new_val);
+    }
+
+    fn cycle_enum(&mut self, field_name: &str, direction: isize) {
+        let field_def = match self.field_defs.iter().find(|f| f.name == field_name) {
+            Some(f) => f,
+            None => return,
+        };
+        let variants = match &field_def.kind {
+            FieldKind::Enum(variants) => variants,
+            _ => return,
+        };
+        if variants.is_empty() {
+            return;
+        }
+
+        let current_str = self
+            .proposals
+            .get(field_name)
+            .or_else(|| self.effective_values.get(field_name))
+            .map(|v| data::value_to_display_string(v));
+
+        let current_idx = current_str
+            .as_ref()
+            .and_then(|s| variants.iter().position(|v| v == s))
+            .unwrap_or(0);
+
+        let new_idx = if direction > 0 {
+            (current_idx + 1) % variants.len()
+        } else {
+            (current_idx + variants.len() - 1) % variants.len()
+        };
+
+        self.apply_edit_for_field(field_name, Value::String(variants[new_idx].clone()));
+    }
+}
+
+/// Main entry point for the config overlay.
+///
+/// Called from `start_overlay()` in a background thread.
+pub fn run_config_overlay(
+    mut term: impl Terminal,
+    effective_values: HashMap<String, Value>,
+    default_values: HashMap<String, Value>,
+    saved_proposals: HashMap<String, Value>,
+) -> anyhow::Result<ConfigOverlayAction> {
+    let mut state = OverlayState::new(effective_values, default_values, saved_proposals);
+
+    term.set_raw_mode()?;
+    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+
+    loop {
+        state.clamp_selection();
+        render::render_frame(&mut term, &state)?;
+
+        match term.poll_input(None) {
+            Ok(Some(input)) => {
+                // If in inline edit mode, handle separately
+                if let Some(ref mut edit) = state.inline_edit {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            state.inline_edit = None;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            let field_name = edit.field_name.clone();
+                            let buffer = edit.buffer.clone();
+                            let kind = edit.kind.clone();
+                            state.inline_edit = None;
+
+                            let value = match kind {
+                                FieldKind::Float => {
+                                    if let Ok(f) = buffer.parse::<f64>() {
+                                        Some(Value::F64(f.into()))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                FieldKind::Integer => {
+                                    if let Ok(i) = buffer.parse::<i64>() {
+                                        Some(Value::I64(i))
+                                    } else {
+                                        None
+                                    }
+                                }
+                                FieldKind::Text => Some(Value::String(buffer)),
+                                _ => None,
+                            };
+                            if let Some(v) = value {
+                                state.apply_edit_for_field(&field_name, v);
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Backspace,
+                            ..
+                        }) => {
+                            edit.buffer.pop();
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(c),
+                            ..
+                        }) => {
+                            edit.buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // If in filter mode, handle filter input
+                if state.filter_active {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            if state.filter.is_empty() {
+                                state.filter_active = false;
+                            } else {
+                                state.filter.clear();
+                                state.selected_setting = 0;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            state.filter_active = false;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Backspace,
+                            ..
+                        }) => {
+                            state.filter.pop();
+                            state.selected_setting = 0;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(c),
+                            ..
+                        }) => {
+                            state.filter.push(c);
+                            state.selected_setting = 0;
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // Normal mode input handling
+                match input {
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Escape,
+                        ..
+                    }) => {
+                        return Ok(ConfigOverlayAction::Close);
+                    }
+
+                    // Search
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('/'),
+                        ..
+                    }) => {
+                        state.filter_active = true;
+                        state.filter.clear();
+                    }
+
+                    // Navigate up
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::UpArrow,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('k'),
+                        modifiers: Modifiers::NONE,
+                    }) => match state.active_panel {
+                        Panel::Sections => {
+                            if state.selected_section > 0 {
+                                state.selected_section -= 1;
+                                state.selected_setting = 0;
+                                state.settings_scroll_offset = 0;
+                            }
+                        }
+                        Panel::Settings => {
+                            if state.selected_setting > 0 {
+                                state.selected_setting -= 1;
+                            }
+                        }
+                    },
+
+                    // Navigate down
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::DownArrow,
+                        ..
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('j'),
+                        modifiers: Modifiers::NONE,
+                    }) => match state.active_panel {
+                        Panel::Sections => {
+                            if state.selected_section + 1 < state.sections.len() {
+                                state.selected_section += 1;
+                                state.selected_setting = 0;
+                                state.settings_scroll_offset = 0;
+                            }
+                        }
+                        Panel::Settings => {
+                            let count = state.visible_settings().len();
+                            if state.selected_setting + 1 < count {
+                                state.selected_setting += 1;
+                            }
+                        }
+                    },
+
+                    // Tab to switch panels
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('\t'),
+                        ..
+                    }) => {
+                        state.active_panel = match state.active_panel {
+                            Panel::Sections => Panel::Settings,
+                            Panel::Settings => Panel::Sections,
+                        };
+                    }
+
+                    // Enter: edit selected setting
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Enter,
+                        ..
+                    }) => {
+                        if state.active_panel == Panel::Settings {
+                            if let Some(row) = state.selected_row() {
+                                match &row.kind {
+                                    FieldKind::Bool => {
+                                        state.toggle_bool(&row.field_name);
+                                    }
+                                    FieldKind::Enum(_) => {
+                                        state.cycle_enum(&row.field_name, 1);
+                                    }
+                                    FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
+                                        let initial = row
+                                            .proposed_value
+                                            .as_ref()
+                                            .unwrap_or(&row.current_value)
+                                            .clone();
+                                        state.inline_edit = Some(InlineEdit {
+                                            field_name: row.field_name.clone(),
+                                            buffer: initial,
+                                            kind: row.kind.clone(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    // Space: toggle bool
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char(' '),
+                        modifiers: Modifiers::NONE,
+                    }) => {
+                        if state.active_panel == Panel::Settings {
+                            if let Some(row) = state.selected_row() {
+                                if matches!(row.kind, FieldKind::Bool) {
+                                    state.toggle_bool(&row.field_name);
+                                }
+                            }
+                        }
+                    }
+
+                    // Left/Right: cycle enum or adjust numeric
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::LeftArrow,
+                        ..
+                    }) => {
+                        if state.active_panel == Panel::Settings {
+                            if let Some(row) = state.selected_row() {
+                                match &row.kind {
+                                    FieldKind::Enum(_) => {
+                                        state.cycle_enum(&row.field_name, -1);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::RightArrow,
+                        ..
+                    }) => {
+                        if state.active_panel == Panel::Settings {
+                            if let Some(row) = state.selected_row() {
+                                match &row.kind {
+                                    FieldKind::Enum(_) => {
+                                        state.cycle_enum(&row.field_name, 1);
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+
+                    // P: preview
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('p'),
+                        modifiers: Modifiers::SHIFT,
+                    }) => {
+                        if !state.proposals.is_empty() {
+                            return Ok(ConfigOverlayAction::Preview(state.proposals.clone()));
+                        }
+                    }
+
+                    // S: save
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('s'),
+                        modifiers: Modifiers::SHIFT,
+                    }) => {
+                        if !state.proposals.is_empty() {
+                            return Ok(ConfigOverlayAction::Save(state.proposals.clone()));
+                        }
+                    }
+
+                    // R: reset selected field
+                    InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('r'),
+                        modifiers: Modifiers::SHIFT,
+                    }) => {
+                        if state.active_panel == Panel::Settings {
+                            if let Some(row) = state.selected_row() {
+                                state.remove_proposal(&row.field_name);
+                            }
+                        }
+                    }
+
+                    _ => {}
+                }
+            }
+            Ok(None) => {}
+            Err(_) => {
+                return Ok(ConfigOverlayAction::Close);
+            }
+        }
+    }
+}

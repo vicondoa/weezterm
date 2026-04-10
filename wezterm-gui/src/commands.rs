@@ -2030,6 +2030,18 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: None,
         },
+        ShowConfigOverlay => CommandDef {
+            brief: "Configure WezTerm".into(),
+            doc: "Opens a configuration overlay for browsing and editing \
+                  WezTerm settings. Changes are proposed as config overrides; \
+                  Lua remains the source of truth."
+                .into(),
+            keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), ",".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Edit"],
+            icon: None,
+        },
+        // --- end weezterm remote features ---
     })
 }
 
@@ -2157,6 +2169,8 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ShowTabNavigator,
         // --- weezterm remote features ---
         ShowPortForwardOverlay,
+        ShowConfigOverlay,
+        // --- end weezterm remote features ---
         // ----------------- Help
         OpenUri("https://wezterm.org/".to_string()),
         OpenUri("https://github.com/wezterm/wezterm/discussions/".to_string()),

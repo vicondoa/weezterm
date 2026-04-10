@@ -649,6 +649,8 @@ pub enum KeyAssignment {
 
     // --- weezterm remote features ---
     ShowPortForwardOverlay,
+    ShowConfigOverlay,
+    // --- end weezterm remote features ---
 }
 impl_lua_conversion_dynamic!(KeyAssignment);
 

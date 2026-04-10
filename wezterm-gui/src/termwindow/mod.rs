@@ -2435,6 +2435,68 @@ impl TermWindow {
         self.assign_overlay(tab_id, overlay);
         promise::spawn::spawn(future).detach();
     }
+
+    // --- weezterm remote features ---
+    fn show_config_overlay(&mut self) {
+        use crate::overlay::config_overlay;
+        use wezterm_dynamic::ToDynamic;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        // Snapshot the effective config as a dynamic Value and extract field values
+        let config = self.config.clone();
+        let config_dynamic = config.to_dynamic();
+        let effective_values = config_overlay::data::extract_values(&config_dynamic);
+        let default_values = std::collections::HashMap::new();
+
+        // Load saved proposals from disk
+        let saved_proposals = config_overlay::persistence::load_proposals().unwrap_or_default();
+
+        let window = self.window.clone().unwrap();
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            config_overlay::run_config_overlay(
+                term,
+                effective_values,
+                default_values,
+                saved_proposals,
+            )
+        });
+        self.assign_overlay(tab_id, overlay);
+
+        let window_clone = window.clone();
+        promise::spawn::spawn(async move {
+            match future.await {
+                Ok(config_overlay::ConfigOverlayAction::Save(proposals)) => {
+                    log::info!("Config overlay: saving {} proposals", proposals.len());
+                    // Persist proposals to disk
+                    if let Err(e) = config_overlay::persistence::save_proposals(&proposals) {
+                        log::error!("Failed to save config overlay proposals: {:#}", e);
+                    }
+                    // Apply proposals as window config overrides
+                    let overrides = config_overlay::persistence::proposals_to_overrides(proposals);
+                    window_clone.notify(TermWindowNotif::SetConfigOverrides(overrides));
+                }
+                Ok(config_overlay::ConfigOverlayAction::Preview(proposals)) => {
+                    log::info!("Config overlay: previewing {} proposals", proposals.len());
+                    let overrides = config_overlay::persistence::proposals_to_overrides(proposals);
+                    window_clone.notify(TermWindowNotif::SetConfigOverrides(overrides));
+                }
+                Ok(config_overlay::ConfigOverlayAction::Close) => {
+                    log::debug!("Config overlay: closed without saving");
+                }
+                Err(e) => {
+                    log::error!("Config overlay error: {:#}", e);
+                }
+            }
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
+    }
     // --- end weezterm remote features ---
 
     fn show_tab_navigator(&mut self) {
@@ -3232,6 +3294,9 @@ impl TermWindow {
             // --- weezterm remote features ---
             ShowPortForwardOverlay => {
                 self.show_port_forward_overlay();
+            }
+            ShowConfigOverlay => {
+                self.show_config_overlay();
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
