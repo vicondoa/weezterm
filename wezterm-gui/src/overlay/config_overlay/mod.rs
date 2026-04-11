@@ -6,7 +6,7 @@
 //! --- weezterm remote features ---
 
 use std::collections::HashMap;
-use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
+use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
 use termwiz::surface::{Change, CursorVisibility};
 use termwiz::terminal::Terminal;
 use wezterm_dynamic::Value;
@@ -531,6 +531,56 @@ pub fn run_config_overlay(
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
                                 state.remove_proposal(&row.field_name);
+                            }
+                        }
+                    }
+
+                    // Mouse: click on sections or settings
+                    InputEvent::Mouse(MouseEvent {
+                        x,
+                        y,
+                        mouse_buttons,
+                        ..
+                    }) => {
+                        if mouse_buttons.contains(MouseButtons::LEFT) {
+                            let screen =
+                                term.get_screen_size()
+                                    .unwrap_or(termwiz::terminal::ScreenSize {
+                                        rows: 25,
+                                        cols: 80,
+                                        xpixel: 0,
+                                        ypixel: 0,
+                                    });
+                            let ly = render::compute_layout(screen.cols, screen.rows);
+                            let mx = x as usize;
+                            let my = y as usize;
+
+                            // Check if click is within the overlay body
+                            if my >= ly.top_pad + ly.body_start_y
+                                && my < ly.top_pad + ly.body_start_y + ly.body_rows
+                            {
+                                let body_row = my - ly.top_pad - ly.body_start_y;
+                                let section_start = ly.left_pad + 1;
+                                let section_end = section_start + ly.section_w;
+                                let settings_start = section_end + 1;
+
+                                if mx >= section_start && mx < section_end {
+                                    // Clicked in section panel
+                                    if body_row < state.sections.len() {
+                                        state.selected_section = body_row;
+                                        state.selected_setting = 0;
+                                        state.settings_scroll_offset = 0;
+                                        state.active_panel = Panel::Sections;
+                                    }
+                                } else if mx >= settings_start {
+                                    // Clicked in settings panel
+                                    let setting_idx = body_row + state.settings_scroll_offset;
+                                    let count = state.visible_settings().len();
+                                    if setting_idx < count {
+                                        state.selected_setting = setting_idx;
+                                        state.active_panel = Panel::Settings;
+                                    }
+                                }
                             }
                         }
                     }
