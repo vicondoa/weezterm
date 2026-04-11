@@ -91,8 +91,12 @@ impl OverlayState {
         default_values: HashMap<String, Value>,
         saved_proposals: HashMap<String, Value>,
     ) -> Self {
-        let field_defs = data::get_field_defs();
+        let mut field_defs = data::get_field_defs();
         let sections = data::get_sections();
+
+        // Enrich field docs from ConfigMeta (/// doc comments on Config fields)
+        let config = config::configuration();
+        data::enrich_docs_from_config(&mut field_defs, &config);
 
         let mut proposals = HashMap::new();
         for (k, v) in saved_proposals {
@@ -427,8 +431,7 @@ pub fn run_config_overlay(
 
                     // Tab to switch panels
                     InputEvent::Key(KeyEvent {
-                        key: KeyCode::Char('\t'),
-                        ..
+                        key: KeyCode::Tab, ..
                     }) => {
                         state.active_panel = match state.active_panel {
                             Panel::Sections => Panel::Settings,
@@ -560,7 +563,7 @@ pub fn run_config_overlay(
                         if mouse_buttons.contains(MouseButtons::LEFT) {
                             let size = ratatui_term.backend().size().unwrap_or_default();
                             // Match overlay_rect logic from render.rs
-                            let ow = size.width.min(120).max(size.width * 9 / 10).min(size.width);
+                            let ow = size.width.min(100).max(size.width * 9 / 10).min(size.width);
                             let oh = size
                                 .height
                                 .min(35)
@@ -588,8 +591,37 @@ pub fn run_config_overlay(
                                     let idx = row + state.settings_scroll_offset;
                                     let count = state.visible_settings().len();
                                     if idx < count {
+                                        // If clicking already-selected row, open editor
+                                        let was_selected = idx == state.selected_setting
+                                            && state.active_panel == Panel::Settings;
                                         state.selected_setting = idx;
                                         state.active_panel = Panel::Settings;
+                                        if was_selected {
+                                            if let Some(sr) = state.selected_row() {
+                                                match &sr.kind {
+                                                    FieldKind::Bool => {
+                                                        state.toggle_bool(&sr.field_name);
+                                                    }
+                                                    FieldKind::Enum(_) => {
+                                                        state.cycle_enum(&sr.field_name, 1);
+                                                    }
+                                                    FieldKind::Float
+                                                    | FieldKind::Integer
+                                                    | FieldKind::Text => {
+                                                        let initial = sr
+                                                            .proposed_value
+                                                            .as_ref()
+                                                            .unwrap_or(&sr.current_value)
+                                                            .clone();
+                                                        state.inline_edit = Some(InlineEdit {
+                                                            field_name: sr.field_name.clone(),
+                                                            buffer: initial,
+                                                            kind: sr.kind.clone(),
+                                                        });
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

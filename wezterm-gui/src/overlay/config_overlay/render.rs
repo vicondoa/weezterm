@@ -15,7 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table};
 use ratatui::Frame;
 
-const MAX_WIDTH: u16 = 120;
+const MAX_WIDTH: u16 = 100;
 const MAX_HEIGHT: u16 = 35;
 const SECTION_W: u16 = 20;
 const DETAIL_ROWS: u16 = 4;
@@ -107,6 +107,11 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
     // ── Footer ───────────────────────────────────────────────────────
     render_footer(frame, theme, footer_area);
 
+    // ── Edit popup (rendered last so it draws on top) ────────────────
+    if state.inline_edit.is_some() {
+        render_edit_popup(frame, state, theme, area);
+    }
+
     LayoutGeo {
         left_pad,
         top_pad,
@@ -193,9 +198,9 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 .as_ref()
                 .unwrap_or(&setting.current_value);
             let badge = match setting.status {
-                FieldStatus::Inherited => "[I]",
-                FieldStatus::Editable => "[E]",
-                FieldStatus::FixedByLua => "[F]",
+                FieldStatus::Inherited => "inherited",
+                FieldStatus::Editable => "modified",
+                FieldStatus::FixedByLua => "lua",
             };
 
             // Build dotted leader line
@@ -311,7 +316,7 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
 fn render_footer(frame: &mut Frame, theme: &Theme, area: Rect) {
     let hints = vec![
         ("↑↓", "Navigate"),
-        ("Tab", "Sections"),
+        ("Tab", "Switch pane"),
         ("Enter", "Edit"),
         ("/", "Search"),
         ("S", "Save"),
@@ -331,4 +336,68 @@ fn render_footer(frame: &mut Frame, theme: &Theme, area: Rect) {
 
     let paragraph = Paragraph::new(Line::from(spans)).style(theme.footer);
     frame.render_widget(paragraph, area);
+}
+
+// ─── Edit popup (centered over settings area) ───────────────────────────────
+
+fn render_edit_popup(frame: &mut Frame, state: &OverlayState, theme: &Theme, parent: Rect) {
+    let edit = match &state.inline_edit {
+        Some(e) => e,
+        None => return,
+    };
+
+    let field_def = state.field_defs.iter().find(|f| f.name == edit.field_name);
+    let title = field_def
+        .map(|f| f.display_name)
+        .unwrap_or(edit.field_name.as_str());
+
+    let popup_w = 44.min(parent.width.saturating_sub(4));
+    let popup_h = 7.min(parent.height.saturating_sub(4));
+    let popup_x = parent.x + (parent.width.saturating_sub(popup_w)) / 2;
+    let popup_y = parent.y + (parent.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    // Clear the popup area
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Span::styled(format!(" Edit: {} ", title), theme.header))
+        .style(theme.text);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let kind_hint = match &edit.kind {
+        super::data::FieldKind::Bool => "Toggle with Enter or Space",
+        super::data::FieldKind::Float => "Enter a number (e.g. 14.0)",
+        super::data::FieldKind::Integer => "Enter a whole number",
+        super::data::FieldKind::Text => "Type a value",
+        super::data::FieldKind::Enum(_) => "Choose from options below",
+    };
+
+    let mut lines = vec![
+        Line::from(Span::styled(
+            format!(" {}|", edit.buffer),
+            theme.value_proposed,
+        )),
+        Line::from(""),
+        Line::from(Span::styled(format!(" {}", kind_hint), theme.text_dim)),
+    ];
+
+    if let super::data::FieldKind::Enum(variants) = &edit.kind {
+        lines.push(Line::from(Span::styled(
+            format!(" Options: {}", variants.join(", ")),
+            theme.text_dim,
+        )));
+    } else {
+        lines.push(Line::from(Span::styled(
+            " Enter to confirm, Esc to cancel",
+            theme.text_dim,
+        )));
+    }
+
+    let paragraph = Paragraph::new(lines);
+    frame.render_widget(paragraph, inner);
 }

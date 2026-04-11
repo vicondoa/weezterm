@@ -670,6 +670,28 @@ fn sv(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_string()).collect()
 }
 
+/// Enrich field definitions with documentation from `ConfigMeta` (extracted
+/// from `///` doc comments on the `Config` struct fields).
+///
+/// The `doc` field in each `FieldDef` is used as a fallback if ConfigMeta
+/// has no documentation for that field (empty string).
+pub fn enrich_docs_from_config(defs: &mut [FieldDef], config: &config::Config) {
+    use config::meta::ConfigMeta;
+    let options = config.get_config_options();
+    for field in defs.iter_mut() {
+        if let Some(opt) = options.iter().find(|o| o.name == field.name) {
+            let meta_doc = opt.doc.trim();
+            if !meta_doc.is_empty() {
+                // Take just the first line/sentence for brevity
+                let first_line = meta_doc.lines().next().unwrap_or(meta_doc).trim();
+                if !first_line.is_empty() {
+                    field.doc = first_line;
+                }
+            }
+        }
+    }
+}
+
 /// Convert a `Value` to a short display string.
 pub fn value_to_display_string(v: &Value) -> String {
     match v {
@@ -685,8 +707,8 @@ pub fn value_to_display_string(v: &Value) -> String {
                 format!("{:.2}", f)
             }
         }
-        Value::Null => "—".to_string(),
-        _ => "…".to_string(),
+        Value::Null => "-".to_string(),
+        _ => "...".to_string(),
     }
 }
 
