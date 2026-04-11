@@ -40,7 +40,8 @@ pub enum FieldKind {
     Float,
     Integer,
     Text,
-    Enum(Vec<String>),
+    /// Enum with (variant_name, description) pairs.
+    Enum(Vec<(String, String)>),
 }
 
 /// Metadata for a single config field exposed in the overlay.
@@ -105,14 +106,24 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "win32_system_backdrop",
             "System Backdrop",
             General,
-            Enum(sv(&["Auto", "Disable", "Acrylic", "Mica", "Tabbed"])),
+            Enum(ev(&[
+                ("Auto", "System decides the effect"),
+                ("Disable", "No backdrop effect"),
+                ("Acrylic", "Translucent blurred background"),
+                ("Mica", "Subtle tinted desktop wallpaper"),
+                ("Tabbed", "Mica variant for tabbed windows"),
+            ])),
             "Windows backdrop effect",
         ),
         f(
             "bold_brightens_ansi_colors",
             "Bold Brightens ANSI",
             General,
-            Enum(sv(&["BrightAndBold", "BrightOnly", "No"])),
+            Enum(ev(&[
+                ("BrightAndBold", "Brighten color and use bold font"),
+                ("BrightOnly", "Brighten color but keep normal weight"),
+                ("No", "Do not brighten bold text"),
+            ])),
             "Bold text color handling",
         ),
         f(
@@ -154,7 +165,10 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "window_close_confirmation",
             "Close Confirmation",
             General,
-            Enum(sv(&["AlwaysPrompt", "NeverPrompt"])),
+            Enum(ev(&[
+                ("AlwaysPrompt", "Always ask before closing"),
+                ("NeverPrompt", "Close without asking"),
+            ])),
             "Prompt before closing window",
         ),
         // ── Font & Text ──────────────────────────────────────────────
@@ -346,13 +360,13 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "default_cursor_style",
             "Cursor Style",
             CursorAndAnimation,
-            Enum(sv(&[
-                "SteadyBlock",
-                "BlinkingBlock",
-                "SteadyUnderline",
-                "BlinkingUnderline",
-                "SteadyBar",
-                "BlinkingBar",
+            Enum(ev(&[
+                ("SteadyBlock", "Non-blinking filled block"),
+                ("BlinkingBlock", "Blinking filled block"),
+                ("SteadyUnderline", "Non-blinking underline"),
+                ("BlinkingUnderline", "Blinking underline"),
+                ("SteadyBar", "Non-blinking vertical bar"),
+                ("BlinkingBar", "Blinking vertical bar"),
             ])),
             "Default cursor shape",
         ),
@@ -424,7 +438,11 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "exit_behavior",
             "Exit Behavior",
             Terminal,
-            Enum(sv(&["Close", "Hold", "CloseOnCleanExit"])),
+            Enum(ev(&[
+                ("Close", "Close the pane immediately"),
+                ("Hold", "Keep pane open after exit"),
+                ("CloseOnCleanExit", "Close only on exit code 0"),
+            ])),
             "What happens when shell exits",
         ),
         f(
@@ -558,7 +576,10 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "key_map_preference",
             "Key Map Preference",
             Input,
-            Enum(sv(&["Mapped", "Physical"])),
+            Enum(ev(&[
+                ("Mapped", "Use the OS keyboard layout mapping"),
+                ("Physical", "Use raw physical key positions"),
+            ])),
             "Use mapped or physical key layout",
         ),
         // ── SSH & Domains ────────────────────────────────────────────
@@ -566,7 +587,10 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "ssh_backend",
             "SSH Backend",
             SshAndDomains,
-            Enum(sv(&["Ssh2", "LibSsh"])),
+            Enum(ev(&[
+                ("Ssh2", "Use the libssh2 library"),
+                ("LibSsh", "Use the libssh library (default)"),
+            ])),
             "SSH implementation to use",
         ),
         f(
@@ -595,14 +619,21 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "front_end",
             "Front End",
             Rendering,
-            Enum(sv(&["OpenGL", "WebGpu", "Software"])),
+            Enum(ev(&[
+                ("OpenGL", "Hardware-accelerated OpenGL rendering"),
+                ("WebGpu", "Modern WebGPU rendering backend"),
+                ("Software", "CPU-based software rendering"),
+            ])),
             "GPU rendering backend",
         ),
         f(
             "webgpu_power_preference",
             "GPU Power Pref",
             Rendering,
-            Enum(sv(&["LowPower", "HighPerformance"])),
+            Enum(ev(&[
+                ("LowPower", "Prefer battery life over performance"),
+                ("HighPerformance", "Prefer performance over battery"),
+            ])),
             "WebGPU power vs performance",
         ),
         f(
@@ -666,8 +697,19 @@ fn f(
     }
 }
 
-fn sv(items: &[&str]) -> Vec<String> {
-    items.iter().map(|s| (*s).to_string()).collect()
+fn sv(items: &[&str]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|s| ((*s).to_string(), String::new()))
+        .collect()
+}
+
+/// Build enum variants with descriptions.
+fn ev(items: &[(&str, &str)]) -> Vec<(String, String)> {
+    items
+        .iter()
+        .map(|(v, d)| ((*v).to_string(), (*d).to_string()))
+        .collect()
 }
 
 /// Enrich field definitions with documentation from `ConfigMeta` (extracted

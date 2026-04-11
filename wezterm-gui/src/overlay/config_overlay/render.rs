@@ -112,6 +112,11 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
         render_edit_popup(frame, state, theme, area);
     }
 
+    // ── Enum picker popup (rendered last so it draws on top) ────────
+    if state.enum_picker.is_some() {
+        render_enum_picker(frame, state, theme, area);
+    }
+
     LayoutGeo {
         left_pad,
         top_pad,
@@ -392,8 +397,9 @@ fn render_edit_popup(frame: &mut Frame, state: &OverlayState, theme: &Theme, par
     ];
 
     if let super::data::FieldKind::Enum(variants) = &edit.kind {
+        let names: Vec<&str> = variants.iter().map(|(v, _)| v.as_str()).collect();
         lines.push(Line::from(Span::styled(
-            format!(" Options: {}", variants.join(", ")),
+            format!(" Options: {}", names.join(", ")),
             theme.text_dim,
         )));
     } else {
@@ -405,4 +411,87 @@ fn render_edit_popup(frame: &mut Frame, state: &OverlayState, theme: &Theme, par
 
     let paragraph = Paragraph::new(lines);
     frame.render_widget(paragraph, inner);
+}
+
+// ─── Enum picker popup ──────────────────────────────────────────────────────
+
+fn render_enum_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, parent: Rect) {
+    let picker = match &state.enum_picker {
+        Some(p) => p,
+        None => return,
+    };
+
+    let field_def = state
+        .field_defs
+        .iter()
+        .find(|f| f.name == picker.field_name);
+    let title = field_def
+        .map(|f| f.display_name)
+        .unwrap_or(picker.field_name.as_str());
+
+    // Size the popup to fit the variants
+    let max_variant_len = picker
+        .variants
+        .iter()
+        .map(|(v, d)| v.len() + if d.is_empty() { 0 } else { d.len() + 3 })
+        .max()
+        .unwrap_or(20);
+    let popup_w = (max_variant_len as u16 + 6)
+        .min(parent.width.saturating_sub(4))
+        .max(30);
+    let popup_h = (picker.variants.len() as u16 + 4)
+        .min(parent.height.saturating_sub(4))
+        .max(5);
+    let popup_x = parent.x + (parent.width.saturating_sub(popup_w)) / 2;
+    let popup_y = parent.y + (parent.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Span::styled(format!(" {} ", title), theme.header))
+        .style(theme.text);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    let items: Vec<ListItem> = picker
+        .variants
+        .iter()
+        .enumerate()
+        .map(|(i, (variant, desc))| {
+            let is_sel = i == picker.selected;
+            let prefix = if is_sel { " \u{25b8} " } else { "   " };
+            let mut spans = vec![Span::styled(
+                format!("{}{}", prefix, variant),
+                if is_sel { theme.selected } else { theme.text },
+            )];
+            if !desc.is_empty() {
+                spans.push(Span::styled(
+                    format!("  {}", desc),
+                    if is_sel {
+                        theme.selected_badge
+                    } else {
+                        theme.text_dim
+                    },
+                ));
+            }
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    // Footer hint inside popup
+    let mut all_items = items;
+    if inner.height as usize > picker.variants.len() + 1 {
+        all_items.push(ListItem::new(""));
+        all_items.push(ListItem::new(Span::styled(
+            " Enter select  Space cycle  Esc cancel",
+            theme.text_dim,
+        )));
+    }
+
+    let list = List::new(all_items);
+    frame.render_widget(list, inner);
 }

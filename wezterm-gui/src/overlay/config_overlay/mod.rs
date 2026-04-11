@@ -76,6 +76,8 @@ struct OverlayState {
     dirty: bool,
     /// Inline edit mode: field name + buffer
     inline_edit: Option<InlineEdit>,
+    /// Enum picker popup: field name + variants + selected index
+    enum_picker: Option<EnumPicker>,
 }
 
 /// State for inline editing of a field value.
@@ -83,6 +85,13 @@ struct InlineEdit {
     field_name: String,
     buffer: String,
     kind: FieldKind,
+}
+
+/// State for the enum selection popup.
+struct EnumPicker {
+    field_name: String,
+    variants: Vec<(String, String)>,
+    selected: usize,
 }
 
 impl OverlayState {
@@ -117,6 +126,7 @@ impl OverlayState {
             field_defs,
             dirty: false,
             inline_edit: None,
+            enum_picker: None,
         }
     }
 
@@ -227,7 +237,7 @@ impl OverlayState {
 
         let current_idx = current_str
             .as_ref()
-            .and_then(|s| variants.iter().position(|v| v == s))
+            .and_then(|s| variants.iter().position(|(v, _)| v == s))
             .unwrap_or(0);
 
         let new_idx = if direction > 0 {
@@ -236,7 +246,7 @@ impl OverlayState {
             (current_idx + variants.len() - 1) % variants.len()
         };
 
-        self.apply_edit_for_field(field_name, Value::String(variants[new_idx].clone()));
+        self.apply_edit_for_field(field_name, Value::String(variants[new_idx].0.clone()));
     }
 }
 
@@ -319,6 +329,63 @@ pub fn run_config_overlay(
                             ..
                         }) => {
                             edit.buffer.push(c);
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
+                // If in enum picker mode, handle picker input
+                if let Some(ref mut picker) = state.enum_picker {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            state.enum_picker = None;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            let field_name = picker.field_name.clone();
+                            let variant = picker.variants[picker.selected].0.clone();
+                            state.enum_picker = None;
+                            state.apply_edit_for_field(&field_name, Value::String(variant));
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::UpArrow,
+                            ..
+                        })
+                        | InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char('k'),
+                            modifiers: Modifiers::NONE,
+                        }) => {
+                            if picker.selected > 0 {
+                                picker.selected -= 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::DownArrow,
+                            ..
+                        })
+                        | InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char('j'),
+                            modifiers: Modifiers::NONE,
+                        }) => {
+                            if picker.selected + 1 < picker.variants.len() {
+                                picker.selected += 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(' '),
+                            ..
+                        }) => {
+                            // Space in picker also selects
+                            let field_name = picker.field_name.clone();
+                            let variant = picker.variants[picker.selected].0.clone();
+                            state.enum_picker = None;
+                            state.apply_edit_for_field(&field_name, Value::String(variant));
                         }
                         _ => {}
                     }
@@ -455,8 +522,21 @@ pub fn run_config_overlay(
                                     FieldKind::Bool => {
                                         state.toggle_bool(&row.field_name);
                                     }
-                                    FieldKind::Enum(_) => {
-                                        state.cycle_enum(&row.field_name, 1);
+                                    FieldKind::Enum(variants) => {
+                                        // Open enum picker popup
+                                        let current_str = row
+                                            .proposed_value
+                                            .as_ref()
+                                            .unwrap_or(&row.current_value);
+                                        let sel_idx = variants
+                                            .iter()
+                                            .position(|(v, _)| v == current_str)
+                                            .unwrap_or(0);
+                                        state.enum_picker = Some(EnumPicker {
+                                            field_name: row.field_name.clone(),
+                                            variants: variants.clone(),
+                                            selected: sel_idx,
+                                        });
                                     }
                                     FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
                                         let initial = row
@@ -475,15 +555,21 @@ pub fn run_config_overlay(
                         }
                     }
 
-                    // Space: toggle bool
+                    // Space: cycle bool/enum
                     InputEvent::Key(KeyEvent {
                         key: KeyCode::Char(' '),
                         modifiers: Modifiers::NONE,
                     }) => {
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
-                                if matches!(row.kind, FieldKind::Bool) {
-                                    state.toggle_bool(&row.field_name);
+                                match &row.kind {
+                                    FieldKind::Bool => {
+                                        state.toggle_bool(&row.field_name);
+                                    }
+                                    FieldKind::Enum(_) => {
+                                        state.cycle_enum(&row.field_name, 1);
+                                    }
+                                    _ => {}
                                 }
                             }
                         }
