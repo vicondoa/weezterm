@@ -436,12 +436,17 @@ pub fn run_config_overlay(
                         };
                     }
 
-                    // Enter: edit selected setting
+                    // Enter: edit selected setting or switch panel
                     InputEvent::Key(KeyEvent {
                         key: KeyCode::Enter,
                         ..
                     }) => {
-                        if state.active_panel == Panel::Settings {
+                        if state.active_panel == Panel::Sections {
+                            // Enter on a section switches to Settings panel
+                            state.active_panel = Panel::Settings;
+                            state.selected_setting = 0;
+                            state.settings_scroll_offset = 0;
+                        } else if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
                                 match &row.kind {
                                     FieldKind::Bool => {
@@ -554,16 +559,21 @@ pub fn run_config_overlay(
                     }) => {
                         if mouse_buttons.contains(MouseButtons::LEFT) {
                             let size = ratatui_term.backend().size().unwrap_or_default();
-                            let ow = size.width.min(86);
-                            let oh = size.height.min(30);
+                            // Match overlay_rect logic from render.rs
+                            let ow = size.width.min(120).max(size.width * 9 / 10).min(size.width);
+                            let oh = size
+                                .height
+                                .min(35)
+                                .max(size.height * 9 / 10)
+                                .min(size.height);
                             let lp = (size.width.saturating_sub(ow)) / 2;
                             let tp = (size.height.saturating_sub(oh)) / 2;
-                            // Body starts after: border(1)+search(1)+body_start
-                            let body_y_start = tp + 3;
+                            // Body starts after: border(1) + search(1) = row 2 inside overlay
+                            let body_y_start = tp + 2;
                             let body_y_end = tp + oh.saturating_sub(7);
                             let sec_x_start = lp + 1;
-                            let sec_x_end = sec_x_start + 20;
-                            let set_x_start = sec_x_end;
+                            let sec_x_end = sec_x_start + 19; // SECTION_W minus border
+                            let set_x_start = sec_x_end + 1;
 
                             if y >= body_y_start && y < body_y_end {
                                 let row = (y - body_y_start) as usize;

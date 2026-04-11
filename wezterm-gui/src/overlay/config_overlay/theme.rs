@@ -41,6 +41,8 @@ pub struct Theme {
     pub footer: Style,
     /// Footer key hints (bold keys).
     pub footer_key: Style,
+    /// Selection background color (for composing per-span selected styles).
+    pub selection_bg: Color,
     /// Details panel text.
     pub detail: Style,
     /// Details panel title line.
@@ -53,11 +55,15 @@ impl Theme {
     /// Falls back to sensible ANSI defaults for any `None` fields.
     pub fn from_palette(palette: &Palette) -> Self {
         let fg = palette_to_color(palette.foreground.as_ref(), Color::White);
-        let _bg = palette_to_color(palette.background.as_ref(), Color::Black);
+        let bg = palette_to_color(palette.background.as_ref(), Color::Black);
         let sel_fg = palette_to_color(palette.selection_fg.as_ref(), Color::Black);
         let sel_bg = palette_to_color(palette.selection_bg.as_ref(), Color::LightCyan);
-        let cursor_bg = palette_to_color(palette.cursor_bg.as_ref(), sel_bg);
         let border_color = palette_to_color(palette.split.as_ref(), Color::DarkGray);
+
+        // Use a subtly contrasting background for header/footer bars
+        // by blending the palette background toward the foreground slightly
+        let header_bg = blend_toward(bg, fg, 0.15);
+        let header_fg = fg;
 
         // Extract ANSI colors from palette (with fallbacks)
         let ansi = |idx: usize, fallback: Color| -> Color {
@@ -103,14 +109,15 @@ impl Theme {
             badge_fixed: Style::new().fg(yellow),
             border: Style::new().fg(border_color),
             header: Style::new()
-                .fg(fg)
-                .bg(cursor_bg)
+                .fg(header_fg)
+                .bg(header_bg)
                 .add_modifier(Modifier::BOLD),
-            footer: Style::new().fg(fg).bg(cursor_bg),
+            footer: Style::new().fg(header_fg).bg(header_bg),
             footer_key: Style::new()
-                .fg(fg)
-                .bg(cursor_bg)
+                .fg(header_fg)
+                .bg(header_bg)
                 .add_modifier(Modifier::BOLD),
+            selection_bg: sel_bg,
             detail: Style::new().fg(dim_fg),
             detail_title: Style::new().fg(fg).add_modifier(Modifier::BOLD),
         }
@@ -129,6 +136,29 @@ fn rgba_to_color(rgba: &RgbaColor) -> Color {
     let g = (t.1 * 255.0).round().clamp(0.0, 255.0) as u8;
     let b = (t.2 * 255.0).round().clamp(0.0, 255.0) as u8;
     Color::Rgb(r, g, b)
+}
+
+/// Blend color `a` toward color `b` by `factor` (0.0 = pure a, 1.0 = pure b).
+fn blend_toward(a: Color, b: Color, factor: f32) -> Color {
+    let (ar, ag, ab) = color_to_rgb(a);
+    let (br, bg, bb) = color_to_rgb(b);
+    let mix = |a: u8, b: u8| -> u8 {
+        let v = a as f32 * (1.0 - factor) + b as f32 * factor;
+        v.round().clamp(0.0, 255.0) as u8
+    };
+    Color::Rgb(mix(ar, br), mix(ag, bg), mix(ab, bb))
+}
+
+/// Extract RGB components from a ratatui Color (best-effort for non-Rgb).
+fn color_to_rgb(c: Color) -> (u8, u8, u8) {
+    match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        Color::Black => (0, 0, 0),
+        Color::White => (255, 255, 255),
+        Color::DarkGray => (128, 128, 128),
+        Color::Gray => (192, 192, 192),
+        _ => (128, 128, 128),
+    }
 }
 
 #[cfg(test)]

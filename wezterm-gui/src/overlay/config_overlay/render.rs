@@ -15,8 +15,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Row, Table};
 use ratatui::Frame;
 
-const MAX_WIDTH: u16 = 86;
-const MAX_HEIGHT: u16 = 30;
+const MAX_WIDTH: u16 = 120;
+const MAX_HEIGHT: u16 = 35;
 const SECTION_W: u16 = 20;
 const DETAIL_ROWS: u16 = 4;
 
@@ -29,10 +29,13 @@ pub struct LayoutGeo {
     pub body_area: Rect,
 }
 
-/// Compute centered overlay area, capped at MAX_WIDTH × MAX_HEIGHT.
+/// Compute centered overlay area, capped at MAX_WIDTH × MAX_HEIGHT but using
+/// at least 90% of the terminal to avoid feeling too small.
 fn overlay_rect(total: Rect) -> (Rect, u16, u16) {
-    let w = total.width.min(MAX_WIDTH);
-    let h = total.height.min(MAX_HEIGHT);
+    let w = total.width.min(MAX_WIDTH).max(total.width * 9 / 10);
+    let w = w.min(total.width); // never exceed terminal
+    let h = total.height.min(MAX_HEIGHT).max(total.height * 9 / 10);
+    let h = h.min(total.height);
     let x = (total.width.saturating_sub(w)) / 2;
     let y = (total.height.saturating_sub(h)) / 2;
     (Rect::new(x, y, w, h), x, y)
@@ -176,6 +179,7 @@ fn render_sections(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
 fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, area: Rect) {
     let settings = state.visible_settings();
     let available_width = area.width.saturating_sub(2) as usize;
+    let sel_bg = theme.selection_bg;
 
     let rows: Vec<Row> = settings
         .iter()
@@ -213,28 +217,31 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 FieldStatus::FixedByLua => theme.badge_fixed,
             };
 
-            let line = Line::from(vec![
-                Span::styled(
-                    left,
-                    if is_selected {
-                        theme.selected
-                    } else {
-                        theme.text
-                    },
-                ),
-                Span::styled(" ", theme.dots),
-                Span::styled(dots, theme.dots),
-                Span::styled(" ", theme.dots),
-                Span::styled(value.to_string(), value_style),
-                Span::styled(" ", theme.text),
-                Span::styled(badge.to_string(), badge_style),
-            ]);
-
-            if is_selected {
-                Row::new(vec![line]).style(theme.selected)
+            // For the selected row, blend the selection bg into each span
+            // so per-span foreground colors are preserved
+            let line = if is_selected {
+                Line::from(vec![
+                    Span::styled(left, theme.selected),
+                    Span::styled(" ", theme.dots.bg(sel_bg)),
+                    Span::styled(dots, theme.dots.bg(sel_bg)),
+                    Span::styled(" ", theme.dots.bg(sel_bg)),
+                    Span::styled(value.to_string(), value_style.bg(sel_bg)),
+                    Span::styled(" ", theme.text.bg(sel_bg)),
+                    Span::styled(badge.to_string(), badge_style.bg(sel_bg)),
+                ])
             } else {
-                Row::new(vec![line])
-            }
+                Line::from(vec![
+                    Span::styled(left, theme.text),
+                    Span::styled(" ", theme.dots),
+                    Span::styled(dots, theme.dots),
+                    Span::styled(" ", theme.dots),
+                    Span::styled(value.to_string(), value_style),
+                    Span::styled(" ", theme.text),
+                    Span::styled(badge.to_string(), badge_style),
+                ])
+            };
+
+            Row::new(vec![line])
         })
         .collect();
 
