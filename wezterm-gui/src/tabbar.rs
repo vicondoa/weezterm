@@ -25,6 +25,9 @@ pub enum TabBarItem {
     RightStatus,
     Tab { tab_idx: usize, active: bool },
     NewTabButton,
+    // --- weezterm remote features ---
+    NewTabDropdown,
+    // --- end weezterm remote features ---
     WindowButton(IntegratedTitleButton),
 }
 
@@ -525,6 +528,23 @@ impl TabBarState {
             });
 
             x += width;
+
+            // --- weezterm remote features ---
+            // Dropdown chevron next to the new tab button
+            {
+                let dropdown_text = parse_status_text("\u{25be}", CellAttributes::default());
+                let dd_start = x;
+                let dd_width = dropdown_text.len().max(1);
+                line.append_line(dropdown_text.clone(), SEQ_ZERO);
+                items.push(TabEntry {
+                    item: TabBarItem::NewTabDropdown,
+                    title: dropdown_text,
+                    x: dd_start,
+                    width: dd_width,
+                });
+                x += dd_width;
+            }
+            // --- end weezterm remote features ---
         }
 
         // Reserve place for integrated title buttons

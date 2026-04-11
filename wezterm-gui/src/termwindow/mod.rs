@@ -2501,6 +2501,20 @@ impl TermWindow {
     }
     // --- end weezterm remote features ---
 
+    // --- weezterm remote features ---
+    fn show_new_tab_dropdown(&mut self) {
+        let title = "New Tab".to_string();
+        let args = LauncherActionArgs {
+            title: Some(title),
+            flags: LauncherFlags::DOMAINS | LauncherFlags::LAUNCH_MENU_ITEMS,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
+    // --- end weezterm remote features ---
+
     fn show_tab_navigator(&mut self) {
         let mux = Mux::get();
         let active_tab_idx = match mux.get_window(self.mux_window_id) {
