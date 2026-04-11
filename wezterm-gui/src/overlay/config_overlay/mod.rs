@@ -628,6 +628,12 @@ pub fn run_config_overlay(
                         }
                     }
 
+                    // Window resize
+                    InputEvent::Resized { .. } => {
+                        ratatui_term.backend_mut().refresh_size()?;
+                        ratatui_term.clear()?;
+                    }
+
                     _ => {}
                 }
             }

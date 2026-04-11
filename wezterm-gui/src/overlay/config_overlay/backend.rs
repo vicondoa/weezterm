@@ -38,6 +38,17 @@ impl<T: Terminal> TermwizOverlayBackend<T> {
     pub fn terminal_mut(&mut self) -> &mut T {
         &mut self.terminal
     }
+
+    /// Re-query the terminal size (call after a resize event).
+    pub fn refresh_size(&mut self) -> io::Result<()> {
+        let screen = self
+            .terminal
+            .get_screen_size()
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        self.width = screen.cols as u16;
+        self.height = screen.rows as u16;
+        Ok(())
+    }
 }
 
 impl<T: Terminal> Backend for TermwizOverlayBackend<T> {

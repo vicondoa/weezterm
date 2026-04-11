@@ -26,6 +26,7 @@ pub struct Theme {
     /// Proposed value (user-modified).
     pub value_proposed: Style,
     /// Leader dots between name and value.
+    #[allow(dead_code)]
     pub dots: Style,
     /// Badge: [I] Inherited.
     pub badge_inherited: Style,

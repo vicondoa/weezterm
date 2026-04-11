@@ -183,15 +183,18 @@ fn render_sections(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
 
 fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, area: Rect) {
     let settings = state.visible_settings();
-    let available_width = area.width.saturating_sub(2) as usize;
     let sel_bg = theme.selection_bg;
+
+    // Fixed column widths: value (16 chars) + badge (10 chars)
+    let value_w = 16u16;
+    let badge_w = 10u16;
 
     let rows: Vec<Row> = settings
         .iter()
         .enumerate()
         .map(|(i, setting)| {
             let is_selected = i == state.selected_setting && state.active_panel == Panel::Settings;
-            let prefix = if is_selected { " ▸ " } else { "   " };
+            let prefix = if is_selected { " \u{25b8} " } else { "   " };
             let name = &setting.display_name;
             let value = setting
                 .proposed_value
@@ -203,13 +206,7 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 FieldStatus::FixedByLua => "lua",
             };
 
-            // Build dotted leader line
-            let right = format!("{} {}", value, badge);
-            let left = format!("{}{}", prefix, name);
-            let dots_len = available_width
-                .saturating_sub(left.len() + right.len() + 2)
-                .max(1);
-            let dots = "·".repeat(dots_len);
+            let name_text = format!("{}{}", prefix, name);
 
             let value_style = if setting.proposed_value.is_some() {
                 theme.value_proposed
@@ -222,35 +219,38 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 FieldStatus::FixedByLua => theme.badge_fixed,
             };
 
-            // For the selected row, blend the selection bg into each span
-            // so per-span foreground colors are preserved
-            let line = if is_selected {
-                Line::from(vec![
-                    Span::styled(left, theme.selected),
-                    Span::styled(" ", theme.dots.bg(sel_bg)),
-                    Span::styled(dots, theme.dots.bg(sel_bg)),
-                    Span::styled(" ", theme.dots.bg(sel_bg)),
-                    Span::styled(value.to_string(), value_style.bg(sel_bg)),
-                    Span::styled(" ", theme.text.bg(sel_bg)),
-                    Span::styled(badge.to_string(), badge_style.bg(sel_bg)),
-                ])
+            let name_style = if is_selected {
+                theme.selected
             } else {
-                Line::from(vec![
-                    Span::styled(left, theme.text),
-                    Span::styled(" ", theme.dots),
-                    Span::styled(dots, theme.dots),
-                    Span::styled(" ", theme.dots),
-                    Span::styled(value.to_string(), value_style),
-                    Span::styled(" ", theme.text),
-                    Span::styled(badge.to_string(), badge_style),
-                ])
+                theme.text
             };
 
-            Row::new(vec![line])
+            if is_selected {
+                Row::new(vec![
+                    ratatui::text::Text::styled(name_text, name_style),
+                    ratatui::text::Text::styled(value.to_string(), value_style.bg(sel_bg)),
+                    ratatui::text::Text::styled(badge.to_string(), badge_style.bg(sel_bg)),
+                ])
+                .style(theme.selected)
+            } else {
+                Row::new(vec![
+                    ratatui::text::Text::styled(name_text, name_style),
+                    ratatui::text::Text::styled(value.to_string(), value_style),
+                    ratatui::text::Text::styled(badge.to_string(), badge_style),
+                ])
+            }
         })
         .collect();
 
-    let table = Table::new(rows, [Constraint::Percentage(100)]).column_spacing(0);
+    let table = Table::new(
+        rows,
+        [
+            Constraint::Min(10),
+            Constraint::Length(value_w),
+            Constraint::Length(badge_w),
+        ],
+    )
+    .column_spacing(1);
 
     let mut table_state = ratatui::widgets::TableState::default();
     table_state.select(Some(state.selected_setting));
