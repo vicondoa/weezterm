@@ -25,8 +25,11 @@ pub struct Theme {
     pub value: Style,
     /// Proposed value (user-modified).
     pub value_proposed: Style,
+    /// Value style when row is selected (contrasting on selection bg).
+    pub selected_value: Style,
+    /// Badge style when row is selected.
+    pub selected_badge: Style,
     /// Leader dots between name and value.
-    #[allow(dead_code)]
     pub dots: Style,
     /// Badge: [I] Inherited.
     pub badge_inherited: Style,
@@ -104,6 +107,12 @@ impl Theme {
             section_inactive: Style::new().fg(dim_fg),
             value: Style::new().fg(cyan),
             value_proposed: Style::new().fg(bright_yellow).add_modifier(Modifier::BOLD),
+            // When selected, use contrasting foreground (bg color inverted)
+            // so values/badges remain readable on the selection background
+            selected_value: Style::new().fg(sel_fg).bg(sel_bg),
+            selected_badge: Style::new()
+                .fg(blend_toward(sel_fg, sel_bg, 0.4))
+                .bg(sel_bg),
             dots: Style::new().fg(Color::DarkGray),
             badge_inherited: Style::new().fg(dim_fg),
             badge_editable: Style::new().fg(green),

@@ -183,11 +183,11 @@ fn render_sections(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
 
 fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, area: Rect) {
     let settings = state.visible_settings();
-    let sel_bg = theme.selection_bg;
 
     // Fixed column widths: value (16 chars) + badge (10 chars)
     let value_w = 16u16;
     let badge_w = 10u16;
+    let name_w = area.width.saturating_sub(value_w + badge_w + 3) as usize; // 3 for column spacing
 
     let rows: Vec<Row> = settings
         .iter()
@@ -206,39 +206,43 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 FieldStatus::FixedByLua => "lua",
             };
 
-            let name_text = format!("{}{}", prefix, name);
+            let label = format!("{}{}", prefix, name);
+            let dots_len = name_w.saturating_sub(label.len() + 1).max(1);
+            let dots = "\u{00b7}".repeat(dots_len); // middle dot
 
-            let value_style = if setting.proposed_value.is_some() {
-                theme.value_proposed
+            let (name_style, dot_style, val_style, bdg_style) = if is_selected {
+                (
+                    theme.selected,
+                    theme.dots.bg(theme.selection_bg),
+                    theme.selected_value,
+                    theme.selected_badge,
+                )
             } else {
-                theme.value
-            };
-            let badge_style = match setting.status {
-                FieldStatus::Inherited => theme.badge_inherited,
-                FieldStatus::Editable => theme.badge_editable,
-                FieldStatus::FixedByLua => theme.badge_fixed,
+                let vs = if setting.proposed_value.is_some() {
+                    theme.value_proposed
+                } else {
+                    theme.value
+                };
+                let bs = match setting.status {
+                    FieldStatus::Inherited => theme.badge_inherited,
+                    FieldStatus::Editable => theme.badge_editable,
+                    FieldStatus::FixedByLua => theme.badge_fixed,
+                };
+                (theme.text, theme.dots, vs, bs)
             };
 
-            let name_style = if is_selected {
-                theme.selected
-            } else {
-                theme.text
-            };
+            // Name column: "  Name ········"
+            let name_cell = Line::from(vec![
+                Span::styled(label, name_style),
+                Span::styled(" ", dot_style),
+                Span::styled(dots, dot_style),
+            ]);
 
-            if is_selected {
-                Row::new(vec![
-                    ratatui::text::Text::styled(name_text, name_style),
-                    ratatui::text::Text::styled(value.to_string(), value_style.bg(sel_bg)),
-                    ratatui::text::Text::styled(badge.to_string(), badge_style.bg(sel_bg)),
-                ])
-                .style(theme.selected)
-            } else {
-                Row::new(vec![
-                    ratatui::text::Text::styled(name_text, name_style),
-                    ratatui::text::Text::styled(value.to_string(), value_style),
-                    ratatui::text::Text::styled(badge.to_string(), badge_style),
-                ])
-            }
+            Row::new(vec![
+                ratatui::text::Text::from(name_cell),
+                ratatui::text::Text::styled(value.to_string(), val_style),
+                ratatui::text::Text::styled(badge.to_string(), bdg_style),
+            ])
         })
         .collect();
 
@@ -250,7 +254,8 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
             Constraint::Length(badge_w),
         ],
     )
-    .column_spacing(1);
+    .column_spacing(1)
+    .row_highlight_style(theme.selected);
 
     let mut table_state = ratatui::widgets::TableState::default();
     table_state.select(Some(state.selected_setting));
