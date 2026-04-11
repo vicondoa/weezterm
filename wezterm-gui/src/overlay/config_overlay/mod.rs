@@ -5,15 +5,17 @@
 //!
 //! --- weezterm remote features ---
 
+use ratatui::backend::Backend as _;
 use std::collections::HashMap;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers, MouseButtons, MouseEvent};
-use termwiz::surface::{Change, CursorVisibility};
 use termwiz::terminal::Terminal;
 use wezterm_dynamic::Value;
 
+pub mod backend;
 pub mod data;
 pub mod persistence;
 mod render;
+pub mod theme;
 
 pub use data::{FieldDef, FieldKind, Section};
 
@@ -242,17 +244,25 @@ pub fn run_config_overlay(
     effective_values: HashMap<String, Value>,
     default_values: HashMap<String, Value>,
     saved_proposals: HashMap<String, Value>,
+    palette: config::Palette,
 ) -> anyhow::Result<ConfigOverlayAction> {
     let mut state = OverlayState::new(effective_values, default_values, saved_proposals);
+    let theme = theme::Theme::from_palette(&palette);
 
     term.set_raw_mode()?;
-    term.render(&[Change::CursorVisibility(CursorVisibility::Hidden)])?;
+    let mut ratatui_backend = backend::TermwizOverlayBackend::new(term)?;
+    ratatui_backend.hide_cursor()?;
+    let mut ratatui_term = ratatui::Terminal::new(ratatui_backend)?;
 
     loop {
         state.clamp_selection();
-        render::render_frame(&mut term, &state)?;
+        let _layout_geo = ratatui_term.draw(|frame| {
+            render::ui(frame, &mut state, &theme);
+        })?;
 
-        match term.poll_input(None) {
+        let input = ratatui_term.backend_mut().terminal_mut().poll_input(None);
+
+        match input {
             Ok(Some(input)) => {
                 // If in inline edit mode, handle separately
                 if let Some(ref mut edit) = state.inline_edit {
@@ -543,41 +553,32 @@ pub fn run_config_overlay(
                         ..
                     }) => {
                         if mouse_buttons.contains(MouseButtons::LEFT) {
-                            let screen =
-                                term.get_screen_size()
-                                    .unwrap_or(termwiz::terminal::ScreenSize {
-                                        rows: 25,
-                                        cols: 80,
-                                        xpixel: 0,
-                                        ypixel: 0,
-                                    });
-                            let ly = render::compute_layout(screen.cols, screen.rows);
-                            let mx = x as usize;
-                            let my = y as usize;
+                            let size = ratatui_term.backend().size().unwrap_or_default();
+                            let ow = size.width.min(86);
+                            let oh = size.height.min(30);
+                            let lp = (size.width.saturating_sub(ow)) / 2;
+                            let tp = (size.height.saturating_sub(oh)) / 2;
+                            // Body starts after: border(1)+search(1)+body_start
+                            let body_y_start = tp + 3;
+                            let body_y_end = tp + oh.saturating_sub(7);
+                            let sec_x_start = lp + 1;
+                            let sec_x_end = sec_x_start + 20;
+                            let set_x_start = sec_x_end;
 
-                            // Check if click is within the overlay body
-                            if my >= ly.top_pad + ly.body_start_y
-                                && my < ly.top_pad + ly.body_start_y + ly.body_rows
-                            {
-                                let body_row = my - ly.top_pad - ly.body_start_y;
-                                let section_start = ly.left_pad + 1;
-                                let section_end = section_start + ly.section_w;
-                                let settings_start = section_end + 1;
-
-                                if mx >= section_start && mx < section_end {
-                                    // Clicked in section panel
-                                    if body_row < state.sections.len() {
-                                        state.selected_section = body_row;
+                            if y >= body_y_start && y < body_y_end {
+                                let row = (y - body_y_start) as usize;
+                                if x >= sec_x_start && x < sec_x_end {
+                                    if row < state.sections.len() {
+                                        state.selected_section = row;
                                         state.selected_setting = 0;
                                         state.settings_scroll_offset = 0;
                                         state.active_panel = Panel::Sections;
                                     }
-                                } else if mx >= settings_start {
-                                    // Clicked in settings panel
-                                    let setting_idx = body_row + state.settings_scroll_offset;
+                                } else if x >= set_x_start {
+                                    let idx = row + state.settings_scroll_offset;
                                     let count = state.visible_settings().len();
-                                    if setting_idx < count {
-                                        state.selected_setting = setting_idx;
+                                    if idx < count {
+                                        state.selected_setting = idx;
                                         state.active_panel = Panel::Settings;
                                     }
                                 }

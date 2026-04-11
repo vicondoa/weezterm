@@ -2452,6 +2452,7 @@ impl TermWindow {
         let config_dynamic = config.to_dynamic();
         let effective_values = config_overlay::data::extract_values(&config_dynamic);
         let default_values = std::collections::HashMap::new();
+        let palette = config.resolved_palette.clone();
 
         // Load saved proposals from disk
         let saved_proposals = config_overlay::persistence::load_proposals().unwrap_or_default();
@@ -2464,6 +2465,7 @@ impl TermWindow {
                 effective_values,
                 default_values,
                 saved_proposals,
+                palette,
             )
         });
         self.assign_overlay(tab_id, overlay);

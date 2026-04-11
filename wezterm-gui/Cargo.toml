@@ -122,6 +122,10 @@ windows = { workspace=true, features = [
     "Win32_UI_Shell",
 ]}
 
+# --- weezterm remote features ---
+ratatui = { version = "0.29", default-features = false }
+# --- end weezterm remote features ---
+
 [dev-dependencies]
 benchmarking.workspace = true
 env_logger.workspace = true
