@@ -380,6 +380,19 @@ impl OverlayState {
         row.status != FieldStatus::FixedByLua
     }
 
+    /// Open a bool picker (On/Off) for the given field.
+    fn open_bool_picker(&mut self, field_name: &str, current_value: &str) {
+        let sel_idx = if current_value == "On" { 0 } else { 1 };
+        self.enum_picker = Some(EnumPicker {
+            field_name: field_name.to_string(),
+            variants: vec![
+                ("On".to_string(), "Enable this setting".to_string()),
+                ("Off".to_string(), "Disable this setting".to_string()),
+            ],
+            selected: sel_idx,
+        });
+    }
+
     /// Open the color scheme picker popup.
     fn open_scheme_picker(&mut self) {
         let schemes = data::get_color_schemes();
@@ -740,8 +753,19 @@ pub fn run_config_overlay(
                             let field_name = picker.field_name.clone();
                             let variant = picker.variants[picker.selected].0.clone();
                             state.enum_picker = None;
+                            let is_bool_field = state
+                                .field_defs
+                                .iter()
+                                .find(|f| f.name == field_name)
+                                .map(|f| matches!(f.kind, FieldKind::Bool))
+                                .unwrap_or(false);
                             if field_name.starts_with("__domain_") {
                                 state.apply_domain_field_edit(&field_name, &variant);
+                            } else if is_bool_field {
+                                state.apply_edit_for_field(
+                                    &field_name,
+                                    Value::Bool(variant == "On"),
+                                );
                             } else {
                                 state.apply_edit_for_field(&field_name, Value::String(variant));
                             }
@@ -778,8 +802,19 @@ pub fn run_config_overlay(
                             let field_name = picker.field_name.clone();
                             let variant = picker.variants[picker.selected].0.clone();
                             state.enum_picker = None;
+                            let is_bool_field = state
+                                .field_defs
+                                .iter()
+                                .find(|f| f.name == field_name)
+                                .map(|f| matches!(f.kind, FieldKind::Bool))
+                                .unwrap_or(false);
                             if field_name.starts_with("__domain_") {
                                 state.apply_domain_field_edit(&field_name, &variant);
+                            } else if is_bool_field {
+                                state.apply_edit_for_field(
+                                    &field_name,
+                                    Value::Bool(variant == "On"),
+                                );
                             } else {
                                 state.apply_edit_for_field(&field_name, Value::String(variant));
                             }
@@ -988,7 +1023,11 @@ pub fn run_config_overlay(
                                 } else {
                                     match &row.kind {
                                         FieldKind::Bool => {
-                                            state.toggle_bool(&row.field_name);
+                                            let current = row
+                                                .proposed_value
+                                                .as_ref()
+                                                .unwrap_or(&row.current_value);
+                                            state.open_bool_picker(&row.field_name, current);
                                         }
                                         FieldKind::Enum(variants) => {
                                             let current_str = row
@@ -1189,7 +1228,14 @@ pub fn run_config_overlay(
                                                 } else if OverlayState::is_row_editable(&sr) {
                                                     match &sr.kind {
                                                         FieldKind::Bool => {
-                                                            state.toggle_bool(&sr.field_name);
+                                                            let current = sr
+                                                                .proposed_value
+                                                                .as_ref()
+                                                                .unwrap_or(&sr.current_value);
+                                                            state.open_bool_picker(
+                                                                &sr.field_name,
+                                                                current,
+                                                            );
                                                         }
                                                         FieldKind::Enum(variants) => {
                                                             let current_str = sr
