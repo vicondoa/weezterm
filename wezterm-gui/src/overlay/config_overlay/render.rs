@@ -588,6 +588,14 @@ fn render_enum_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, pa
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
+    // Compute max variant name width for alignment (prefix + name)
+    let max_name_w = picker
+        .variants
+        .iter()
+        .map(|(v, _)| v.len() + 4) // 4 = prefix " ▸ " or "   "
+        .max()
+        .unwrap_or(10);
+
     let items: Vec<ListItem> = picker
         .variants
         .iter()
@@ -595,8 +603,11 @@ fn render_enum_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, pa
         .map(|(i, (variant, desc))| {
             let is_sel = i == picker.selected;
             let prefix = if is_sel { " \u{25b8} " } else { "   " };
+            let name_text = format!("{}{}", prefix, variant);
+            // Pad variant name to align descriptions
+            let padded = format!("{:<width$}", name_text, width = max_name_w);
             let mut spans = vec![Span::styled(
-                format!("{}{}", prefix, variant),
+                padded,
                 if is_sel { theme.selected } else { theme.text },
             )];
             if !desc.is_empty() {
@@ -635,7 +646,6 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
         None => return,
     };
 
-    // Use most of the overlay area
     let popup_w = parent.width.saturating_sub(4).min(80).max(40);
     let popup_h = parent.height.saturating_sub(4).min(30).max(10);
     let popup_x = parent.x + (parent.width.saturating_sub(popup_w)) / 2;
@@ -659,7 +669,6 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
 
-    // Split inner into filter bar + list
     let vert = Layout::default()
         .direction(Direction::Vertical)
         .constraints([Constraint::Length(1), Constraint::Min(3)])
@@ -668,7 +677,6 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
     let filter_bar = vert[0];
     let list_area = vert[1];
 
-    // Filter bar
     let filter_display = if picker.filter.is_empty() {
         " / type to filter...".to_string()
     } else {
@@ -684,7 +692,7 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
     ));
     frame.render_widget(filter_para, filter_bar);
 
-    // Each scheme takes 2 lines; compute visible window
+    // Each scheme takes 2 lines
     let visible_items = list_area.height as usize / 2;
     let scroll = if picker.selected >= visible_items {
         picker.selected.saturating_sub(visible_items - 1)
@@ -692,8 +700,10 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
         0
     };
 
-    // Column for right-aligned swatches
-    let swatch_col = inner.width.saturating_sub(22) as usize;
+    let content_w = inner.width as usize;
+    // Swatch block: 8 ansi + 1 space + 8 bright = 17 chars
+    let swatch_w = 17usize;
+    let name_col_w = content_w.saturating_sub(swatch_w + 1);
 
     let items: Vec<ListItem> = picker
         .filtered
@@ -705,97 +715,88 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
             let (name, palette) = &picker.schemes[scheme_idx];
             let is_sel = vis_idx + scroll == picker.selected;
 
-            // Get scheme colors for rendering
-            let scheme_fg = palette
-                .foreground
-                .map(|c| {
-                    let (r, g, b, _) = c.to_srgb_u8();
-                    ratatui::style::Color::Rgb(r, g, b)
-                })
-                .unwrap_or(ratatui::style::Color::White);
-            let scheme_bg = palette
-                .background
-                .map(|c| {
-                    let (r, g, b, _) = c.to_srgb_u8();
-                    ratatui::style::Color::Rgb(r, g, b)
-                })
-                .unwrap_or(ratatui::style::Color::Black);
+            let scheme_fg = palette_color(palette.foreground, ratatui::style::Color::White);
+            let scheme_bg = palette_color(palette.background, ratatui::style::Color::Black);
 
-            // Selection uses scheme's own selection colors, or fg/bg swap
             let (row_fg, row_bg) = if is_sel {
-                let sel_fg = palette
-                    .selection_fg
-                    .map(|c| {
-                        let (r, g, b, _) = c.to_srgb_u8();
-                        ratatui::style::Color::Rgb(r, g, b)
-                    })
-                    .unwrap_or(scheme_bg);
-                let sel_bg = palette
-                    .selection_bg
-                    .map(|c| {
-                        let (r, g, b, _) = c.to_srgb_u8();
-                        ratatui::style::Color::Rgb(r, g, b)
-                    })
-                    .unwrap_or(scheme_fg);
+                let sel_fg = palette_color(palette.selection_fg, scheme_bg);
+                let sel_bg = palette_color(palette.selection_bg, scheme_fg);
                 (sel_fg, sel_bg)
             } else {
                 (scheme_fg, scheme_bg)
             };
 
-            let name_style = ratatui::style::Style::default().fg(row_fg).bg(row_bg);
-            let dim_style = ratatui::style::Style::default()
-                .fg(row_fg)
-                .bg(row_bg)
-                .add_modifier(Modifier::DIM);
+            let base = ratatui::style::Style::default().fg(row_fg).bg(row_bg);
 
-            // Line 1: selector + scheme name + right-aligned swatches
-            let prefix = if is_sel { " \u{25b8} " } else { "   " };
-            let name_text = format!("{}{}", prefix, name);
-            let pad_len = swatch_col.saturating_sub(name_text.len());
+            // Line 1: " name                    ████████ ████████"
+            let display_name = if name.len() > name_col_w.saturating_sub(2) {
+                format!(" {}...", &name[..name_col_w.saturating_sub(5)])
+            } else {
+                format!(" {}", name)
+            };
+            let pad_len = name_col_w.saturating_sub(display_name.len());
             let padding = " ".repeat(pad_len);
 
-            let mut line1_spans = vec![
-                Span::styled(name_text, name_style),
-                Span::styled(padding, name_style),
+            let mut line1 = vec![
+                Span::styled(display_name, base),
+                Span::styled(padding, base),
             ];
 
-            // Add ANSI color swatches
+            // ANSI swatches
             if let Some(ansi) = &palette.ansi {
                 for color in ansi.iter() {
-                    let (r, g, b, _) = color.to_srgb_u8();
-                    line1_spans.push(Span::styled(
+                    let c = rgba_to_color(color);
+                    line1.push(Span::styled(
                         "\u{2588}",
-                        ratatui::style::Style::default()
-                            .fg(ratatui::style::Color::Rgb(r, g, b))
-                            .bg(row_bg),
+                        ratatui::style::Style::default().fg(c).bg(row_bg),
                     ));
                 }
+            } else {
+                line1.push(Span::styled("        ", base));
             }
+            line1.push(Span::styled(" ", base));
             if let Some(brights) = &palette.brights {
-                line1_spans.push(Span::styled(" ", name_style));
                 for color in brights.iter() {
-                    let (r, g, b, _) = color.to_srgb_u8();
-                    line1_spans.push(Span::styled(
+                    let c = rgba_to_color(color);
+                    line1.push(Span::styled(
                         "\u{2588}",
-                        ratatui::style::Style::default()
-                            .fg(ratatui::style::Color::Rgb(r, g, b))
-                            .bg(row_bg),
+                        ratatui::style::Style::default().fg(c).bg(row_bg),
                     ));
                 }
+            } else {
+                line1.push(Span::styled("        ", base));
             }
 
-            // Line 2: example text in scheme colors
-            let example = "   Hello World ~$ ls -la";
-            let example_pad = " ".repeat(inner.width.saturating_sub(example.len() as u16).into());
-            let line2_spans = vec![
-                Span::styled(example, dim_style),
-                Span::styled(example_pad, name_style),
+            // Line 2: example text in scheme colors, full width
+            let example = " user@host:~ $ echo hello";
+            let ex_len = example.len().min(content_w);
+            let ex_pad = " ".repeat(content_w.saturating_sub(ex_len));
+            let line2 = vec![
+                Span::styled(&example[..ex_len], base),
+                Span::styled(ex_pad, base),
             ];
 
-            ListItem::new(vec![Line::from(line1_spans), Line::from(line2_spans)])
+            ListItem::new(vec![Line::from(line1), Line::from(line2)])
         })
         .collect();
 
     let list = List::new(items);
     frame.render_widget(list, list_area);
+}
+
+fn palette_color(
+    color: Option<config::RgbaColor>,
+    fallback: ratatui::style::Color,
+) -> ratatui::style::Color {
+    color
+        .map(|c| {
+            let (r, g, b, _) = c.to_srgb_u8();
+            ratatui::style::Color::Rgb(r, g, b)
+        })
+        .unwrap_or(fallback)
+}
+
+fn rgba_to_color(color: &config::RgbaColor) -> ratatui::style::Color {
+    let (r, g, b, _) = color.to_srgb_u8();
+    ratatui::style::Color::Rgb(r, g, b)
 }

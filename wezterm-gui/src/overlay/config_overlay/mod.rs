@@ -243,17 +243,15 @@ impl OverlayState {
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
-                let status = if self.lua_set_fields.contains(f.name) && proposed_val.is_none() {
-                    // Lua explicitly set this field and we have no proposal
+                let status = if self.lua_set_fields.contains(f.name) {
+                    // Lua explicitly set this field
                     FieldStatus::FixedByLua
+                } else if proposed_val.is_some() {
+                    // User has proposed a change
+                    FieldStatus::Editable
                 } else {
-                    match proposed_val {
-                        None => FieldStatus::Inherited,
-                        Some(pv) => match effective_val {
-                            Some(ev) if data::values_equal(pv, ev) => FieldStatus::Editable,
-                            _ => FieldStatus::FixedByLua,
-                        },
-                    }
+                    // Using default, no Lua override, no proposal
+                    FieldStatus::Inherited
                 };
 
                 SettingRow {
