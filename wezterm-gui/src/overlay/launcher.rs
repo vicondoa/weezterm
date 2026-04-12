@@ -362,6 +362,17 @@ impl LauncherState {
             key_entries.sort_by(|a, b| a.label.cmp(&b.label));
             self.entries.append(&mut key_entries);
         }
+
+        // --- weezterm remote features ---
+        // When showing domains (e.g. from the new-tab dropdown), append a
+        // "Configure WezTerm" entry at the bottom.
+        if args.flags.contains(LauncherFlags::DOMAINS) {
+            self.entries.push(Entry {
+                label: "─── Configure WezTerm...".to_string(),
+                action: KeyAssignment::ShowConfigOverlay,
+            });
+        }
+        // --- end weezterm remote features ---
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
