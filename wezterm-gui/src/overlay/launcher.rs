@@ -364,11 +364,15 @@ impl LauncherState {
         }
 
         // --- weezterm remote features ---
-        // When showing domains (e.g. from the new-tab dropdown), append a
-        // "Configure WeezTerm" entry at the bottom.
+        // When showing domains (e.g. from the new-tab dropdown), append an
+        // "Edit Configuration" entry after a blank separator line.
         if args.flags.contains(LauncherFlags::DOMAINS) {
             self.entries.push(Entry {
-                label: "─── Configure WeezTerm...".to_string(),
+                label: " ".to_string(),
+                action: KeyAssignment::DisableDefaultAssignment,
+            });
+            self.entries.push(Entry {
+                label: "Edit Configuration".to_string(),
                 action: KeyAssignment::ShowConfigOverlay,
             });
         }
