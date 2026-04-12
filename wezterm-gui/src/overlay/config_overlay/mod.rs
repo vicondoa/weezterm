@@ -92,6 +92,8 @@ struct OverlayState {
     effective_values: HashMap<String, Value>,
     #[allow(dead_code)]
     default_values: HashMap<String, Value>,
+    /// Fields that the Lua config explicitly set (even if to defaults).
+    lua_set_fields: std::collections::HashSet<String>,
     field_defs: Vec<FieldDef>,
     dirty: bool,
     /// Inline edit mode: field name + buffer
@@ -185,6 +187,9 @@ impl OverlayState {
             });
         }
 
+        // Get fields explicitly set by Lua config
+        let lua_set_fields = config::lua_explicitly_set_fields();
+
         Self {
             active_panel: Panel::Settings,
             sections,
@@ -196,6 +201,7 @@ impl OverlayState {
             proposals,
             effective_values,
             default_values,
+            lua_set_fields,
             field_defs,
             dirty: false,
             inline_edit: None,
@@ -237,12 +243,17 @@ impl OverlayState {
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
-                let status = match proposed_val {
-                    None => FieldStatus::Inherited,
-                    Some(pv) => match effective_val {
-                        Some(ev) if data::values_equal(pv, ev) => FieldStatus::Editable,
-                        _ => FieldStatus::FixedByLua,
-                    },
+                let status = if self.lua_set_fields.contains(f.name) && proposed_val.is_none() {
+                    // Lua explicitly set this field and we have no proposal
+                    FieldStatus::FixedByLua
+                } else {
+                    match proposed_val {
+                        None => FieldStatus::Inherited,
+                        Some(pv) => match effective_val {
+                            Some(ev) if data::values_equal(pv, ev) => FieldStatus::Editable,
+                            _ => FieldStatus::FixedByLua,
+                        },
+                    }
                 };
 
                 SettingRow {

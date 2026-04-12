@@ -1144,6 +1144,23 @@ impl Config {
                 )?;
                 let config = Config::apply_overrides_to(&lua, config)?;
                 let config = Config::apply_overrides_obj_to(&lua, config, overrides)?;
+
+                // --- weezterm remote features ---
+                // Capture which top-level keys are present in the Lua config table.
+                // This tells us which fields the user explicitly set (even to defaults).
+                if let mlua::Value::Table(ref tbl) = config {
+                    let mut keys = std::collections::HashSet::new();
+                    for pair in tbl.clone().pairs::<mlua::Value, mlua::Value>() {
+                        if let Ok((mlua::Value::String(k), _)) = pair {
+                            if let Ok(s) = k.to_str() {
+                                keys.insert(s.to_string());
+                            }
+                        }
+                    }
+                    crate::set_lua_config_keys(keys);
+                }
+                // --- end weezterm remote features ---
+
                 cfg = Config::from_lua(config, &lua).with_context(|| {
                     format!(
                         "Error converting lua value returned by script {} to Config struct",
