@@ -191,6 +191,8 @@ pub enum FieldKind {
     Text,
     /// Enum with (variant_name, description) pairs.
     Enum(Vec<(String, String)>),
+    /// Color scheme selector — shows a searchable picker with color previews.
+    ColorScheme,
 }
 
 /// Metadata for a single config field exposed in the overlay.
@@ -227,7 +229,7 @@ pub fn get_field_defs() -> Vec<FieldDef> {
             "color_scheme",
             "Color Scheme",
             General,
-            Text,
+            ColorScheme,
             "Name of the color scheme to use",
         ),
         f(
@@ -932,6 +934,27 @@ pub fn extract_values(config_value: &Value) -> HashMap<String, Value> {
         }
     }
     map
+}
+
+/// Get sorted color scheme names with their palettes for the color scheme picker.
+pub fn get_color_schemes() -> Vec<(String, config::Palette)> {
+    let builtin = &config::COLOR_SCHEMES;
+    let user_config = config::configuration();
+
+    let mut schemes: Vec<(String, config::Palette)> = builtin
+        .iter()
+        .map(|(name, palette)| (name.clone(), palette.clone()))
+        .collect();
+
+    // Add user-defined schemes from config
+    for (name, palette) in &user_config.color_schemes {
+        if !schemes.iter().any(|(n, _)| n == name) {
+            schemes.push((name.clone(), palette.clone()));
+        }
+    }
+
+    schemes.sort_by(|(a, _), (b, _)| a.to_lowercase().cmp(&b.to_lowercase()));
+    schemes
 }
 
 /// Convert an overlay SshDomainConfig to a config::SshDomain for runtime registration.

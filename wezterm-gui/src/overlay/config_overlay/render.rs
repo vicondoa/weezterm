@@ -117,6 +117,11 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
         render_enum_picker(frame, state, theme, area);
     }
 
+    // ── Color scheme picker popup ────────────────────────────────────
+    if state.scheme_picker.is_some() {
+        render_scheme_picker(frame, state, theme, area);
+    }
+
     LayoutGeo {
         left_pad,
         top_pad,
@@ -390,6 +395,7 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         FieldKind::Integer => "int",
                         FieldKind::Text => "text",
                         FieldKind::Enum(_) => "enum",
+                        FieldKind::ColorScheme => "scheme",
                     })
                     .unwrap_or(match &row.kind {
                         FieldKind::Bool => "bool",
@@ -397,6 +403,7 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         FieldKind::Integer => "int",
                         FieldKind::Text => "text",
                         FieldKind::Enum(_) => "enum",
+                        FieldKind::ColorScheme => "scheme",
                     });
                 let status_str = match row.status {
                     FieldStatus::Inherited => "Inherited",
@@ -508,6 +515,7 @@ fn render_edit_popup(frame: &mut Frame, state: &OverlayState, theme: &Theme, par
         super::data::FieldKind::Integer => "Enter a whole number",
         super::data::FieldKind::Text => "Type a value",
         super::data::FieldKind::Enum(_) => "Choose from options below",
+        super::data::FieldKind::ColorScheme => "Type a color scheme name",
     };
 
     let mut lines = vec![
@@ -617,4 +625,133 @@ fn render_enum_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, pa
 
     let list = List::new(all_items);
     frame.render_widget(list, inner);
+}
+
+// ─── Color scheme picker popup ──────────────────────────────────────────────
+
+fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, parent: Rect) {
+    let picker = match &state.scheme_picker {
+        Some(p) => p,
+        None => return,
+    };
+
+    // Use most of the overlay area
+    let popup_w = parent.width.saturating_sub(4).min(80).max(40);
+    let popup_h = parent.height.saturating_sub(4).min(30).max(10);
+    let popup_x = parent.x + (parent.width.saturating_sub(popup_w)) / 2;
+    let popup_y = parent.y + (parent.height.saturating_sub(popup_h)) / 2;
+    let popup_area = Rect::new(popup_x, popup_y, popup_w, popup_h);
+
+    frame.render_widget(ratatui::widgets::Clear, popup_area);
+
+    let filter_display = if picker.filter.is_empty() {
+        "type to filter...".to_string()
+    } else {
+        format!("/{}", picker.filter)
+    };
+    let title = format!(
+        " Color Scheme ({}/{}) ",
+        picker.filtered.len(),
+        picker.schemes.len()
+    );
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(theme.border)
+        .title(Span::styled(title, theme.header))
+        .style(theme.text);
+
+    let inner = block.inner(popup_area);
+    frame.render_widget(block, popup_area);
+
+    // Split inner into filter bar + list
+    let vert = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(1), Constraint::Min(3)])
+        .split(inner);
+
+    let filter_bar = vert[0];
+    let list_area = vert[1];
+
+    // Filter bar
+    let filter_para = Paragraph::new(Span::styled(
+        format!(" {}", filter_display),
+        if picker.filter.is_empty() {
+            theme.text_dim
+        } else {
+            theme.text
+        },
+    ));
+    frame.render_widget(filter_para, filter_bar);
+
+    // Compute visible window
+    let visible_h = list_area.height as usize;
+    let scroll = if picker.selected >= visible_h {
+        picker.selected.saturating_sub(visible_h - 1)
+    } else {
+        0
+    };
+
+    let items: Vec<ListItem> = picker
+        .filtered
+        .iter()
+        .skip(scroll)
+        .take(visible_h)
+        .enumerate()
+        .map(|(vis_idx, &scheme_idx)| {
+            let (name, palette) = &picker.schemes[scheme_idx];
+            let is_sel = vis_idx + scroll == picker.selected;
+            let prefix = if is_sel { " \u{25b8} " } else { "   " };
+
+            let name_style = if is_sel { theme.selected } else { theme.text };
+
+            // Build color swatches from palette ANSI colors
+            let mut spans = vec![Span::styled(format!("{}{}", prefix, name), name_style)];
+
+            // Add space then color swatches
+            spans.push(Span::raw("  "));
+
+            // Show fg/bg + first 8 ANSI colors as colored blocks
+            if let Some(bg) = &palette.background {
+                let (r, g, b, _) = bg.to_srgb_u8();
+                spans.push(Span::styled(
+                    "\u{2588}\u{2588}",
+                    ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
+                ));
+            }
+            if let Some(fg) = &palette.foreground {
+                let (r, g, b, _) = fg.to_srgb_u8();
+                spans.push(Span::styled(
+                    "\u{2588}\u{2588}",
+                    ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
+                ));
+            }
+
+            if let Some(ansi) = &palette.ansi {
+                spans.push(Span::raw(" "));
+                for color in ansi.iter() {
+                    let (r, g, b, _) = color.to_srgb_u8();
+                    spans.push(Span::styled(
+                        "\u{2588}",
+                        ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
+                    ));
+                }
+            }
+
+            if let Some(brights) = &palette.brights {
+                for color in brights.iter() {
+                    let (r, g, b, _) = color.to_srgb_u8();
+                    spans.push(Span::styled(
+                        "\u{2588}",
+                        ratatui::style::Style::default().fg(ratatui::style::Color::Rgb(r, g, b)),
+                    ));
+                }
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect();
+
+    let list = List::new(items);
+    frame.render_widget(list, list_area);
 }

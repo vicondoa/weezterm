@@ -98,6 +98,8 @@ struct OverlayState {
     inline_edit: Option<InlineEdit>,
     /// Enum picker popup: field name + variants + selected index
     enum_picker: Option<EnumPicker>,
+    /// Color scheme picker popup.
+    scheme_picker: Option<ColorSchemePicker>,
     /// Domain entries (Lua-sourced + overlay-sourced).
     domain_entries: Vec<data::DomainEntry>,
     /// Domain being added/edited inline (None = not in domain edit mode).
@@ -118,6 +120,33 @@ struct EnumPicker {
     field_name: String,
     variants: Vec<(String, String)>,
     selected: usize,
+}
+
+/// State for the color scheme picker popup.
+pub(crate) struct ColorSchemePicker {
+    pub schemes: Vec<(String, config::Palette)>,
+    pub filtered: Vec<usize>,
+    pub selected: usize,
+    pub filter: String,
+    pub scroll_offset: usize,
+}
+
+impl ColorSchemePicker {
+    fn refilter(&mut self) {
+        let filter_lower = self.filter.to_lowercase();
+        self.filtered = if filter_lower.is_empty() {
+            (0..self.schemes.len()).collect()
+        } else {
+            self.schemes
+                .iter()
+                .enumerate()
+                .filter(|(_, (name, _))| name.to_lowercase().contains(&filter_lower))
+                .map(|(i, _)| i)
+                .collect()
+        };
+        self.selected = 0;
+        self.scroll_offset = 0;
+    }
 }
 
 impl OverlayState {
@@ -171,6 +200,7 @@ impl OverlayState {
             dirty: false,
             inline_edit: None,
             enum_picker: None,
+            scheme_picker: None,
             domain_entries,
             adding_domain: None,
             domains_dirty: false,
@@ -336,6 +366,39 @@ impl OverlayState {
         settings.into_iter().nth(self.selected_setting)
     }
 
+    /// Returns true if the row can be edited (not FixedByLua).
+    fn is_row_editable(row: &SettingRow) -> bool {
+        row.status != FieldStatus::FixedByLua
+    }
+
+    /// Open the color scheme picker popup.
+    fn open_scheme_picker(&mut self) {
+        let schemes = data::get_color_schemes();
+        let current = self
+            .proposals
+            .get("color_scheme")
+            .or_else(|| self.effective_values.get("color_scheme"))
+            .and_then(|v| match v {
+                Value::String(s) => Some(s.clone()),
+                _ => None,
+            })
+            .unwrap_or_default();
+
+        let filtered: Vec<usize> = (0..schemes.len()).collect();
+        let selected = schemes
+            .iter()
+            .position(|(name, _)| name == &current)
+            .unwrap_or(0);
+
+        self.scheme_picker = Some(ColorSchemePicker {
+            schemes,
+            filtered,
+            selected,
+            filter: String::new(),
+            scroll_offset: 0,
+        });
+    }
+
     /// Apply an edit: toggle bool, cycle enum, or accept inline text.
     fn apply_edit_for_field(&mut self, field_name: &str, new_value: Value) {
         self.proposals.insert(field_name.to_string(), new_value);
@@ -454,6 +517,9 @@ impl OverlayState {
                                 buffer: row.current_value.clone(),
                                 kind: row.kind.clone(),
                             });
+                        }
+                        FieldKind::ColorScheme => {
+                            // Domain fields don't use color scheme picker
                         }
                     }
                 }
@@ -714,6 +780,68 @@ pub fn run_config_overlay(
                     continue;
                 }
 
+                // If in color scheme picker mode, handle picker input
+                if let Some(ref mut picker) = state.scheme_picker {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            state.scheme_picker = None;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            if let Some(&idx) = picker.filtered.get(picker.selected) {
+                                let name = picker.schemes[idx].0.clone();
+                                state.scheme_picker = None;
+                                state.apply_edit_for_field("color_scheme", Value::String(name));
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::UpArrow,
+                            ..
+                        })
+                        | InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char('k'),
+                            modifiers: Modifiers::CTRL,
+                        }) => {
+                            if picker.selected > 0 {
+                                picker.selected -= 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::DownArrow,
+                            ..
+                        })
+                        | InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char('j'),
+                            modifiers: Modifiers::CTRL,
+                        }) => {
+                            if picker.selected + 1 < picker.filtered.len() {
+                                picker.selected += 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Backspace,
+                            ..
+                        }) => {
+                            picker.filter.pop();
+                            picker.refilter();
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(c),
+                            ..
+                        }) => {
+                            picker.filter.push(c);
+                            picker.refilter();
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+
                 // If in filter mode, handle filter input
                 if state.filter_active {
                     match input {
@@ -834,7 +962,6 @@ pub fn run_config_overlay(
                         ..
                     }) => {
                         if state.active_panel == Panel::Sections {
-                            // Enter on a section switches to Settings panel
                             state.active_panel = Panel::Settings;
                             state.selected_setting = 0;
                             state.settings_scroll_offset = 0;
@@ -847,13 +974,14 @@ pub fn run_config_overlay(
                                     || row.field_name.starts_with(DELETE_DOMAIN_FIELD_NAME)
                                 {
                                     state.handle_domain_enter(&row);
+                                } else if !OverlayState::is_row_editable(&row) {
+                                    // FixedByLua: don't allow edits
                                 } else {
                                     match &row.kind {
                                         FieldKind::Bool => {
                                             state.toggle_bool(&row.field_name);
                                         }
                                         FieldKind::Enum(variants) => {
-                                            // Open enum picker popup
                                             let current_str = row
                                                 .proposed_value
                                                 .as_ref()
@@ -867,6 +995,9 @@ pub fn run_config_overlay(
                                                 variants: variants.clone(),
                                                 selected: sel_idx,
                                             });
+                                        }
+                                        FieldKind::ColorScheme => {
+                                            state.open_scheme_picker();
                                         }
                                         FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
                                             let initial = row
@@ -894,7 +1025,6 @@ pub fn run_config_overlay(
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
                                 if let Some(domain_idx) = row.domain_child {
-                                    // Domain child field
                                     if let Some(field_key) =
                                         extract_domain_field_key(&row.field_name)
                                     {
@@ -910,13 +1040,16 @@ pub fn run_config_overlay(
                                     }
                                 } else if row.domain_header.is_some() {
                                     state.handle_domain_enter(&row);
-                                } else {
+                                } else if OverlayState::is_row_editable(&row) {
                                     match &row.kind {
                                         FieldKind::Bool => {
                                             state.toggle_bool(&row.field_name);
                                         }
                                         FieldKind::Enum(_) => {
                                             state.cycle_enum(&row.field_name, 1);
+                                        }
+                                        FieldKind::ColorScheme => {
+                                            state.open_scheme_picker();
                                         }
                                         _ => {}
                                     }
@@ -932,11 +1065,10 @@ pub fn run_config_overlay(
                     }) => {
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
-                                match &row.kind {
-                                    FieldKind::Enum(_) => {
+                                if OverlayState::is_row_editable(&row) {
+                                    if let FieldKind::Enum(_) = &row.kind {
                                         state.cycle_enum(&row.field_name, -1);
                                     }
-                                    _ => {}
                                 }
                             }
                         }
@@ -947,11 +1079,10 @@ pub fn run_config_overlay(
                     }) => {
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
-                                match &row.kind {
-                                    FieldKind::Enum(_) => {
+                                if OverlayState::is_row_editable(&row) {
+                                    if let FieldKind::Enum(_) = &row.kind {
                                         state.cycle_enum(&row.field_name, 1);
                                     }
-                                    _ => {}
                                 }
                             }
                         }
@@ -1046,13 +1177,28 @@ pub fn run_config_overlay(
                                                         .starts_with(DELETE_DOMAIN_FIELD_NAME)
                                                 {
                                                     state.handle_domain_enter(&sr);
-                                                } else {
+                                                } else if OverlayState::is_row_editable(&sr) {
                                                     match &sr.kind {
                                                         FieldKind::Bool => {
                                                             state.toggle_bool(&sr.field_name);
                                                         }
-                                                        FieldKind::Enum(_) => {
-                                                            state.cycle_enum(&sr.field_name, 1);
+                                                        FieldKind::Enum(variants) => {
+                                                            let current_str = sr
+                                                                .proposed_value
+                                                                .as_ref()
+                                                                .unwrap_or(&sr.current_value);
+                                                            let sel_idx = variants
+                                                                .iter()
+                                                                .position(|(v, _)| v == current_str)
+                                                                .unwrap_or(0);
+                                                            state.enum_picker = Some(EnumPicker {
+                                                                field_name: sr.field_name.clone(),
+                                                                variants: variants.clone(),
+                                                                selected: sel_idx,
+                                                            });
+                                                        }
+                                                        FieldKind::ColorScheme => {
+                                                            state.open_scheme_picker();
                                                         }
                                                         FieldKind::Float
                                                         | FieldKind::Integer
