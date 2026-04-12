@@ -5,6 +5,155 @@
 use std::collections::HashMap;
 use wezterm_dynamic::Value;
 
+/// A user-managed SSH domain configuration (simplified subset of config::SshDomain).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SshDomainConfig {
+    pub name: String,
+    pub remote_address: String,
+    pub username: String,
+    pub multiplexing: String,
+    pub ssh_backend: String,
+    pub no_agent_auth: bool,
+    pub connect_automatically: bool,
+}
+
+impl Default for SshDomainConfig {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            remote_address: String::new(),
+            username: String::new(),
+            multiplexing: "None".to_string(),
+            ssh_backend: "LibSsh".to_string(),
+            no_agent_auth: false,
+            connect_automatically: false,
+        }
+    }
+}
+
+/// Source of a domain entry — from Lua config or from the overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DomainSource {
+    /// Domain is defined in the Lua config file (read-only).
+    Lua,
+    /// Domain is managed by the overlay (editable).
+    Overlay,
+}
+
+/// A domain entry with its source and config.
+#[derive(Debug, Clone)]
+pub struct DomainEntry {
+    pub config: SshDomainConfig,
+    pub source: DomainSource,
+    pub expanded: bool,
+}
+
+/// The per-domain fields shown when a domain group is expanded.
+pub fn domain_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)> {
+    use FieldKind::*;
+    vec![
+        (
+            "remote_address",
+            "Remote Address",
+            Text,
+            "host:port of the remote server",
+        ),
+        ("username", "Username", Text, "SSH username"),
+        (
+            "multiplexing",
+            "Multiplexing",
+            Enum(ev(&[
+                ("None", "Direct SSH connection (no mux server)"),
+                ("WezTerm", "Use WezTerm mux server on remote"),
+            ])),
+            "SSH multiplexing mode",
+        ),
+        (
+            "ssh_backend",
+            "SSH Backend",
+            Enum(ev(&[
+                ("LibSsh", "Use the libssh library (default)"),
+                ("Ssh2", "Use the libssh2 library"),
+            ])),
+            "SSH implementation to use",
+        ),
+        (
+            "no_agent_auth",
+            "Disable Agent Auth",
+            Bool,
+            "Disable SSH agent authentication",
+        ),
+        (
+            "connect_automatically",
+            "Auto Connect",
+            Bool,
+            "Connect to this domain at startup",
+        ),
+    ]
+}
+
+/// Read a field value from an SshDomainConfig by field name.
+pub fn domain_field_value(config: &SshDomainConfig, field: &str) -> String {
+    match field {
+        "remote_address" => config.remote_address.clone(),
+        "username" => {
+            if config.username.is_empty() {
+                "-".to_string()
+            } else {
+                config.username.clone()
+            }
+        }
+        "multiplexing" => config.multiplexing.clone(),
+        "ssh_backend" => config.ssh_backend.clone(),
+        "no_agent_auth" => if config.no_agent_auth { "On" } else { "Off" }.to_string(),
+        "connect_automatically" => if config.connect_automatically {
+            "On"
+        } else {
+            "Off"
+        }
+        .to_string(),
+        _ => "-".to_string(),
+    }
+}
+
+/// Write a field value to an SshDomainConfig by field name.
+pub fn set_domain_field(config: &mut SshDomainConfig, field: &str, value: &str) {
+    match field {
+        "remote_address" => config.remote_address = value.to_string(),
+        "username" => config.username = value.to_string(),
+        "multiplexing" => config.multiplexing = value.to_string(),
+        "ssh_backend" => config.ssh_backend = value.to_string(),
+        "no_agent_auth" => config.no_agent_auth = value == "On" || value == "true",
+        "connect_automatically" => config.connect_automatically = value == "On" || value == "true",
+        _ => {}
+    }
+}
+
+/// Build SshDomainConfig entries from the Lua config's ssh_domains.
+pub fn domains_from_config() -> Vec<DomainEntry> {
+    let config = config::configuration();
+    let ssh_domains = config.ssh_domains();
+    ssh_domains
+        .into_iter()
+        .map(|dom| DomainEntry {
+            config: SshDomainConfig {
+                name: dom.name.clone(),
+                remote_address: dom.remote_address.clone(),
+                username: dom.username.clone().unwrap_or_default(),
+                multiplexing: format!("{:?}", dom.multiplexing),
+                ssh_backend: dom
+                    .ssh_backend
+                    .map(|b| format!("{:?}", b))
+                    .unwrap_or_else(|| "LibSsh".to_string()),
+                no_agent_auth: dom.no_agent_auth,
+                connect_automatically: dom.connect_automatically,
+            },
+            source: DomainSource::Lua,
+            expanded: false,
+        })
+        .collect()
+}
+
 /// A section grouping related config fields in the overlay UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Section {
@@ -783,4 +932,32 @@ pub fn extract_values(config_value: &Value) -> HashMap<String, Value> {
         }
     }
     map
+}
+
+/// Convert an overlay SshDomainConfig to a config::SshDomain for runtime registration.
+pub fn to_config_ssh_domain(dom: &SshDomainConfig) -> config::SshDomain {
+    use config::{SshBackend, SshMultiplexing};
+    let multiplexing = match dom.multiplexing.as_str() {
+        "WezTerm" => SshMultiplexing::WezTerm,
+        _ => SshMultiplexing::None,
+    };
+    let ssh_backend = match dom.ssh_backend.as_str() {
+        "Ssh2" => Some(SshBackend::Ssh2),
+        "LibSsh" => Some(SshBackend::LibSsh),
+        _ => None,
+    };
+    config::SshDomain {
+        name: dom.name.clone(),
+        remote_address: dom.remote_address.clone(),
+        username: if dom.username.is_empty() {
+            None
+        } else {
+            Some(dom.username.clone())
+        },
+        multiplexing,
+        ssh_backend,
+        no_agent_auth: dom.no_agent_auth,
+        connect_automatically: dom.connect_automatically,
+        ..Default::default()
+    }
 }

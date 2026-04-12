@@ -200,6 +200,79 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
         .map(|(i, setting)| {
             let is_selected = i == state.selected_setting && state.active_panel == Panel::Settings;
             let prefix = if is_selected { " \u{25b8} " } else { "   " };
+
+            // Domain group header row
+            if let Some(ref header) = setting.domain_header {
+                let arrow = if header.expanded {
+                    "\u{25be}"
+                } else {
+                    "\u{25b8}"
+                };
+                let label = format!(" {} {} ", arrow, setting.display_name);
+                let badge = match header.source {
+                    super::data::DomainSource::Lua => "lua",
+                    super::data::DomainSource::Overlay => "editable",
+                };
+                let (name_style, val_style, bdg_style) = if is_selected {
+                    (theme.selected, theme.selected_value, theme.selected_badge)
+                } else {
+                    (
+                        theme.text.add_modifier(Modifier::BOLD),
+                        theme.value,
+                        match header.source {
+                            super::data::DomainSource::Lua => theme.badge_inherited,
+                            super::data::DomainSource::Overlay => theme.badge_editable,
+                        },
+                    )
+                };
+                let sep_line = "\u{2500}".repeat(name_w.saturating_sub(label.len()).max(1));
+                let name_cell = Line::from(vec![
+                    Span::styled(label, name_style),
+                    Span::styled(sep_line, theme.border),
+                ]);
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::styled(setting.current_value.clone(), val_style),
+                    ratatui::text::Text::styled(badge.to_string(), bdg_style),
+                ]);
+            }
+
+            // "Add SSH Domain..." action row
+            if setting.field_name == super::ADD_DOMAIN_FIELD_NAME {
+                let label = format!("{}+ {}", prefix, setting.display_name);
+                let style = if is_selected {
+                    theme.selected
+                } else {
+                    theme.value_proposed
+                };
+                let name_cell = Line::from(Span::styled(label, style));
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::raw(""),
+                    ratatui::text::Text::raw(""),
+                ]);
+            }
+
+            // "Delete Domain" action row
+            if setting
+                .field_name
+                .starts_with(super::DELETE_DOMAIN_FIELD_NAME)
+            {
+                let label = format!("{}  \u{2717} Delete Domain", prefix);
+                let style = if is_selected {
+                    theme.selected
+                } else {
+                    theme.badge_fixed
+                };
+                let name_cell = Line::from(Span::styled(label, style));
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::raw(""),
+                    ratatui::text::Text::raw(""),
+                ]);
+            }
+
+            // Regular setting row (including domain child fields)
             let name = &setting.display_name;
             let value = setting
                 .proposed_value
@@ -275,38 +348,88 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
 
     let lines = match selected {
         Some(row) => {
-            let field_def = state.field_defs.iter().find(|f| f.name == row.field_name);
-            let kind_label = field_def
-                .map(|fd| match &fd.kind {
-                    FieldKind::Bool => "bool",
-                    FieldKind::Float => "float",
-                    FieldKind::Integer => "int",
-                    FieldKind::Text => "text",
-                    FieldKind::Enum(_) => "enum",
-                })
-                .unwrap_or("?");
-            let status_str = match row.status {
-                FieldStatus::Inherited => "Inherited",
-                FieldStatus::Editable => "Editable",
-                FieldStatus::FixedByLua => "Fixed by Lua",
-            };
-            let val = row.proposed_value.as_ref().unwrap_or(&row.current_value);
+            // Domain header: show domain summary
+            if let Some(ref header) = row.domain_header {
+                let source_str = match header.source {
+                    super::data::DomainSource::Lua => "Lua config",
+                    super::data::DomainSource::Overlay => "User-added",
+                };
+                vec![
+                    Line::from(Span::styled(
+                        format!(" Domain: {} ", row.display_name),
+                        theme.detail_title,
+                    )),
+                    Line::from(Span::styled(
+                        format!(" Host: {}  Source: {}", row.current_value, source_str),
+                        theme.detail,
+                    )),
+                    Line::from(Span::styled(" Enter to expand/collapse", theme.text_dim)),
+                ]
+            } else if row.field_name == super::ADD_DOMAIN_FIELD_NAME {
+                vec![
+                    Line::from(Span::styled(" Add SSH Domain", theme.detail_title)),
+                    Line::from(Span::styled(
+                        " Press Enter to create a new SSH domain",
+                        theme.detail,
+                    )),
+                ]
+            } else if row.field_name.starts_with(super::DELETE_DOMAIN_FIELD_NAME) {
+                vec![
+                    Line::from(Span::styled(" Delete Domain", theme.detail_title)),
+                    Line::from(Span::styled(
+                        " Press Enter to remove this domain",
+                        theme.detail,
+                    )),
+                ]
+            } else {
+                let field_def = state.field_defs.iter().find(|f| f.name == row.field_name);
+                let kind_label = field_def
+                    .map(|fd| match &fd.kind {
+                        FieldKind::Bool => "bool",
+                        FieldKind::Float => "float",
+                        FieldKind::Integer => "int",
+                        FieldKind::Text => "text",
+                        FieldKind::Enum(_) => "enum",
+                    })
+                    .unwrap_or(match &row.kind {
+                        FieldKind::Bool => "bool",
+                        FieldKind::Float => "float",
+                        FieldKind::Integer => "int",
+                        FieldKind::Text => "text",
+                        FieldKind::Enum(_) => "enum",
+                    });
+                let status_str = match row.status {
+                    FieldStatus::Inherited => "Inherited",
+                    FieldStatus::Editable => "Editable",
+                    FieldStatus::FixedByLua => "Fixed by Lua",
+                };
+                let val = row.proposed_value.as_ref().unwrap_or(&row.current_value);
 
-            vec![
-                Line::from(vec![
-                    Span::styled(format!(" {} ", row.display_name), theme.detail_title),
-                    Span::styled(format!("({})  ", row.field_name), theme.detail),
-                    Span::styled(format!("type: {}", kind_label), theme.text_dim),
-                ]),
-                Line::from(vec![
-                    Span::styled(format!(" value: {}  ", val), theme.value),
-                    Span::styled(format!("status: {}", status_str), theme.detail),
-                ]),
-                Line::from(Span::styled(
-                    format!(" {}", field_def.map(|f| f.doc).unwrap_or("")),
-                    theme.text_dim,
-                )),
-            ]
+                let doc = field_def.map(|f| f.doc).unwrap_or("");
+                // For domain child fields, look up doc from domain_field_defs
+                let domain_doc = if row.domain_child.is_some() {
+                    super::data::domain_field_defs()
+                        .iter()
+                        .find(|(key, _, _, _)| row.field_name.ends_with(&format!("{}__", key)))
+                        .map(|(_, _, _, d)| *d)
+                        .unwrap_or(doc)
+                } else {
+                    doc
+                };
+
+                vec![
+                    Line::from(vec![
+                        Span::styled(format!(" {} ", row.display_name), theme.detail_title),
+                        Span::styled(format!("({})  ", row.field_name), theme.detail),
+                        Span::styled(format!("type: {}", kind_label), theme.text_dim),
+                    ]),
+                    Line::from(vec![
+                        Span::styled(format!(" value: {}  ", val), theme.value),
+                        Span::styled(format!("status: {}", status_str), theme.detail),
+                    ]),
+                    Line::from(Span::styled(format!(" {}", domain_doc), theme.text_dim)),
+                ]
+            }
         }
         None => vec![Line::from(Span::styled(
             " Select a setting to view details",

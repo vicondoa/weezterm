@@ -17,15 +17,18 @@ pub mod persistence;
 mod render;
 pub mod theme;
 
-pub use data::{FieldDef, FieldKind, Section};
+pub use data::{FieldDef, FieldKind, Section, SshDomainConfig};
 
 /// Result returned by the config overlay to the caller.
 #[derive(Debug, Clone)]
 pub enum ConfigOverlayAction {
     /// User closed the overlay without saving.
     Close,
-    /// User chose to save proposals.
-    Save(HashMap<String, Value>),
+    /// User chose to save proposals (includes domain changes).
+    Save {
+        proposals: HashMap<String, Value>,
+        ssh_domains: Vec<SshDomainConfig>,
+    },
     /// User chose to preview proposals (apply as window overrides).
     Preview(HashMap<String, Value>),
 }
@@ -50,14 +53,31 @@ pub enum FieldStatus {
 
 /// A displayable setting row.
 #[derive(Debug, Clone)]
-struct SettingRow {
-    field_name: String,
-    display_name: String,
-    current_value: String,
-    proposed_value: Option<String>,
-    status: FieldStatus,
-    kind: FieldKind,
+pub(crate) struct SettingRow {
+    pub field_name: String,
+    pub display_name: String,
+    pub current_value: String,
+    pub proposed_value: Option<String>,
+    pub status: FieldStatus,
+    pub kind: FieldKind,
+    /// If this is a domain group header, holds the domain index.
+    pub domain_header: Option<DomainHeaderInfo>,
+    /// If this is a domain child field, holds the domain index.
+    pub domain_child: Option<usize>,
 }
+
+/// Info for a domain group header row.
+#[derive(Debug, Clone)]
+pub(crate) struct DomainHeaderInfo {
+    pub domain_index: usize,
+    pub source: data::DomainSource,
+    pub expanded: bool,
+}
+
+/// Sentinel row type for "Add SSH Domain..." action.
+const ADD_DOMAIN_FIELD_NAME: &str = "__add_ssh_domain__";
+/// Sentinel row type for "Delete Domain" action.
+const DELETE_DOMAIN_FIELD_NAME: &str = "__delete_domain__";
 
 /// Internal state for the overlay.
 struct OverlayState {
@@ -78,6 +98,12 @@ struct OverlayState {
     inline_edit: Option<InlineEdit>,
     /// Enum picker popup: field name + variants + selected index
     enum_picker: Option<EnumPicker>,
+    /// Domain entries (Lua-sourced + overlay-sourced).
+    domain_entries: Vec<data::DomainEntry>,
+    /// Domain being added/edited inline (None = not in domain edit mode).
+    adding_domain: Option<SshDomainConfig>,
+    /// Whether domain_entries has been modified.
+    domains_dirty: bool,
 }
 
 /// State for inline editing of a field value.
@@ -99,6 +125,7 @@ impl OverlayState {
         effective_values: HashMap<String, Value>,
         default_values: HashMap<String, Value>,
         saved_proposals: HashMap<String, Value>,
+        saved_domains: Vec<SshDomainConfig>,
     ) -> Self {
         let mut field_defs = data::get_field_defs();
         let sections = data::get_sections();
@@ -110,6 +137,23 @@ impl OverlayState {
         let mut proposals = HashMap::new();
         for (k, v) in saved_proposals {
             proposals.insert(k, v);
+        }
+
+        // Build domain entries: Lua-sourced (read-only) + overlay-sourced (editable)
+        let mut domain_entries = data::domains_from_config();
+        for saved_dom in saved_domains {
+            // Skip overlay domains that duplicate a Lua domain name
+            if domain_entries
+                .iter()
+                .any(|e| e.config.name == saved_dom.name)
+            {
+                continue;
+            }
+            domain_entries.push(data::DomainEntry {
+                config: saved_dom,
+                source: data::DomainSource::Overlay,
+                expanded: false,
+            });
         }
 
         Self {
@@ -127,6 +171,9 @@ impl OverlayState {
             dirty: false,
             inline_edit: None,
             enum_picker: None,
+            domain_entries,
+            adding_domain: None,
+            domains_dirty: false,
         }
     }
 
@@ -139,7 +186,8 @@ impl OverlayState {
         let section = self.current_section();
         let filter_lower = self.filter.to_lowercase();
 
-        self.field_defs
+        let mut rows: Vec<SettingRow> = self
+            .field_defs
             .iter()
             .filter(|f| f.section == section)
             .filter(|f| {
@@ -155,7 +203,7 @@ impl OverlayState {
 
                 let current_value = effective_val
                     .map(|v| data::value_to_display_string(v))
-                    .unwrap_or_else(|| "—".to_string());
+                    .unwrap_or_else(|| "-".to_string());
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
@@ -174,9 +222,104 @@ impl OverlayState {
                     proposed_value,
                     status,
                     kind: f.kind.clone(),
+                    domain_header: None,
+                    domain_child: None,
                 }
             })
-            .collect()
+            .collect();
+
+        // For SSH & Domains section, append domain group rows
+        if section == Section::SshAndDomains {
+            let domain_fields = data::domain_field_defs();
+            let filter_matches_domain = |entry: &data::DomainEntry| -> bool {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                entry.config.name.to_lowercase().contains(&filter_lower)
+                    || entry
+                        .config
+                        .remote_address
+                        .to_lowercase()
+                        .contains(&filter_lower)
+            };
+
+            for (idx, entry) in self.domain_entries.iter().enumerate() {
+                if !filter_matches_domain(entry) {
+                    continue;
+                }
+
+                // Domain group header
+                rows.push(SettingRow {
+                    field_name: format!("__domain_header_{}__", idx),
+                    display_name: entry.config.name.clone(),
+                    current_value: entry.config.remote_address.clone(),
+                    proposed_value: None,
+                    status: match entry.source {
+                        data::DomainSource::Lua => FieldStatus::Inherited,
+                        data::DomainSource::Overlay => FieldStatus::Editable,
+                    },
+                    kind: FieldKind::Text,
+                    domain_header: Some(DomainHeaderInfo {
+                        domain_index: idx,
+                        source: entry.source,
+                        expanded: entry.expanded,
+                    }),
+                    domain_child: None,
+                });
+
+                // If expanded, show child fields
+                if entry.expanded {
+                    for (field_key, field_display, field_kind, _doc) in &domain_fields {
+                        let value = data::domain_field_value(&entry.config, field_key);
+                        let is_editable = entry.source == data::DomainSource::Overlay;
+                        rows.push(SettingRow {
+                            field_name: format!("__domain_{}_{}__", idx, field_key),
+                            display_name: format!("  {}", field_display),
+                            current_value: value,
+                            proposed_value: None,
+                            status: if is_editable {
+                                FieldStatus::Editable
+                            } else {
+                                FieldStatus::Inherited
+                            },
+                            kind: field_kind.clone(),
+                            domain_header: None,
+                            domain_child: Some(idx),
+                        });
+                    }
+
+                    // Delete action for overlay domains
+                    if entry.source == data::DomainSource::Overlay {
+                        rows.push(SettingRow {
+                            field_name: format!("{}_{}", DELETE_DOMAIN_FIELD_NAME, idx),
+                            display_name: "  Delete Domain".to_string(),
+                            current_value: String::new(),
+                            proposed_value: None,
+                            status: FieldStatus::Editable,
+                            kind: FieldKind::Text,
+                            domain_header: None,
+                            domain_child: Some(idx),
+                        });
+                    }
+                }
+            }
+
+            // "Add SSH Domain..." action row
+            if filter_lower.is_empty() || "add ssh domain".contains(&filter_lower) {
+                rows.push(SettingRow {
+                    field_name: ADD_DOMAIN_FIELD_NAME.to_string(),
+                    display_name: "Add SSH Domain...".to_string(),
+                    current_value: String::new(),
+                    proposed_value: None,
+                    status: FieldStatus::Editable,
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                });
+            }
+        }
+
+        rows
     }
 
     fn clamp_selection(&mut self) {
@@ -248,6 +391,159 @@ impl OverlayState {
 
         self.apply_edit_for_field(field_name, Value::String(variants[new_idx].0.clone()));
     }
+
+    /// Handle Enter on a domain-related row.
+    fn handle_domain_enter(&mut self, row: &SettingRow) {
+        // Domain header: toggle expand/collapse
+        if let Some(ref header) = row.domain_header {
+            self.domain_entries[header.domain_index].expanded =
+                !self.domain_entries[header.domain_index].expanded;
+            return;
+        }
+
+        // "Add SSH Domain..." action
+        if row.field_name == ADD_DOMAIN_FIELD_NAME {
+            self.adding_domain = Some(SshDomainConfig::default());
+            // Open inline edit for name
+            self.inline_edit = Some(InlineEdit {
+                field_name: "__new_domain_name__".to_string(),
+                buffer: String::new(),
+                kind: FieldKind::Text,
+            });
+            return;
+        }
+
+        // "Delete Domain" action
+        if row.field_name.starts_with(DELETE_DOMAIN_FIELD_NAME) {
+            if let Some(domain_idx) = row.domain_child {
+                if domain_idx < self.domain_entries.len()
+                    && self.domain_entries[domain_idx].source == data::DomainSource::Overlay
+                {
+                    self.domain_entries.remove(domain_idx);
+                    self.domains_dirty = true;
+                    self.dirty = true;
+                }
+            }
+            return;
+        }
+
+        // Domain child field (editable): open editor
+        if let Some(domain_idx) = row.domain_child {
+            if domain_idx < self.domain_entries.len()
+                && self.domain_entries[domain_idx].source == data::DomainSource::Overlay
+            {
+                // Extract the actual field key from __domain_N_fieldkey__
+                if let Some(field_key) = extract_domain_field_key(&row.field_name) {
+                    match &row.kind {
+                        FieldKind::Bool => {
+                            self.toggle_domain_bool(domain_idx, &field_key);
+                        }
+                        FieldKind::Enum(variants) => {
+                            self.enum_picker = Some(EnumPicker {
+                                field_name: row.field_name.clone(),
+                                variants: variants.clone(),
+                                selected: variants
+                                    .iter()
+                                    .position(|(v, _)| v == &row.current_value)
+                                    .unwrap_or(0),
+                            });
+                        }
+                        FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
+                            self.inline_edit = Some(InlineEdit {
+                                field_name: row.field_name.clone(),
+                                buffer: row.current_value.clone(),
+                                kind: row.kind.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn toggle_domain_bool(&mut self, domain_idx: usize, field_key: &str) {
+        if let Some(entry) = self.domain_entries.get_mut(domain_idx) {
+            let current = data::domain_field_value(&entry.config, field_key);
+            let new_val = if current == "On" { "Off" } else { "On" };
+            data::set_domain_field(&mut entry.config, field_key, new_val);
+            self.domains_dirty = true;
+            self.dirty = true;
+        }
+    }
+
+    fn apply_domain_field_edit(&mut self, field_name: &str, value: &str) {
+        // Parse __domain_N_fieldkey__ format
+        if let Some((domain_idx, field_key)) = parse_domain_field_name(field_name) {
+            if let Some(entry) = self.domain_entries.get_mut(domain_idx) {
+                if entry.source == data::DomainSource::Overlay {
+                    data::set_domain_field(&mut entry.config, &field_key, value);
+                    self.domains_dirty = true;
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Finalize adding a new domain.
+    fn finalize_add_domain(&mut self, name: String) {
+        if name.is_empty() {
+            self.adding_domain = None;
+            return;
+        }
+        // Check for name uniqueness
+        if self.domain_entries.iter().any(|e| e.config.name == name) {
+            // Name already exists, discard
+            self.adding_domain = None;
+            return;
+        }
+        let mut config = self.adding_domain.take().unwrap_or_default();
+        config.name = name;
+        self.domain_entries.push(data::DomainEntry {
+            config,
+            source: data::DomainSource::Overlay,
+            expanded: true,
+        });
+        self.domains_dirty = true;
+        self.dirty = true;
+    }
+
+    /// Get overlay-managed domains for saving.
+    fn overlay_domains(&self) -> Vec<SshDomainConfig> {
+        self.domain_entries
+            .iter()
+            .filter(|e| e.source == data::DomainSource::Overlay)
+            .map(|e| e.config.clone())
+            .collect()
+    }
+}
+
+/// Extract the field key from a domain child field name like `__domain_2_remote_address__`.
+fn extract_domain_field_key(field_name: &str) -> Option<String> {
+    // Format: __domain_N_fieldkey__
+    let trimmed = field_name
+        .trim_start_matches("__domain_")
+        .trim_end_matches("__");
+    // Skip the index part (everything before the first '_')
+    if let Some(pos) = trimmed.find('_') {
+        Some(trimmed[pos + 1..].to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse a domain field name into (domain_index, field_key).
+fn parse_domain_field_name(field_name: &str) -> Option<(usize, String)> {
+    let trimmed = field_name
+        .trim_start_matches("__domain_")
+        .trim_end_matches("__");
+    if let Some(pos) = trimmed.find('_') {
+        let idx_str = &trimmed[..pos];
+        let field_key = &trimmed[pos + 1..];
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            return Some((idx, field_key.to_string()));
+        }
+    }
+    None
 }
 
 /// Main entry point for the config overlay.
@@ -258,9 +554,15 @@ pub fn run_config_overlay(
     effective_values: HashMap<String, Value>,
     default_values: HashMap<String, Value>,
     saved_proposals: HashMap<String, Value>,
+    saved_domains: Vec<SshDomainConfig>,
     palette: config::Palette,
 ) -> anyhow::Result<ConfigOverlayAction> {
-    let mut state = OverlayState::new(effective_values, default_values, saved_proposals);
+    let mut state = OverlayState::new(
+        effective_values,
+        default_values,
+        saved_proposals,
+        saved_domains,
+    );
     let theme = theme::Theme::from_palette(&palette);
 
     term.set_raw_mode()?;
@@ -295,6 +597,18 @@ pub fn run_config_overlay(
                             let buffer = edit.buffer.clone();
                             let kind = edit.kind.clone();
                             state.inline_edit = None;
+
+                            // Handle new domain name entry
+                            if field_name == "__new_domain_name__" {
+                                state.finalize_add_domain(buffer);
+                                continue;
+                            }
+
+                            // Handle domain child field edits
+                            if field_name.starts_with("__domain_") {
+                                state.apply_domain_field_edit(&field_name, &buffer);
+                                continue;
+                            }
 
                             let value = match kind {
                                 FieldKind::Float => {
@@ -351,7 +665,11 @@ pub fn run_config_overlay(
                             let field_name = picker.field_name.clone();
                             let variant = picker.variants[picker.selected].0.clone();
                             state.enum_picker = None;
-                            state.apply_edit_for_field(&field_name, Value::String(variant));
+                            if field_name.starts_with("__domain_") {
+                                state.apply_domain_field_edit(&field_name, &variant);
+                            } else {
+                                state.apply_edit_for_field(&field_name, Value::String(variant));
+                            }
                         }
                         InputEvent::Key(KeyEvent {
                             key: KeyCode::UpArrow,
@@ -385,7 +703,11 @@ pub fn run_config_overlay(
                             let field_name = picker.field_name.clone();
                             let variant = picker.variants[picker.selected].0.clone();
                             state.enum_picker = None;
-                            state.apply_edit_for_field(&field_name, Value::String(variant));
+                            if field_name.starts_with("__domain_") {
+                                state.apply_domain_field_edit(&field_name, &variant);
+                            } else {
+                                state.apply_edit_for_field(&field_name, Value::String(variant));
+                            }
                         }
                         _ => {}
                     }
@@ -518,37 +840,46 @@ pub fn run_config_overlay(
                             state.settings_scroll_offset = 0;
                         } else if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
-                                match &row.kind {
-                                    FieldKind::Bool => {
-                                        state.toggle_bool(&row.field_name);
-                                    }
-                                    FieldKind::Enum(variants) => {
-                                        // Open enum picker popup
-                                        let current_str = row
-                                            .proposed_value
-                                            .as_ref()
-                                            .unwrap_or(&row.current_value);
-                                        let sel_idx = variants
-                                            .iter()
-                                            .position(|(v, _)| v == current_str)
-                                            .unwrap_or(0);
-                                        state.enum_picker = Some(EnumPicker {
-                                            field_name: row.field_name.clone(),
-                                            variants: variants.clone(),
-                                            selected: sel_idx,
-                                        });
-                                    }
-                                    FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
-                                        let initial = row
-                                            .proposed_value
-                                            .as_ref()
-                                            .unwrap_or(&row.current_value)
-                                            .clone();
-                                        state.inline_edit = Some(InlineEdit {
-                                            field_name: row.field_name.clone(),
-                                            buffer: initial,
-                                            kind: row.kind.clone(),
-                                        });
+                                // Domain-related rows
+                                if row.domain_header.is_some()
+                                    || row.domain_child.is_some()
+                                    || row.field_name == ADD_DOMAIN_FIELD_NAME
+                                    || row.field_name.starts_with(DELETE_DOMAIN_FIELD_NAME)
+                                {
+                                    state.handle_domain_enter(&row);
+                                } else {
+                                    match &row.kind {
+                                        FieldKind::Bool => {
+                                            state.toggle_bool(&row.field_name);
+                                        }
+                                        FieldKind::Enum(variants) => {
+                                            // Open enum picker popup
+                                            let current_str = row
+                                                .proposed_value
+                                                .as_ref()
+                                                .unwrap_or(&row.current_value);
+                                            let sel_idx = variants
+                                                .iter()
+                                                .position(|(v, _)| v == current_str)
+                                                .unwrap_or(0);
+                                            state.enum_picker = Some(EnumPicker {
+                                                field_name: row.field_name.clone(),
+                                                variants: variants.clone(),
+                                                selected: sel_idx,
+                                            });
+                                        }
+                                        FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
+                                            let initial = row
+                                                .proposed_value
+                                                .as_ref()
+                                                .unwrap_or(&row.current_value)
+                                                .clone();
+                                            state.inline_edit = Some(InlineEdit {
+                                                field_name: row.field_name.clone(),
+                                                buffer: initial,
+                                                kind: row.kind.clone(),
+                                            });
+                                        }
                                     }
                                 }
                             }
@@ -562,14 +893,33 @@ pub fn run_config_overlay(
                     }) => {
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
-                                match &row.kind {
-                                    FieldKind::Bool => {
-                                        state.toggle_bool(&row.field_name);
+                                if let Some(domain_idx) = row.domain_child {
+                                    // Domain child field
+                                    if let Some(field_key) =
+                                        extract_domain_field_key(&row.field_name)
+                                    {
+                                        match &row.kind {
+                                            FieldKind::Bool => {
+                                                state.toggle_domain_bool(domain_idx, &field_key);
+                                            }
+                                            FieldKind::Enum(_) => {
+                                                state.handle_domain_enter(&row);
+                                            }
+                                            _ => {}
+                                        }
                                     }
-                                    FieldKind::Enum(_) => {
-                                        state.cycle_enum(&row.field_name, 1);
+                                } else if row.domain_header.is_some() {
+                                    state.handle_domain_enter(&row);
+                                } else {
+                                    match &row.kind {
+                                        FieldKind::Bool => {
+                                            state.toggle_bool(&row.field_name);
+                                        }
+                                        FieldKind::Enum(_) => {
+                                            state.cycle_enum(&row.field_name, 1);
+                                        }
+                                        _ => {}
                                     }
-                                    _ => {}
                                 }
                             }
                         }
@@ -622,8 +972,11 @@ pub fn run_config_overlay(
                         key: KeyCode::Char('s'),
                         modifiers: Modifiers::SHIFT,
                     }) => {
-                        if !state.proposals.is_empty() {
-                            return Ok(ConfigOverlayAction::Save(state.proposals.clone()));
+                        if state.dirty {
+                            return Ok(ConfigOverlayAction::Save {
+                                proposals: state.proposals.clone(),
+                                ssh_domains: state.overlay_domains(),
+                            });
                         }
                     }
 
@@ -684,26 +1037,37 @@ pub fn run_config_overlay(
                                         state.active_panel = Panel::Settings;
                                         if was_selected {
                                             if let Some(sr) = state.selected_row() {
-                                                match &sr.kind {
-                                                    FieldKind::Bool => {
-                                                        state.toggle_bool(&sr.field_name);
-                                                    }
-                                                    FieldKind::Enum(_) => {
-                                                        state.cycle_enum(&sr.field_name, 1);
-                                                    }
-                                                    FieldKind::Float
-                                                    | FieldKind::Integer
-                                                    | FieldKind::Text => {
-                                                        let initial = sr
-                                                            .proposed_value
-                                                            .as_ref()
-                                                            .unwrap_or(&sr.current_value)
-                                                            .clone();
-                                                        state.inline_edit = Some(InlineEdit {
-                                                            field_name: sr.field_name.clone(),
-                                                            buffer: initial,
-                                                            kind: sr.kind.clone(),
-                                                        });
+                                                // Domain rows
+                                                if sr.domain_header.is_some()
+                                                    || sr.domain_child.is_some()
+                                                    || sr.field_name == ADD_DOMAIN_FIELD_NAME
+                                                    || sr
+                                                        .field_name
+                                                        .starts_with(DELETE_DOMAIN_FIELD_NAME)
+                                                {
+                                                    state.handle_domain_enter(&sr);
+                                                } else {
+                                                    match &sr.kind {
+                                                        FieldKind::Bool => {
+                                                            state.toggle_bool(&sr.field_name);
+                                                        }
+                                                        FieldKind::Enum(_) => {
+                                                            state.cycle_enum(&sr.field_name, 1);
+                                                        }
+                                                        FieldKind::Float
+                                                        | FieldKind::Integer
+                                                        | FieldKind::Text => {
+                                                            let initial = sr
+                                                                .proposed_value
+                                                                .as_ref()
+                                                                .unwrap_or(&sr.current_value)
+                                                                .clone();
+                                                            state.inline_edit = Some(InlineEdit {
+                                                                field_name: sr.field_name.clone(),
+                                                                buffer: initial,
+                                                                kind: sr.kind.clone(),
+                                                            });
+                                                        }
                                                     }
                                                 }
                                             }
