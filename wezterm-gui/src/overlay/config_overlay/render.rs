@@ -47,7 +47,7 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
 
     // Outer block with title
     let section_name = state.current_section().display_name();
-    let title = format!(" Configure WezTerm ── {} ", section_name);
+    let title = format!(" Configure WeezTerm ── {} ", section_name);
     let mut title_spans = vec![Span::styled(title, theme.header)];
     if state.dirty {
         title_spans.push(Span::styled(" [modified] ", theme.badge_fixed));

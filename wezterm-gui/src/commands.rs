@@ -2031,9 +2031,9 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             icon: None,
         },
         ShowConfigOverlay => CommandDef {
-            brief: "Configure WezTerm".into(),
+            brief: "Configure WeezTerm".into(),
             doc: "Opens a configuration overlay for browsing and editing \
-                  WezTerm settings. Changes are proposed as config overrides; \
+                  WeezTerm settings. Changes are proposed as config overrides; \
                   Lua remains the source of truth."
                 .into(),
             keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), ",".into())],
