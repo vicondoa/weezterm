@@ -299,3 +299,140 @@ fn dynamic_to_json(val: &Value) -> serde_json::Value {
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_domain_to_json_roundtrip() {
+        let dom = SshDomainConfig {
+            name: "test-host".to_string(),
+            remote_address: "10.0.0.1:22".to_string(),
+            username: "deploy".to_string(),
+            multiplexing: "WezTerm".to_string(),
+            ssh_backend: "Ssh2".to_string(),
+            no_agent_auth: true,
+            connect_automatically: false,
+        };
+        let json = domain_to_json(&dom);
+        let domains = parse_ssh_domains(&serde_json::Value::Array(vec![json]));
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0], dom);
+    }
+
+    #[test]
+    fn test_parse_ssh_domains_empty() {
+        let domains = parse_ssh_domains(&serde_json::Value::Array(vec![]));
+        assert!(domains.is_empty());
+    }
+
+    #[test]
+    fn test_parse_ssh_domains_defaults() {
+        let json = serde_json::json!([{"name": "myhost", "remote_address": "myhost"}]);
+        let domains = parse_ssh_domains(&json);
+        assert_eq!(domains.len(), 1);
+        assert_eq!(domains[0].name, "myhost");
+        assert_eq!(domains[0].remote_address, "myhost");
+        assert_eq!(domains[0].username, "");
+        assert_eq!(domains[0].multiplexing, "None");
+        assert_eq!(domains[0].ssh_backend, "LibSsh");
+        assert!(!domains[0].no_agent_auth);
+        assert!(!domains[0].connect_automatically);
+    }
+
+    #[test]
+    fn test_parse_proposals_roundtrip() {
+        let mut proposals = HashMap::new();
+        proposals.insert("font_size".to_string(), Value::F64(14.0.into()));
+        proposals.insert(
+            "color_scheme".to_string(),
+            Value::String("Dracula".to_string()),
+        );
+        proposals.insert("enable_tab_bar".to_string(), Value::Bool(true));
+
+        let json_map: serde_json::Map<String, serde_json::Value> = proposals
+            .iter()
+            .map(|(k, v)| (k.clone(), dynamic_to_json(v)))
+            .collect();
+        let json_val = serde_json::Value::Object(json_map);
+
+        let parsed = parse_proposals(&json_val);
+        assert_eq!(parsed.len(), 3);
+        assert_eq!(
+            parsed.get("color_scheme"),
+            Some(&Value::String("Dracula".to_string()))
+        );
+        assert_eq!(parsed.get("enable_tab_bar"), Some(&Value::Bool(true)));
+    }
+
+    #[test]
+    fn test_overlay_data_default() {
+        let data = OverlayData::default();
+        assert!(data.proposals.is_empty());
+        assert!(data.ssh_domains.is_empty());
+    }
+
+    #[test]
+    fn test_proposals_to_overrides() {
+        let mut proposals = HashMap::new();
+        proposals.insert("font_size".to_string(), Value::I64(14));
+        let overrides = proposals_to_overrides(proposals);
+        match overrides {
+            Value::Object(obj) => {
+                assert_eq!(obj.len(), 1);
+            }
+            _ => panic!("Expected Object"),
+        }
+    }
+
+    #[test]
+    fn test_new_format_json_parsing() {
+        let json_str = r#"{
+            "proposals": {
+                "font_size": 14,
+                "color_scheme": "Dracula"
+            },
+            "ssh_domains": [
+                {
+                    "name": "myhost",
+                    "remote_address": "myhost:22",
+                    "username": "root",
+                    "multiplexing": "None",
+                    "ssh_backend": "LibSsh",
+                    "no_agent_auth": false,
+                    "connect_automatically": true
+                }
+            ]
+        }"#;
+        let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        if let serde_json::Value::Object(obj) = &json {
+            assert!(obj.contains_key("proposals"));
+            let proposals = parse_proposals(obj.get("proposals").unwrap());
+            assert_eq!(proposals.len(), 2);
+            assert_eq!(proposals.get("font_size"), Some(&Value::I64(14)));
+
+            let domains = parse_ssh_domains(obj.get("ssh_domains").unwrap());
+            assert_eq!(domains.len(), 1);
+            assert_eq!(domains[0].name, "myhost");
+            assert_eq!(domains[0].remote_address, "myhost:22");
+            assert_eq!(domains[0].username, "root");
+            assert!(domains[0].connect_automatically);
+        }
+    }
+
+    #[test]
+    fn test_old_format_backward_compat() {
+        // Old format: flat object of proposals (no "proposals" key)
+        let json_str = r#"{"font_size": 14, "color_scheme": "Dracula"}"#;
+        let json: serde_json::Value = serde_json::from_str(json_str).unwrap();
+
+        if let serde_json::Value::Object(obj) = &json {
+            // Old format: no "proposals" key
+            assert!(!obj.contains_key("proposals"));
+            let proposals = parse_proposals(&json);
+            assert_eq!(proposals.len(), 2);
+        }
+    }
+}

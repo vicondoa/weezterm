@@ -1094,3 +1094,106 @@ pub fn run_config_overlay(
         }
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_extract_domain_field_key() {
+        assert_eq!(
+            extract_domain_field_key("__domain_2_remote_address__"),
+            Some("remote_address".to_string())
+        );
+        assert_eq!(
+            extract_domain_field_key("__domain_0_ssh_backend__"),
+            Some("ssh_backend".to_string())
+        );
+        assert_eq!(
+            extract_domain_field_key("__domain_10_no_agent_auth__"),
+            Some("no_agent_auth".to_string())
+        );
+        // No underscore after index
+        assert_eq!(extract_domain_field_key("__domain___"), None);
+    }
+
+    #[test]
+    fn test_parse_domain_field_name() {
+        let result = parse_domain_field_name("__domain_2_remote_address__");
+        assert_eq!(result, Some((2, "remote_address".to_string())));
+
+        let result = parse_domain_field_name("__domain_0_username__");
+        assert_eq!(result, Some((0, "username".to_string())));
+
+        // Invalid format
+        assert_eq!(parse_domain_field_name("__domain_notanumber_field__"), None);
+    }
+
+    #[test]
+    fn test_add_domain_field_name() {
+        assert_eq!(ADD_DOMAIN_FIELD_NAME, "__add_ssh_domain__");
+    }
+
+    #[test]
+    fn test_delete_domain_field_name() {
+        assert_eq!(DELETE_DOMAIN_FIELD_NAME, "__delete_domain__");
+        let name = format!("{}_{}", DELETE_DOMAIN_FIELD_NAME, 3);
+        assert!(name.starts_with(DELETE_DOMAIN_FIELD_NAME));
+    }
+
+    #[test]
+    fn test_domain_header_info_clone() {
+        let info = DomainHeaderInfo {
+            domain_index: 5,
+            source: data::DomainSource::Overlay,
+            expanded: true,
+        };
+        let cloned = info.clone();
+        assert_eq!(cloned.domain_index, 5);
+        assert_eq!(cloned.source, data::DomainSource::Overlay);
+        assert!(cloned.expanded);
+    }
+
+    #[test]
+    fn test_setting_row_domain_markers() {
+        let row = SettingRow {
+            field_name: "__domain_header_0__".to_string(),
+            display_name: "myhost".to_string(),
+            current_value: "myhost:22".to_string(),
+            proposed_value: None,
+            status: FieldStatus::Inherited,
+            kind: FieldKind::Text,
+            domain_header: Some(DomainHeaderInfo {
+                domain_index: 0,
+                source: data::DomainSource::Lua,
+                expanded: false,
+            }),
+            domain_child: None,
+        };
+        assert!(row.domain_header.is_some());
+        assert!(row.domain_child.is_none());
+    }
+
+    #[test]
+    fn test_config_overlay_action_save_has_domains() {
+        let action = ConfigOverlayAction::Save {
+            proposals: HashMap::new(),
+            ssh_domains: vec![SshDomainConfig {
+                name: "test".to_string(),
+                remote_address: "host:22".to_string(),
+                ..Default::default()
+            }],
+        };
+        match action {
+            ConfigOverlayAction::Save {
+                proposals,
+                ssh_domains,
+            } => {
+                assert!(proposals.is_empty());
+                assert_eq!(ssh_domains.len(), 1);
+                assert_eq!(ssh_domains[0].name, "test");
+            }
+            _ => panic!("Expected Save"),
+        }
+    }
+}

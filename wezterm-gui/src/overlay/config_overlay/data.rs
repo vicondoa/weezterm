@@ -961,3 +961,135 @@ pub fn to_config_ssh_domain(dom: &SshDomainConfig) -> config::SshDomain {
         ..Default::default()
     }
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_ssh_domain_config_default() {
+        let config = SshDomainConfig::default();
+        assert_eq!(config.name, "");
+        assert_eq!(config.remote_address, "");
+        assert_eq!(config.username, "");
+        assert_eq!(config.multiplexing, "None");
+        assert_eq!(config.ssh_backend, "LibSsh");
+        assert!(!config.no_agent_auth);
+        assert!(!config.connect_automatically);
+    }
+
+    #[test]
+    fn test_domain_field_value_read() {
+        let config = SshDomainConfig {
+            name: "test-host".to_string(),
+            remote_address: "10.0.0.1:22".to_string(),
+            username: "deploy".to_string(),
+            multiplexing: "WezTerm".to_string(),
+            ssh_backend: "Ssh2".to_string(),
+            no_agent_auth: true,
+            connect_automatically: false,
+        };
+        assert_eq!(domain_field_value(&config, "remote_address"), "10.0.0.1:22");
+        assert_eq!(domain_field_value(&config, "username"), "deploy");
+        assert_eq!(domain_field_value(&config, "multiplexing"), "WezTerm");
+        assert_eq!(domain_field_value(&config, "ssh_backend"), "Ssh2");
+        assert_eq!(domain_field_value(&config, "no_agent_auth"), "On");
+        assert_eq!(domain_field_value(&config, "connect_automatically"), "Off");
+        assert_eq!(domain_field_value(&config, "unknown"), "-");
+    }
+
+    #[test]
+    fn test_domain_field_value_empty_username() {
+        let config = SshDomainConfig::default();
+        assert_eq!(domain_field_value(&config, "username"), "-");
+    }
+
+    #[test]
+    fn test_set_domain_field() {
+        let mut config = SshDomainConfig::default();
+        set_domain_field(&mut config, "remote_address", "myhost:22");
+        assert_eq!(config.remote_address, "myhost:22");
+
+        set_domain_field(&mut config, "username", "root");
+        assert_eq!(config.username, "root");
+
+        set_domain_field(&mut config, "multiplexing", "WezTerm");
+        assert_eq!(config.multiplexing, "WezTerm");
+
+        set_domain_field(&mut config, "ssh_backend", "Ssh2");
+        assert_eq!(config.ssh_backend, "Ssh2");
+
+        set_domain_field(&mut config, "no_agent_auth", "On");
+        assert!(config.no_agent_auth);
+
+        set_domain_field(&mut config, "no_agent_auth", "Off");
+        assert!(!config.no_agent_auth);
+
+        set_domain_field(&mut config, "connect_automatically", "true");
+        assert!(config.connect_automatically);
+
+        // Unknown field is a no-op
+        set_domain_field(&mut config, "nonexistent", "value");
+    }
+
+    #[test]
+    fn test_domain_field_defs_completeness() {
+        let defs = domain_field_defs();
+        let expected_keys = vec![
+            "remote_address",
+            "username",
+            "multiplexing",
+            "ssh_backend",
+            "no_agent_auth",
+            "connect_automatically",
+        ];
+        let actual_keys: Vec<&str> = defs.iter().map(|(k, _, _, _)| *k).collect();
+        assert_eq!(actual_keys, expected_keys);
+    }
+
+    #[test]
+    fn test_to_config_ssh_domain() {
+        let dom = SshDomainConfig {
+            name: "myhost".to_string(),
+            remote_address: "myhost:22".to_string(),
+            username: "root".to_string(),
+            multiplexing: "WezTerm".to_string(),
+            ssh_backend: "Ssh2".to_string(),
+            no_agent_auth: true,
+            connect_automatically: true,
+        };
+        let ssh_dom = to_config_ssh_domain(&dom);
+        assert_eq!(ssh_dom.name, "myhost");
+        assert_eq!(ssh_dom.remote_address, "myhost:22");
+        assert_eq!(ssh_dom.username, Some("root".to_string()));
+        assert!(ssh_dom.no_agent_auth);
+        assert!(ssh_dom.connect_automatically);
+    }
+
+    #[test]
+    fn test_to_config_ssh_domain_empty_username() {
+        let dom = SshDomainConfig {
+            username: String::new(),
+            ..Default::default()
+        };
+        let ssh_dom = to_config_ssh_domain(&dom);
+        assert_eq!(ssh_dom.username, None);
+    }
+
+    #[test]
+    fn test_to_config_ssh_domain_multiplexing_none() {
+        let dom = SshDomainConfig {
+            multiplexing: "None".to_string(),
+            ..Default::default()
+        };
+        let ssh_dom = to_config_ssh_domain(&dom);
+        assert_eq!(ssh_dom.multiplexing, config::SshMultiplexing::None);
+    }
+
+    #[test]
+    fn test_domain_entry_source_equality() {
+        assert_eq!(DomainSource::Lua, DomainSource::Lua);
+        assert_eq!(DomainSource::Overlay, DomainSource::Overlay);
+        assert_ne!(DomainSource::Lua, DomainSource::Overlay);
+    }
+}
