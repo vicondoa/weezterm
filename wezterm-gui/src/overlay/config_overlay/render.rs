@@ -279,10 +279,16 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
 
             // Regular setting row (including domain child fields)
             let name = &setting.display_name;
-            let value = setting
+            let raw_value = setting
                 .proposed_value
                 .as_ref()
                 .unwrap_or(&setting.current_value);
+            // Display placeholder for empty values (rendering-only)
+            let value = if raw_value.is_empty() {
+                "\u{2014}" // em-dash as empty placeholder
+            } else {
+                raw_value.as_str()
+            };
             let badge = match setting.status {
                 FieldStatus::Inherited => "inherited",
                 FieldStatus::Editable => "modified",

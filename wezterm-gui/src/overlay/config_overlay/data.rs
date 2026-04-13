@@ -96,13 +96,7 @@ pub fn domain_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'stat
 pub fn domain_field_value(config: &SshDomainConfig, field: &str) -> String {
     match field {
         "remote_address" => config.remote_address.clone(),
-        "username" => {
-            if config.username.is_empty() {
-                "-".to_string()
-            } else {
-                config.username.clone()
-            }
-        }
+        "username" => config.username.clone(),
         "multiplexing" => config.multiplexing.clone(),
         "ssh_backend" => config.ssh_backend.clone(),
         "no_agent_auth" => if config.no_agent_auth { "On" } else { "Off" }.to_string(),
@@ -112,7 +106,7 @@ pub fn domain_field_value(config: &SshDomainConfig, field: &str) -> String {
             "Off"
         }
         .to_string(),
-        _ => "-".to_string(),
+        _ => String::new(),
     }
 }
 
@@ -900,7 +894,7 @@ pub fn value_to_display_string(v: &Value) -> String {
                 format!("{:.2}", f)
             }
         }
-        Value::Null => "-".to_string(),
+        Value::Null => String::new(),
         _ => "...".to_string(),
     }
 }
@@ -1018,13 +1012,13 @@ mod test {
         assert_eq!(domain_field_value(&config, "ssh_backend"), "Ssh2");
         assert_eq!(domain_field_value(&config, "no_agent_auth"), "On");
         assert_eq!(domain_field_value(&config, "connect_automatically"), "Off");
-        assert_eq!(domain_field_value(&config, "unknown"), "-");
+        assert_eq!(domain_field_value(&config, "unknown"), "");
     }
 
     #[test]
     fn test_domain_field_value_empty_username() {
         let config = SshDomainConfig::default();
-        assert_eq!(domain_field_value(&config, "username"), "-");
+        assert_eq!(domain_field_value(&config, "username"), "");
     }
 
     #[test]

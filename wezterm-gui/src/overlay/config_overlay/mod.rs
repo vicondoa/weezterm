@@ -117,6 +117,16 @@ struct InlineEdit {
     kind: FieldKind,
 }
 
+impl InlineEdit {
+    fn new(field_name: String, initial: String, kind: FieldKind) -> Self {
+        Self {
+            field_name,
+            buffer: initial,
+            kind,
+        }
+    }
+}
+
 /// State for the enum selection popup.
 struct EnumPicker {
     field_name: String,
@@ -225,7 +235,13 @@ impl OverlayState {
         let mut rows: Vec<SettingRow> = self
             .field_defs
             .iter()
-            .filter(|f| f.section == section)
+            .filter(|f| {
+                // When filtering, search across all sections
+                if !filter_lower.is_empty() {
+                    return true;
+                }
+                f.section == section
+            })
             .filter(|f| {
                 if filter_lower.is_empty() {
                     return true;
@@ -239,7 +255,7 @@ impl OverlayState {
 
                 let current_value = effective_val
                     .map(|v| data::value_to_display_string(v))
-                    .unwrap_or_else(|| "-".to_string());
+                    .unwrap_or_default();
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
@@ -294,7 +310,7 @@ impl OverlayState {
                     current_value: entry.config.remote_address.clone(),
                     proposed_value: None,
                     status: match entry.source {
-                        data::DomainSource::Lua => FieldStatus::Inherited,
+                        data::DomainSource::Lua => FieldStatus::FixedByLua,
                         data::DomainSource::Overlay => FieldStatus::Editable,
                     },
                     kind: FieldKind::Text,
@@ -319,7 +335,7 @@ impl OverlayState {
                             status: if is_editable {
                                 FieldStatus::Editable
                             } else {
-                                FieldStatus::Inherited
+                                FieldStatus::FixedByLua
                             },
                             kind: field_kind.clone(),
                             domain_header: None,
@@ -490,11 +506,11 @@ impl OverlayState {
         if row.field_name == ADD_DOMAIN_FIELD_NAME {
             self.adding_domain = Some(SshDomainConfig::default());
             // Open inline edit for name
-            self.inline_edit = Some(InlineEdit {
-                field_name: "__new_domain_name__".to_string(),
-                buffer: String::new(),
-                kind: FieldKind::Text,
-            });
+            self.inline_edit = Some(InlineEdit::new(
+                "__new_domain_name__".to_string(),
+                String::new(),
+                FieldKind::Text,
+            ));
             return;
         }
 
@@ -534,11 +550,11 @@ impl OverlayState {
                             });
                         }
                         FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
-                            self.inline_edit = Some(InlineEdit {
-                                field_name: row.field_name.clone(),
-                                buffer: row.current_value.clone(),
-                                kind: row.kind.clone(),
-                            });
+                            self.inline_edit = Some(InlineEdit::new(
+                                row.field_name.clone(),
+                                row.current_value.clone(),
+                                row.kind.clone(),
+                            ));
                         }
                         FieldKind::ColorScheme => {
                             // Domain fields don't use color scheme picker
@@ -1053,11 +1069,11 @@ pub fn run_config_overlay(
                                                 .as_ref()
                                                 .unwrap_or(&row.current_value)
                                                 .clone();
-                                            state.inline_edit = Some(InlineEdit {
-                                                field_name: row.field_name.clone(),
-                                                buffer: initial,
-                                                kind: row.kind.clone(),
-                                            });
+                                            state.inline_edit = Some(InlineEdit::new(
+                                                row.field_name.clone(),
+                                                initial,
+                                                row.kind.clone(),
+                                            ));
                                         }
                                     }
                                 }
@@ -1178,7 +1194,7 @@ pub fn run_config_overlay(
                         mouse_buttons,
                         ..
                     }) => {
-                        if mouse_buttons.contains(MouseButtons::LEFT) {
+                        if mouse_buttons == MouseButtons::LEFT {
                             let size = ratatui_term.backend().size().unwrap_or_default();
                             // Match overlay_rect logic from render.rs
                             let ow = size.width.min(100).max(size.width * 9 / 10).min(size.width);
