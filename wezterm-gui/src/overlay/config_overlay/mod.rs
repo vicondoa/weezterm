@@ -900,7 +900,19 @@ pub fn run_config_overlay(
                         InputEvent::Mouse(MouseEvent {
                             y, mouse_buttons, ..
                         }) => {
-                            if mouse_buttons == MouseButtons::LEFT {
+                            if mouse_buttons.contains(MouseButtons::VERT_WHEEL) {
+                                // Mouse wheel scrolling
+                                if mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
+                                    // Scroll up
+                                    if picker.selected > 0 {
+                                        picker.selected = picker.selected.saturating_sub(3);
+                                    }
+                                } else {
+                                    // Scroll down
+                                    picker.selected = (picker.selected + 3)
+                                        .min(picker.filtered.len().saturating_sub(1));
+                                }
+                            } else if mouse_buttons == MouseButtons::LEFT {
                                 // Map mouse y to scheme picker items
                                 let size = ratatui_term.backend().size().unwrap_or_default();
                                 let (area, _, _) =
