@@ -41,6 +41,11 @@ fn overlay_rect(total: Rect) -> (Rect, u16, u16) {
     (Rect::new(x, y, w, h), x, y)
 }
 
+/// Public wrapper for overlay geometry, used by mouse hit-testing.
+pub fn overlay_rect_pub(width: u16, height: u16) -> (Rect, u16, u16) {
+    overlay_rect(Rect::new(0, 0, width, height))
+}
+
 /// Main UI rendering function — called from `terminal.draw(|f| ui(f, ...))`.
 pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutGeo {
     let (area, left_pad, top_pad) = overlay_rect(frame.area());
@@ -660,17 +665,40 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
 
     frame.render_widget(ratatui::widgets::Clear, popup_area);
 
+    // Use selected scheme's colors for the popup border as a live preview
+    let sel_palette = picker
+        .filtered
+        .get(picker.selected)
+        .map(|&idx| &picker.schemes[idx].1);
+    let preview_fg = sel_palette
+        .and_then(|p| p.foreground)
+        .map(|c| {
+            let (r, g, b, _) = c.to_srgb_u8();
+            ratatui::style::Color::Rgb(r, g, b)
+        })
+        .unwrap_or(ratatui::style::Color::White);
+    let preview_bg = sel_palette
+        .and_then(|p| p.background)
+        .map(|c| {
+            let (r, g, b, _) = c.to_srgb_u8();
+            ratatui::style::Color::Rgb(r, g, b)
+        })
+        .unwrap_or(ratatui::style::Color::Black);
+
     let title = format!(
         " Color Scheme ({}/{}) ",
         picker.filtered.len(),
         picker.schemes.len()
     );
 
+    let preview_style = ratatui::style::Style::default()
+        .fg(preview_fg)
+        .bg(preview_bg);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(theme.border)
-        .title(Span::styled(title, theme.header))
-        .style(theme.text);
+        .border_style(preview_style)
+        .title(Span::styled(title, preview_style))
+        .style(preview_style);
 
     let inner = block.inner(popup_area);
     frame.render_widget(block, popup_area);
@@ -688,14 +716,7 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
     } else {
         format!(" / {}|", picker.filter)
     };
-    let filter_para = Paragraph::new(Span::styled(
-        filter_display,
-        if picker.filter.is_empty() {
-            theme.text_dim
-        } else {
-            theme.text
-        },
-    ));
+    let filter_para = Paragraph::new(Span::styled(filter_display, preview_style));
     frame.render_widget(filter_para, filter_bar);
 
     // Each scheme takes 2 lines
@@ -707,7 +728,6 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
     };
 
     let content_w = inner.width as usize;
-    // Swatch block: 8 ansi + 1 space + 8 bright = 17 chars
     let swatch_w = 17usize;
     let name_col_w = content_w.saturating_sub(swatch_w + 1);
 
@@ -734,11 +754,12 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
 
             let base = ratatui::style::Style::default().fg(row_fg).bg(row_bg);
 
-            // Line 1: " name                    ████████ ████████"
-            let display_name = if name.len() > name_col_w.saturating_sub(2) {
-                format!(" {}...", &name[..name_col_w.saturating_sub(5)])
+            let prefix = if is_sel { " \u{25b8} " } else { "   " };
+            let display_name = format!("{}{}", prefix, name);
+            let display_name = if display_name.len() > name_col_w {
+                format!("{}...", &display_name[..name_col_w.saturating_sub(3)])
             } else {
-                format!(" {}", name)
+                display_name
             };
             let pad_len = name_col_w.saturating_sub(display_name.len());
             let padding = " ".repeat(pad_len);
@@ -748,7 +769,6 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
                 Span::styled(padding, base),
             ];
 
-            // ANSI swatches
             if let Some(ansi) = &palette.ansi {
                 for color in ansi.iter() {
                     let c = rgba_to_color(color);
@@ -773,8 +793,7 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
                 line1.push(Span::styled("        ", base));
             }
 
-            // Line 2: example text in scheme colors, full width
-            let example = " user@host:~ $ echo hello";
+            let example = "   user@host:~ $ echo hello";
             let ex_len = example.len().min(content_w);
             let ex_pad = " ".repeat(content_w.saturating_sub(ex_len));
             let line2 = vec![

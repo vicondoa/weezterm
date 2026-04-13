@@ -897,6 +897,44 @@ pub fn run_config_overlay(
                             picker.filter.push(c);
                             picker.refilter();
                         }
+                        InputEvent::Mouse(MouseEvent {
+                            y, mouse_buttons, ..
+                        }) => {
+                            if mouse_buttons == MouseButtons::LEFT {
+                                // Map mouse y to scheme picker items
+                                let size = ratatui_term.backend().size().unwrap_or_default();
+                                let (area, _, _) =
+                                    render::overlay_rect_pub(size.width, size.height);
+                                let popup_h = area.height.saturating_sub(4).min(30).max(10);
+                                let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
+                                // Inner area: +1 for border, +1 for filter bar
+                                let list_start_y = popup_y + 3;
+                                if y >= list_start_y {
+                                    let row = (y - list_start_y) as usize / 2; // 2 lines per item
+                                    let visible_items = (popup_h.saturating_sub(4)) as usize / 2;
+                                    let scroll = if picker.selected >= visible_items {
+                                        picker.selected.saturating_sub(visible_items - 1)
+                                    } else {
+                                        0
+                                    };
+                                    let clicked_idx = scroll + row;
+                                    if clicked_idx < picker.filtered.len() {
+                                        if clicked_idx == picker.selected {
+                                            // Double-click: select
+                                            let scheme_idx = picker.filtered[clicked_idx];
+                                            let name = picker.schemes[scheme_idx].0.clone();
+                                            state.scheme_picker = None;
+                                            state.apply_edit_for_field(
+                                                "color_scheme",
+                                                Value::String(name),
+                                            );
+                                        } else {
+                                            picker.selected = clicked_idx;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                     continue;
@@ -1156,6 +1194,10 @@ pub fn run_config_overlay(
                     InputEvent::Key(KeyEvent {
                         key: KeyCode::Char('p'),
                         modifiers: Modifiers::SHIFT,
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('P'),
+                        modifiers: Modifiers::NONE,
                     }) => {
                         if !state.proposals.is_empty() {
                             return Ok(ConfigOverlayAction::Preview(state.proposals.clone()));
@@ -1166,6 +1208,10 @@ pub fn run_config_overlay(
                     InputEvent::Key(KeyEvent {
                         key: KeyCode::Char('s'),
                         modifiers: Modifiers::SHIFT,
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('S'),
+                        modifiers: Modifiers::NONE,
                     }) => {
                         if state.dirty {
                             return Ok(ConfigOverlayAction::Save {
@@ -1179,6 +1225,10 @@ pub fn run_config_overlay(
                     InputEvent::Key(KeyEvent {
                         key: KeyCode::Char('r'),
                         modifiers: Modifiers::SHIFT,
+                    })
+                    | InputEvent::Key(KeyEvent {
+                        key: KeyCode::Char('R'),
+                        modifiers: Modifiers::NONE,
                     }) => {
                         if state.active_panel == Panel::Settings {
                             if let Some(row) = state.selected_row() {
