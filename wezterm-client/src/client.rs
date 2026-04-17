@@ -714,6 +714,15 @@ impl Reconnectable {
         }
     }
 
+    // --- weezterm remote features ---
+    fn auto_reconnect(&self) -> bool {
+        match &self.config {
+            ClientDomainConfig::Ssh(ssh) => ssh.auto_reconnect,
+            _ => false,
+        }
+    }
+    // --- end weezterm remote features ---
+
     fn connect(
         &mut self,
         initial: bool,
@@ -755,8 +764,17 @@ impl Reconnectable {
 
         // --- weezterm remote features ---
         // Auto-install weezterm on the remote host if needed.
-        // This must happen before we try to run the proxy command.
-        let installed_path = crate::remote_install::ensure_remote_weezterm(&sess, &ssh_dom, ui)?;
+        // Only on initial connect — skip on reconnect since binaries are
+        // already installed and the version check would slow things down.
+        let installed_path = if initial {
+            crate::remote_install::ensure_remote_weezterm(&sess, &ssh_dom, ui)?
+        } else {
+            // On reconnect, reuse the configured or default path
+            ssh_dom
+                .remote_wezterm_path
+                .clone()
+                .or_else(|| Some(format!("{}/weezterm", ssh_dom.remote_install_dir)))
+        };
         // --- end weezterm remote features ---
 
         let proxy_bin = if let Some(ref path) = installed_path {
@@ -1155,9 +1173,22 @@ impl Client {
 
                     if let Some(ioerr) = e.root_cause().downcast_ref::<std::io::Error>() {
                         if let std::io::ErrorKind::UnexpectedEof = ioerr.kind() {
-                            // Don't reconnect for a simple EOF
-                            log::error!("server closed connection ({})", e);
-                            break;
+                            // --- weezterm remote features ---
+                            // For SSH domains with auto_reconnect, treat EOF like any
+                            // other disconnect and fall through to the reconnection
+                            // loop.  This handles machine suspend/resume where the OS
+                            // delivers EOF on the now-dead TCP connection.
+                            if !reconnectable.auto_reconnect() {
+                                // Don't reconnect for a simple EOF
+                                log::error!("server closed connection ({})", e);
+                                break;
+                            }
+                            log::warn!(
+                                "server closed connection ({}); will attempt reconnect \
+                                 (auto_reconnect=true)",
+                                e
+                            );
+                            // --- end weezterm remote features ---
                         }
                     }
 

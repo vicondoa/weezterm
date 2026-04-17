@@ -147,6 +147,13 @@ pub struct SshDomain {
     /// If not set, falls back to the global `open_url` config.
     #[dynamic(default)]
     pub open_url: Option<OpenUrlConfig>,
+
+    /// Whether to automatically reconnect when the SSH connection is lost
+    /// (e.g., after machine suspend/resume). When true, the client will
+    /// retry with exponential backoff instead of closing terminal windows.
+    /// Default: true
+    #[dynamic(default = "default_true_bool")]
+    pub auto_reconnect: bool,
     // --- end weezterm remote features ---
 }
 
