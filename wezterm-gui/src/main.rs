@@ -601,12 +601,31 @@ impl Publish {
                             None
                         };
 
+                        // Compute command_dir before moving `command`
+                        // into the struct. Pass the launch directory so
+                        // that the existing GUI instance opens the new
+                        // tab in the caller's working directory. Only
+                        // when no explicit --cwd was given and no
+                        // config.default_cwd is set.
+                        let command_dir = if config.default_cwd.is_none()
+                            && command
+                                .as_ref()
+                                .and_then(|c| c.get_cwd())
+                                .is_none()
+                        {
+                            std::env::current_dir()
+                                .ok()
+                                .and_then(|p| p.to_str().map(String::from))
+                        } else {
+                            None
+                        };
+
                         client
                             .spawn_v2(codec::SpawnV2 {
                                 domain,
                                 window_id,
                                 command,
-                                command_dir: None,
+                                command_dir,
                                 size: config.initial_size(0, None),
                                 workspace: workspace.unwrap_or(
                                     config
@@ -728,9 +747,8 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
     }
 
     let config = config::configuration();
-    let need_builder = !opts.prog.is_empty() || opts.cwd.is_some();
 
-    let cmd = if need_builder {
+    let cmd = if !opts.prog.is_empty() || opts.cwd.is_some() {
         let prog = opts.prog.iter().map(|s| s.as_os_str()).collect::<Vec<_>>();
         let mut builder = config.build_prog(
             if prog.is_empty() { None } else { Some(prog) },
@@ -745,6 +763,24 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
             });
         }
         Some(builder)
+    } else if config.default_cwd.is_none() {
+        // No explicit --cwd, no --prog, and no config.default_cwd:
+        // use the directory from which wezterm was launched so the
+        // initial terminal opens there.  On Unix the child would
+        // inherit the parent CWD anyway; on Windows the PTY layer
+        // falls back to USERPROFILE when no CWD is set, so we must
+        // set it explicitly.
+        if let Ok(cwd) = current_dir() {
+            let mut builder = config.build_prog(
+                None,
+                config.default_prog.as_ref(),
+                None,
+            )?;
+            builder.cwd(cwd);
+            Some(builder)
+        } else {
+            None
+        }
     } else {
         None
     };
