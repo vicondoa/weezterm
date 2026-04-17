@@ -771,11 +771,7 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
         // falls back to USERPROFILE when no CWD is set, so we must
         // set it explicitly.
         if let Ok(cwd) = current_dir() {
-            let mut builder = config.build_prog(
-                None,
-                config.default_prog.as_ref(),
-                None,
-            )?;
+            let mut builder = config.build_prog(None, config.default_prog.as_ref(), None)?;
             builder.cwd(cwd);
             Some(builder)
         } else {
