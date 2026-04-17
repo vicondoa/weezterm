@@ -45,9 +45,12 @@ enum Panel {
 pub enum FieldStatus {
     /// No proposal — using the default/Lua value.
     Inherited,
-    /// Proposal matches effective value.
+    /// User has proposed a change via the overlay.
     Editable,
-    /// Proposal differs from effective value — Lua overrode it.
+    /// The overlay previously wrote this value — Lua reports it as set
+    /// because the overlay config file was loaded, but it is still editable.
+    OverlayModified,
+    /// Set by the user's hand-written Lua config (not by the overlay).
     FixedByLua,
 }
 
@@ -259,12 +262,16 @@ impl OverlayState {
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
-                let status = if self.lua_set_fields.contains(f.name) {
-                    // Lua explicitly set this field
-                    FieldStatus::FixedByLua
+                let status = if proposed_val.is_some() && self.lua_set_fields.contains(f.name) {
+                    // The overlay wrote this value — Lua sees it because
+                    // the overlay config file was loaded.  Still editable.
+                    FieldStatus::OverlayModified
                 } else if proposed_val.is_some() {
-                    // User has proposed a change
+                    // User has proposed a change via the overlay
                     FieldStatus::Editable
+                } else if self.lua_set_fields.contains(f.name) {
+                    // Lua explicitly set this field (user's hand-written config)
+                    FieldStatus::FixedByLua
                 } else {
                     // Using default, no Lua override, no proposal
                     FieldStatus::Inherited
@@ -393,7 +400,7 @@ impl OverlayState {
 
     /// Returns true if the row can be edited (not FixedByLua).
     fn is_row_editable(row: &SettingRow) -> bool {
-        row.status != FieldStatus::FixedByLua
+        !matches!(row.status, FieldStatus::FixedByLua)
     }
 
     /// Open a bool picker (On/Off) for the given field.

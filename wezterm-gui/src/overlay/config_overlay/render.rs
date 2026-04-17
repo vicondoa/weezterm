@@ -297,6 +297,7 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
             let badge = match setting.status {
                 FieldStatus::Inherited => "inherited",
                 FieldStatus::Editable => "modified",
+                FieldStatus::OverlayModified => "modified",
                 FieldStatus::FixedByLua => "lua",
             };
 
@@ -320,6 +321,7 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 let bs = match setting.status {
                     FieldStatus::Inherited => theme.badge_inherited,
                     FieldStatus::Editable => theme.badge_editable,
+                    FieldStatus::OverlayModified => theme.badge_editable,
                     FieldStatus::FixedByLua => theme.badge_fixed,
                 };
                 (theme.text, theme.dots, vs, bs)
@@ -419,6 +421,7 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                 let status_str = match row.status {
                     FieldStatus::Inherited => "Inherited",
                     FieldStatus::Editable => "Editable",
+                    FieldStatus::OverlayModified => "Modified",
                     FieldStatus::FixedByLua => "Fixed by Lua",
                 };
                 let val = row.proposed_value.as_ref().unwrap_or(&row.current_value);
