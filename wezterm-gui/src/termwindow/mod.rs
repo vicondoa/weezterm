@@ -2435,6 +2435,119 @@ impl TermWindow {
         self.assign_overlay(tab_id, overlay);
         promise::spawn::spawn(future).detach();
     }
+
+    // --- weezterm remote features ---
+    fn show_config_overlay(&mut self) {
+        use crate::overlay::config_overlay;
+        use wezterm_dynamic::ToDynamic;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        // Snapshot the effective config as a dynamic Value and extract field values
+        let config = self.config.clone();
+        let config_dynamic = config.to_dynamic();
+        let effective_values = config_overlay::data::extract_values(&config_dynamic);
+        let default_values = std::collections::HashMap::new();
+        let palette = config.resolved_palette.clone();
+
+        // Load saved overlay data (proposals + domains) from disk
+        let overlay_data = config_overlay::persistence::load_overlay_data().unwrap_or_default();
+
+        let window = self.window.clone().unwrap();
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            config_overlay::run_config_overlay(
+                term,
+                effective_values,
+                default_values,
+                overlay_data.proposals,
+                overlay_data.ssh_domains,
+                palette,
+            )
+        });
+        self.assign_overlay(tab_id, overlay);
+
+        let window_clone = window.clone();
+        promise::spawn::spawn(async move {
+            match future.await {
+                Ok(config_overlay::ConfigOverlayAction::Save {
+                    proposals,
+                    ssh_domains,
+                }) => {
+                    log::info!(
+                        "Config overlay: saving {} proposals, {} domains",
+                        proposals.len(),
+                        ssh_domains.len()
+                    );
+                    // Persist proposals + domains to disk
+                    if let Err(e) =
+                        config_overlay::persistence::save_overlay_data(&proposals, &ssh_domains)
+                    {
+                        log::error!("Failed to save config overlay data: {:#}", e);
+                    }
+
+                    // Register new overlay domains with Mux
+                    for dom_config in &ssh_domains {
+                        let mux = Mux::get();
+                        if mux.get_domain_by_name(&dom_config.name).is_some() {
+                            continue; // Already registered
+                        }
+                        let ssh_dom = config_overlay::data::to_config_ssh_domain(dom_config);
+                        match mux::ssh::RemoteSshDomain::with_ssh_domain(&ssh_dom) {
+                            Ok(domain) => {
+                                let domain: std::sync::Arc<dyn mux::domain::Domain> =
+                                    std::sync::Arc::new(domain);
+                                mux.add_domain(&domain);
+                                log::info!("Registered overlay SSH domain: {}", dom_config.name);
+                            }
+                            Err(e) => {
+                                log::error!(
+                                    "Failed to register SSH domain '{}': {:#}",
+                                    dom_config.name,
+                                    e
+                                );
+                            }
+                        }
+                    }
+
+                    // Apply proposals as window config overrides
+                    let overrides = config_overlay::persistence::proposals_to_overrides(proposals);
+                    window_clone.notify(TermWindowNotif::SetConfigOverrides(overrides));
+                }
+                Ok(config_overlay::ConfigOverlayAction::Preview(proposals)) => {
+                    log::info!("Config overlay: previewing {} proposals", proposals.len());
+                    let overrides = config_overlay::persistence::proposals_to_overrides(proposals);
+                    window_clone.notify(TermWindowNotif::SetConfigOverrides(overrides));
+                }
+                Ok(config_overlay::ConfigOverlayAction::Close) => {
+                    log::debug!("Config overlay: closed without saving");
+                }
+                Err(e) => {
+                    log::error!("Config overlay error: {:#}", e);
+                }
+            }
+            anyhow::Result::<()>::Ok(())
+        })
+        .detach();
+    }
+    // --- end weezterm remote features ---
+
+    // --- weezterm remote features ---
+    fn show_new_tab_dropdown(&mut self) {
+        let title = "New Tab".to_string();
+        let args = LauncherActionArgs {
+            title: Some(title),
+            flags: LauncherFlags::DOMAINS | LauncherFlags::LAUNCH_MENU_ITEMS,
+            help_text: None,
+            fuzzy_help_text: None,
+            alphabet: None,
+        };
+        self.show_launcher_impl(args, 0);
+    }
     // --- end weezterm remote features ---
 
     fn show_tab_navigator(&mut self) {
@@ -3232,6 +3345,9 @@ impl TermWindow {
             // --- weezterm remote features ---
             ShowPortForwardOverlay => {
                 self.show_port_forward_overlay();
+            }
+            ShowConfigOverlay => {
+                self.show_config_overlay();
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),

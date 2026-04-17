@@ -84,6 +84,26 @@ lazy_static! {
     pub static ref COLOR_SCHEMES: HashMap<String, Palette> = build_default_schemes();
 }
 
+// --- weezterm remote features ---
+lazy_static! {
+    /// Tracks which config field names were explicitly set by the user's Lua config.
+    /// Populated during config loading so the overlay can distinguish
+    /// "Lua set this" from "using default" even when Lua sets the default value.
+    static ref LUA_EXPLICITLY_SET: Mutex<std::collections::HashSet<String>> =
+        Mutex::new(std::collections::HashSet::new());
+}
+
+/// Record which top-level keys were present in the Lua config table.
+pub fn set_lua_config_keys(keys: std::collections::HashSet<String>) {
+    *LUA_EXPLICITLY_SET.lock().unwrap() = keys;
+}
+
+/// Returns the set of field names that the Lua config explicitly set.
+pub fn lua_explicitly_set_fields() -> std::collections::HashSet<String> {
+    LUA_EXPLICITLY_SET.lock().unwrap().clone()
+}
+// --- end weezterm remote features ---
+
 thread_local! {
     static LUA_CONFIG: RefCell<Option<LuaConfigState>> = RefCell::new(None);
 }

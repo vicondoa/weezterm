@@ -50,6 +50,19 @@ const PLUS_BUTTON: &[Poly] = &[
     },
 ];
 
+// --- weezterm remote features ---
+/// Down-pointing chevron (▾) for the new-tab dropdown button.
+const CHEVRON_DOWN: &[Poly] = &[Poly {
+    path: &[
+        PolyCommand::MoveTo(BlockCoord::Frac(1, 6), BlockCoord::Frac(1, 4)),
+        PolyCommand::LineTo(BlockCoord::Frac(1, 2), BlockCoord::Frac(3, 4)),
+        PolyCommand::LineTo(BlockCoord::Frac(5, 6), BlockCoord::Frac(1, 4)),
+    ],
+    intensity: BlockAlpha::Full,
+    style: PolyStyle::Outline,
+}];
+// --- end weezterm remote features ---
+
 impl crate::TermWindow {
     pub fn invalidate_fancy_tab_bar(&mut self) {
         self.fancy_tab_bar.take();
@@ -135,8 +148,10 @@ impl crate::TermWindow {
                         line_width: metrics.underline_height.max(2),
                         poly: SizedPoly {
                             poly: PLUS_BUTTON,
-                            width: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
-                            height: Dimension::Pixels(metrics.cell_size.height as f32 / 2.),
+                            // --- weezterm remote features ---
+                            width: Dimension::Pixels(metrics.cell_size.height as f32 * 0.6),
+                            height: Dimension::Pixels(metrics.cell_size.height as f32 * 0.6),
+                            // --- end weezterm remote features ---
                         },
                     },
                 )
@@ -165,6 +180,44 @@ impl crate::TermWindow {
                     bg: new_tab_hover.bg_color.to_linear().into(),
                     text: new_tab_hover.fg_color.to_linear().into(),
                 })),
+                // --- weezterm remote features ---
+                TabBarItem::NewTabDropdown => Element::new(
+                    &font,
+                    ElementContent::Poly {
+                        line_width: metrics.underline_height.max(2),
+                        poly: SizedPoly {
+                            poly: CHEVRON_DOWN,
+                            width: Dimension::Pixels(metrics.cell_size.height as f32 * 0.4),
+                            height: Dimension::Pixels(metrics.cell_size.height as f32 * 0.4),
+                        },
+                    },
+                )
+                .vertical_align(VerticalAlign::Middle)
+                .item_type(UIItemType::TabBar(TabBarItem::NewTabDropdown))
+                .margin(BoxDimension {
+                    left: Dimension::Cells(0.),
+                    right: Dimension::Cells(0.),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.),
+                })
+                .padding(BoxDimension {
+                    left: Dimension::Cells(0.25),
+                    right: Dimension::Cells(0.25),
+                    top: Dimension::Cells(0.2),
+                    bottom: Dimension::Cells(0.25),
+                })
+                .border(BoxDimension::new(Dimension::Pixels(1.)))
+                .colors(ElementColors {
+                    border: BorderColor::default(),
+                    bg: new_tab.bg_color.to_linear().into(),
+                    text: new_tab.fg_color.to_linear().into(),
+                })
+                .hover_colors(Some(ElementColors {
+                    border: BorderColor::default(),
+                    bg: new_tab_hover.bg_color.to_linear().into(),
+                    text: new_tab_hover.fg_color.to_linear().into(),
+                })),
+                // --- end weezterm remote features ---
                 TabBarItem::Tab { active, .. } if active => element
                     .vertical_align(VerticalAlign::Bottom)
                     .item_type(UIItemType::TabBar(item.item.clone()))

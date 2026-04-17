@@ -362,6 +362,17 @@ impl LauncherState {
             key_entries.sort_by(|a, b| a.label.cmp(&b.label));
             self.entries.append(&mut key_entries);
         }
+
+        // --- weezterm remote features ---
+        // When showing domains (e.g. from the new-tab dropdown), append an
+        // "Edit Configuration" entry with a visual separator.
+        if args.flags.contains(LauncherFlags::DOMAINS) {
+            self.entries.push(Entry {
+                label: "\u{2500}\u{2500}\u{2500} Edit Configuration".to_string(),
+                action: KeyAssignment::ShowConfigOverlay,
+            });
+        }
+        // --- end weezterm remote features ---
     }
 
     fn render(&mut self, term: &mut TermWizTerminal) -> termwiz::Result<()> {
