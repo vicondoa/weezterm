@@ -20,6 +20,28 @@ impl crate::TermWindow {
     fn call_draw_webgpu(&mut self) -> anyhow::Result<()> {
         use crate::termwindow::webgpu::WebGpuTexture;
 
+        // --- weezterm remote features ---
+        // Compute clear color before borrowing webgpu/render_state
+        let window_is_transparent_webgpu =
+            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
+        let clear_color = if window_is_transparent_webgpu {
+            wgpu::Color {
+                r: 0.,
+                g: 0.,
+                b: 0.,
+                a: 0.,
+            }
+        } else {
+            let bg = self.palette().background.to_linear();
+            wgpu::Color {
+                r: bg.0 as f64,
+                g: bg.1 as f64,
+                b: bg.2 as f64,
+                a: 1.0,
+            }
+        };
+        // --- end weezterm remote features ---
+
         let webgpu = self.webgpu.as_mut().unwrap();
         let render_state = self.render_state.as_ref().unwrap();
 
@@ -104,12 +126,9 @@ impl crate::TermWindow {
                                 load: if cleared {
                                     wgpu::LoadOp::Load
                                 } else {
-                                    wgpu::LoadOp::Clear(wgpu::Color {
-                                        r: 0.,
-                                        g: 0.,
-                                        b: 0.,
-                                        a: 0.,
-                                    })
+                                    // --- weezterm remote features ---
+                                    wgpu::LoadOp::Clear(clear_color)
+                                    // --- end weezterm remote features ---
                                 },
                                 store: wgpu::StoreOp::Store,
                             },
@@ -152,11 +171,24 @@ impl crate::TermWindow {
     fn call_draw_glium(&mut self, frame: &mut glium::Frame) -> anyhow::Result<()> {
         use window::glium::texture::SrgbTexture2d;
 
+        // --- weezterm remote features ---
+        // Use the theme's background color as the clear color instead of
+        // transparent black, so the first frame (and every frame) starts with
+        // the correct background. This prevents the transparent-window-with-
+        // black-box artifact on startup.
+        let window_is_transparent_glium =
+            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
+        if window_is_transparent_glium {
+            frame.clear_color(0., 0., 0., 0.);
+        } else {
+            let bg = self.palette().background.to_linear();
+            frame.clear_color(bg.0, bg.1, bg.2, 1.0);
+        }
+        // --- end weezterm remote features ---
+
         let gl_state = self.render_state.as_ref().unwrap();
         let tex = gl_state.glyph_cache.borrow().atlas.texture();
         let tex = tex.downcast_ref::<SrgbTexture2d>().unwrap();
-
-        frame.clear_color(0., 0., 0., 0.);
 
         let projection = euclid::Transform3D::<f32, f32, f32>::ortho(
             -(self.dimensions.pixel_width as f32) / 2.0,

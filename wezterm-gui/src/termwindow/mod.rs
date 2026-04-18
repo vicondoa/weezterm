@@ -811,6 +811,10 @@ impl TermWindow {
         let mut x = None;
         let mut y = None;
         let mut origin = GeometryOrigin::default();
+        // --- weezterm remote features ---
+        let mut saved_maximized = false;
+        let mut saved_fullscreen = false;
+        // --- end weezterm remote features ---
 
         if let Some(position) = mux
             .get_window(mux_window_id)
@@ -820,6 +824,24 @@ impl TermWindow {
             x.replace(position.x);
             y.replace(position.y);
             origin = position.origin;
+        // --- weezterm remote features ---
+        } else {
+            // No CLI position specified; try loading saved window state
+            let workspace = mux
+                .get_window(mux_window_id)
+                .map(|w| w.get_workspace().to_string())
+                .unwrap_or_else(|| mux.active_workspace());
+            if let Some(saved) = crate::window_state_persistence::load_window_state(&workspace) {
+                x.replace(Dimension::Pixels(saved.x as f32));
+                y.replace(Dimension::Pixels(saved.y as f32));
+                origin = GeometryOrigin::ScreenCoordinateSystem;
+                // Override dimensions from saved state
+                dimensions.pixel_width = saved.width;
+                dimensions.pixel_height = saved.height;
+                saved_maximized = saved.maximized;
+                saved_fullscreen = saved.fullscreen;
+            }
+            // --- end weezterm remote features ---
         }
 
         let geometry = RequestedWindowGeometry {
@@ -899,6 +921,17 @@ impl TermWindow {
             }
             myself.load_os_parameters();
             window.show();
+            // --- weezterm remote features ---
+            // Restore maximized/fullscreen state from saved window state.
+            // This must happen after show() so the window is visible first.
+            if saved_maximized {
+                log::debug!("Restoring maximized state from saved window state");
+                window.maximize();
+            } else if saved_fullscreen {
+                log::debug!("Restoring fullscreen state from saved window state");
+                window.toggle_fullscreen();
+            }
+            // --- end weezterm remote features ---
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
@@ -959,6 +992,10 @@ impl TermWindow {
         log::debug!("{event:?}");
         match event {
             WindowEvent::Destroyed => {
+                // --- weezterm remote features ---
+                // Save window state before destruction for future restore.
+                self.save_current_window_state();
+                // --- end weezterm remote features ---
                 // Ensure that we cancel any overlays we had running, so
                 // that the mux can empty out, otherwise the mux keeps
                 // the TermWindow alive via the frontend even though
@@ -1336,10 +1373,35 @@ impl TermWindow {
                             || size.pixel_width != self.terminal_size.pixel_width
                             || size.pixel_height != self.terminal_size.pixel_height
                         {
-                            self.set_window_size(size, window)?;
-                        } else if tab_size.dpi == 0 {
-                            log::debug!("fixup dpi in newly added tab");
+                            // --- weezterm remote features ---
+                            // When window can't resize (maximized/fullscreen),
+                            // don't try to grow the window — just resize the tab
+                            // to match the current window terminal size.
+                            if !self.window_state.can_resize() {
+                                log::debug!(
+                                    "TabAddedToWindow: window is {:?}, resizing tab {} to match window {:?}",
+                                    self.window_state,
+                                    tab_id,
+                                    self.terminal_size,
+                                );
+                                tab.resize(self.terminal_size);
+                            } else {
+                                self.set_window_size(size, window)?;
+                            }
+                            // --- end weezterm remote features ---
+                        } else {
+                            // --- weezterm remote features ---
+                            // Always resize tab to match window, regardless of DPI.
+                            // Previously this only happened when tab_size.dpi == 0,
+                            // but remote tabs typically have non-zero DPI and would
+                            // stay at their remote size.
+                            log::debug!(
+                                "TabAddedToWindow: resizing tab {} to match window {:?}",
+                                tab_id,
+                                self.terminal_size,
+                            );
                             tab.resize(self.terminal_size);
+                            // --- end weezterm remote features ---
                         }
                     }
                 }
@@ -1903,6 +1965,30 @@ impl TermWindow {
         self.invalidate_modal();
         self.emit_window_event("window-config-reloaded", None);
     }
+
+    // --- weezterm remote features ---
+    /// Save the current window state (position, size, maximized, monitor)
+    /// to disk for future restore on reconnect/restart.
+    fn save_current_window_state(&self) {
+        let mux = Mux::get();
+        let workspace = mux
+            .get_window(self.mux_window_id)
+            .map(|w| w.get_workspace().to_string())
+            .unwrap_or_else(|| mux.active_workspace());
+
+        let state = crate::window_state_persistence::SavedWindowState {
+            x: 0, // Will be overridden below if we can get position
+            y: 0,
+            width: self.dimensions.pixel_width,
+            height: self.dimensions.pixel_height,
+            maximized: self.window_state.contains(WindowState::MAXIMIZED),
+            fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
+            monitor: self.current_screen_name.clone(),
+        };
+
+        crate::window_state_persistence::save_window_state(&workspace, state);
+    }
+    // --- end weezterm remote features ---
 
     // --- weezterm remote features ---
     /// Called when the window moves to a different monitor.

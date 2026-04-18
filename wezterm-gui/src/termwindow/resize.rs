@@ -27,7 +27,8 @@ impl super::TermWindow {
         window: &Window,
         live_resizing: bool,
     ) {
-        log::trace!(
+        // --- weezterm remote features ---
+        log::debug!(
             "resize event, live={} current cells: {:?}, current dims: {:?}, new dims: {:?} window_state:{:?}",
             live_resizing,
             self.current_cell_dimensions(),
@@ -35,6 +36,7 @@ impl super::TermWindow {
             dimensions,
             window_state,
         );
+        // --- end weezterm remote features ---
         if dimensions.pixel_width == 0 || dimensions.pixel_height == 0 {
             // on windows, this can happen when minimizing the window.
             // NOP!
@@ -151,6 +153,13 @@ impl super::TermWindow {
                 self.window_state
             );
             scale_changed_cells.take();
+            // --- weezterm remote features ---
+            // When window can't resize (maximized/fullscreen), the dimensions
+            // parameter may be synthetic (from set_window_size). Restore to
+            // the actual window dimensions to prevent corruption that would
+            // cause subsequent resize events to NOP.
+            self.dimensions = saved_dims;
+            // --- end weezterm remote features ---
         }
 
         // Technically speaking, we should compute the rows and cols
@@ -288,15 +297,35 @@ impl super::TermWindow {
             (size, *dimensions, ri_calc)
         };
 
-        log::trace!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
+        // --- weezterm remote features ---
+        log::debug!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
+        // --- end weezterm remote features ---
 
         self.terminal_size = size;
 
         let mux = Mux::get();
         if let Some(window) = mux.get_window(self.mux_window_id) {
+            // --- weezterm remote features ---
+            let tab_count = window.len();
+            // --- end weezterm remote features ---
             for tab in window.iter() {
+                // --- weezterm remote features ---
+                log::debug!(
+                    "apply_dimensions: resizing tab {} to {:?} (window has {} tabs)",
+                    tab.tab_id(),
+                    size,
+                    tab_count,
+                );
+                // --- end weezterm remote features ---
                 tab.resize(size);
             }
+        // --- weezterm remote features ---
+        } else {
+            log::warn!(
+                "apply_dimensions: mux.get_window({}) returned None, tabs NOT resized!",
+                self.mux_window_id,
+            );
+            // --- end weezterm remote features ---
         };
         self.resize_overlays();
         self.invalidate_fancy_tab_bar();
