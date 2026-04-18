@@ -91,8 +91,7 @@ impl MyWindow {
             | WindowEvent::MouseLeave
             | WindowEvent::SetInnerSizeCompleted => {}
             // --- weezterm remote features ---
-            WindowEvent::ScreenChanged { .. } => {}
-            // --- end weezterm remote features ---
+            WindowEvent::ScreenChanged { .. } => {} // --- end weezterm remote features ---
         }
     }
 }

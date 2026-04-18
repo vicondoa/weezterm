@@ -223,8 +223,7 @@ impl OverlayState {
 
         // Track which keys came from the saved overlay JSON so we can
         // distinguish them from keys genuinely set by the user's Lua config.
-        let overlay_keys: std::collections::HashSet<String> =
-            proposals.keys().cloned().collect();
+        let overlay_keys: std::collections::HashSet<String> = proposals.keys().cloned().collect();
 
         // Build domain entries: Lua-sourced (read-only) + overlay-sourced (editable)
         let mut domain_entries = data::domains_from_config();
@@ -1200,8 +1199,7 @@ pub fn run_config_overlay(
                                 let name = picker.schemes[idx].0.clone();
                                 let monitor_idx = state.selected_monitor;
                                 state.monitor_scheme_picker = None;
-                                let field =
-                                    format!("__monitor_{}_color_scheme__", monitor_idx);
+                                let field = format!("__monitor_{}_color_scheme__", monitor_idx);
                                 state.apply_edit_for_field(&field, Value::String(name));
                             }
                         }
@@ -1240,8 +1238,7 @@ pub fn run_config_overlay(
                         }) => {
                             if mouse_buttons.contains(MouseButtons::VERT_WHEEL) {
                                 if mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
-                                    picker.selected =
-                                        picker.selected.saturating_sub(3);
+                                    picker.selected = picker.selected.saturating_sub(3);
                                 } else {
                                     picker.selected = (picker.selected + 3)
                                         .min(picker.filtered.len().saturating_sub(1));
@@ -1252,13 +1249,11 @@ pub fn run_config_overlay(
                                 let (area, _, _) =
                                     render::overlay_rect_pub(size.width, size.height);
                                 let popup_h = area.height.saturating_sub(4).min(30).max(10);
-                                let popup_y =
-                                    area.y + (area.height.saturating_sub(popup_h)) / 2;
+                                let popup_y = area.y + (area.height.saturating_sub(popup_h)) / 2;
                                 let list_start_y = popup_y + 3;
                                 if y >= list_start_y {
                                     let row_in_list = (y - list_start_y) as usize / 2;
-                                    let visible_items =
-                                        (popup_h.saturating_sub(4)) as usize / 2;
+                                    let visible_items = (popup_h.saturating_sub(4)) as usize / 2;
                                     let scroll = if picker.selected >= visible_items {
                                         picker.selected.saturating_sub(visible_items - 1)
                                     } else {
@@ -1269,18 +1264,12 @@ pub fn run_config_overlay(
                                         if clicked_idx == picker.selected {
                                             // Double-click: confirm
                                             let scheme_idx = picker.filtered[clicked_idx];
-                                            let name =
-                                                picker.schemes[scheme_idx].0.clone();
+                                            let name = picker.schemes[scheme_idx].0.clone();
                                             let monitor_idx = state.selected_monitor;
                                             state.monitor_scheme_picker = None;
-                                            let field = format!(
-                                                "__monitor_{}_color_scheme__",
-                                                monitor_idx
-                                            );
-                                            state.apply_edit_for_field(
-                                                &field,
-                                                Value::String(name),
-                                            );
+                                            let field =
+                                                format!("__monitor_{}_color_scheme__", monitor_idx);
+                                            state.apply_edit_for_field(&field, Value::String(name));
                                         } else {
                                             picker.selected = clicked_idx;
                                         }

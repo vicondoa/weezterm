@@ -604,8 +604,7 @@ fn render_monitor_layout_diagram(
         let x1 = ((rect.x - min_x) as f64 * scale).round() as usize;
         let y1 = ((rect.y - min_y) as f64 / char_aspect * scale).round() as usize;
         let x2 = (((rect.x + rect.width - min_x) as f64) * scale).round() as usize;
-        let y2 =
-            (((rect.y + rect.height - min_y) as f64) / char_aspect * scale).round() as usize;
+        let y2 = (((rect.y + rect.height - min_y) as f64) / char_aspect * scale).round() as usize;
 
         let x1 = x1.min(grid_w.saturating_sub(1));
         let x2 = x2.min(grid_w.saturating_sub(1)).max(x1 + 2);
@@ -670,17 +669,17 @@ fn render_monitor_layout_diagram(
     let resolve = |c: u8| -> char {
         match (c & 1 != 0, c & 2 != 0, c & 4 != 0, c & 8 != 0) {
             // (up, down, left, right)
-            (false, true, false, true) => '\u{250c}',  // ┌
-            (false, true, true, false) => '\u{2510}',  // ┐
-            (true, false, false, true) => '\u{2514}',  // └
-            (true, false, true, false) => '\u{2518}',  // ┘
-            (false, false, true, true) => '\u{2500}',  // ─
-            (true, true, false, false) => '\u{2502}',  // │
-            (true, true, false, true) => '\u{251c}',   // ├
-            (true, true, true, false) => '\u{2524}',   // ┤
-            (false, true, true, true) => '\u{252c}',   // ┬
-            (true, false, true, true) => '\u{2534}',   // ┴
-            (true, true, true, true) => '\u{253c}',    // ┼
+            (false, true, false, true) => '\u{250c}', // ┌
+            (false, true, true, false) => '\u{2510}', // ┐
+            (true, false, false, true) => '\u{2514}', // └
+            (true, false, true, false) => '\u{2518}', // ┘
+            (false, false, true, true) => '\u{2500}', // ─
+            (true, true, false, false) => '\u{2502}', // │
+            (true, true, false, true) => '\u{251c}',  // ├
+            (true, true, true, false) => '\u{2524}',  // ┤
+            (false, true, true, true) => '\u{252c}',  // ┬
+            (true, false, true, true) => '\u{2534}',  // ┴
+            (true, true, true, true) => '\u{253c}',   // ┼
             // Partial (dead-end lines)
             (false, true, false, false) => '\u{2502}', // │
             (true, false, false, false) => '\u{2502}', // │
@@ -947,7 +946,6 @@ fn render_scheme_picker_common(
     parent: Rect,
     label: &str,
 ) {
-
     let popup_w = parent.width.saturating_sub(4).min(80).max(40);
     let popup_h = parent.height.saturating_sub(4).min(30).max(10);
     let popup_x = parent.x + (parent.width.saturating_sub(popup_w)) / 2;

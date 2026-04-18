@@ -916,9 +916,8 @@ impl TermWindow {
                         .iter()
                         .any(|m| m.color_scheme.is_some())
                 {
-                    let mut overrides = config_overlay::persistence::proposals_to_overrides(
-                        overlay_data.proposals,
-                    );
+                    let mut overrides =
+                        config_overlay::persistence::proposals_to_overrides(overlay_data.proposals);
                     let config_monitor_overrides =
                         config_overlay::data::to_config_monitor_overrides(
                             &overlay_data.monitor_overrides,
@@ -927,9 +926,7 @@ impl TermWindow {
                         if let wezterm_dynamic::Value::Object(ref mut obj) = overrides {
                             use wezterm_dynamic::ToDynamic;
                             obj.insert(
-                                wezterm_dynamic::Value::String(
-                                    "monitor_overrides".to_string(),
-                                ),
+                                wezterm_dynamic::Value::String("monitor_overrides".to_string()),
                                 config_monitor_overrides.to_dynamic(),
                             );
                         }
