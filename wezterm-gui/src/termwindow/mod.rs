@@ -902,6 +902,50 @@ impl TermWindow {
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
             myself.emit_status_event();
+
+            // --- weezterm remote features ---
+            // Apply saved overlay proposals + monitor overrides at startup
+            // so config overlay settings persist across restarts.
+            {
+                use crate::overlay::config_overlay;
+                let overlay_data =
+                    config_overlay::persistence::load_overlay_data().unwrap_or_default();
+                if !overlay_data.proposals.is_empty()
+                    || overlay_data
+                        .monitor_overrides
+                        .iter()
+                        .any(|m| m.color_scheme.is_some())
+                {
+                    let mut overrides = config_overlay::persistence::proposals_to_overrides(
+                        overlay_data.proposals,
+                    );
+                    let config_monitor_overrides =
+                        config_overlay::data::to_config_monitor_overrides(
+                            &overlay_data.monitor_overrides,
+                        );
+                    if !config_monitor_overrides.is_empty() {
+                        if let wezterm_dynamic::Value::Object(ref mut obj) = overrides {
+                            use wezterm_dynamic::ToDynamic;
+                            obj.insert(
+                                wezterm_dynamic::Value::String(
+                                    "monitor_overrides".to_string(),
+                                ),
+                                config_monitor_overrides.to_dynamic(),
+                            );
+                        }
+                    }
+                    if overrides != wezterm_dynamic::Value::default() {
+                        myself.config_overrides = overrides;
+                        myself.config_was_reloaded();
+                    }
+                    // If we already know which monitor we're on, re-apply
+                    // monitor overrides now that the config includes them.
+                    if let Some(ref screen) = myself.current_screen_name.clone() {
+                        myself.apply_monitor_overrides(screen);
+                    }
+                }
+            }
+            // --- end weezterm remote features ---
         }
 
         crate::update::start_update_checker();
@@ -2548,15 +2592,27 @@ impl TermWindow {
         let tab_id = tab.tab_id();
         // --- weezterm remote features ---
         let current_screen = self.current_screen_name.clone();
-        let screen_names: Vec<String> = {
+        let screen_info_map: std::collections::HashMap<String, ::window::screen::ScreenInfo> = {
             use ::window::ConnectionOps;
             ::window::Connection::get()
                 .and_then(|conn| conn.screens().ok())
-                .map(|screens| screens.by_name.keys().cloned().collect())
+                .map(|screens| screens.by_name)
                 .unwrap_or_default()
         };
-        let monitor_entries =
-            data::monitors_from_config_with_screens(&screen_names, current_screen.as_deref());
+        let mut monitor_entries =
+            data::monitors_from_config_with_screens(&screen_info_map, current_screen.as_deref());
+        // Merge saved overlay monitor overrides into monitor entries so that
+        // previously-saved color scheme assignments show up in the overlay.
+        for saved in &overlay_data.monitor_overrides {
+            if let Some(entry) = monitor_entries
+                .iter_mut()
+                .find(|e| e.monitor_name == saved.monitor_name)
+            {
+                if entry.color_scheme.is_none() {
+                    entry.color_scheme = saved.color_scheme.clone();
+                }
+            }
+        }
         // --- end weezterm remote features ---
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
             config_overlay::run_config_overlay(
@@ -2623,8 +2679,24 @@ impl TermWindow {
                         }
                     }
 
-                    // Apply proposals as window config overrides
-                    let overrides = config_overlay::persistence::proposals_to_overrides(proposals);
+                    // Apply proposals + monitor overrides as window config overrides
+                    // --- weezterm remote features ---
+                    let config_monitor_overrides =
+                        config_overlay::data::to_config_monitor_overrides(&monitor_overrides);
+                    let mut overrides =
+                        config_overlay::persistence::proposals_to_overrides(proposals);
+                    // Inject monitor_overrides into the overrides object so the
+                    // running config picks them up via SetConfigOverrides.
+                    if !config_monitor_overrides.is_empty() {
+                        if let wezterm_dynamic::Value::Object(ref mut obj) = overrides {
+                            use wezterm_dynamic::ToDynamic;
+                            obj.insert(
+                                wezterm_dynamic::Value::String("monitor_overrides".to_string()),
+                                config_monitor_overrides.to_dynamic(),
+                            );
+                        }
+                    }
+                    // --- end weezterm remote features ---
                     window_clone.notify(TermWindowNotif::SetConfigOverrides(overrides));
                 }
                 Ok(config_overlay::ConfigOverlayAction::Preview(proposals)) => {

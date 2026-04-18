@@ -73,6 +73,12 @@ pub(crate) struct SettingRow {
     pub domain_header: Option<DomainHeaderInfo>,
     /// If this is a domain child field, holds the domain index.
     pub domain_child: Option<usize>,
+    // --- weezterm remote features ---
+    /// If this is a monitor group header, holds the monitor index.
+    pub monitor_header: Option<MonitorHeaderInfo>,
+    /// If this is a monitor child field, holds the monitor index.
+    pub monitor_child: Option<usize>,
+    // --- end weezterm remote features ---
 }
 
 /// Info for a domain group header row.
@@ -82,6 +88,16 @@ pub(crate) struct DomainHeaderInfo {
     pub source: data::DomainSource,
     pub expanded: bool,
 }
+
+// --- weezterm remote features ---
+/// Info for a monitor group header row.
+#[derive(Debug, Clone)]
+pub(crate) struct MonitorHeaderInfo {
+    pub monitor_index: usize,
+    pub is_current: bool,
+    pub expanded: bool,
+}
+// --- end weezterm remote features ---
 
 /// Sentinel row type for "Add SSH Domain..." action.
 const ADD_DOMAIN_FIELD_NAME: &str = "__add_ssh_domain__";
@@ -103,6 +119,9 @@ struct OverlayState {
     default_values: HashMap<String, Value>,
     /// Fields that the Lua config explicitly set (even if to defaults).
     lua_set_fields: std::collections::HashSet<String>,
+    /// Keys from the saved config-overlay.json proposals — used to distinguish
+    /// overlay-set fields from genuinely Lua-set fields.
+    overlay_keys: std::collections::HashSet<String>,
     field_defs: Vec<FieldDef>,
     dirty: bool,
     /// Inline edit mode: field name + buffer
@@ -126,6 +145,9 @@ struct OverlayState {
     monitors_dirty: bool,
     /// Monitor scheme picker popup.
     monitor_scheme_picker: Option<ColorSchemePicker>,
+    /// Suppress the first mouse click to avoid passthrough from the overlay
+    /// that opened us (e.g. command palette).
+    ignore_first_mouse: bool,
     // --- end weezterm remote features ---
 }
 
@@ -199,6 +221,11 @@ impl OverlayState {
             proposals.insert(k, v);
         }
 
+        // Track which keys came from the saved overlay JSON so we can
+        // distinguish them from keys genuinely set by the user's Lua config.
+        let overlay_keys: std::collections::HashSet<String> =
+            proposals.keys().cloned().collect();
+
         // Build domain entries: Lua-sourced (read-only) + overlay-sourced (editable)
         let mut domain_entries = data::domains_from_config();
         for saved_dom in saved_domains {
@@ -231,6 +258,7 @@ impl OverlayState {
             effective_values,
             default_values,
             lua_set_fields,
+            overlay_keys,
             field_defs,
             dirty: false,
             inline_edit: None,
@@ -244,6 +272,7 @@ impl OverlayState {
             selected_monitor: 0,
             monitors_dirty: false,
             monitor_scheme_picker: None,
+            ignore_first_mouse: true,
             // --- end weezterm remote features ---
         }
     }
@@ -284,12 +313,11 @@ impl OverlayState {
 
                 let proposed_value = proposed_val.map(|v| data::value_to_display_string(v));
 
-                let status = if proposed_val.is_some() && self.lua_set_fields.contains(f.name) {
-                    // The overlay wrote this value — Lua sees it because
-                    // the overlay config file was loaded.  Still editable.
+                let status = if proposed_val.is_some() && self.overlay_keys.contains(f.name) {
+                    // The overlay previously saved this value — still editable.
                     FieldStatus::OverlayModified
                 } else if proposed_val.is_some() {
-                    // User has proposed a change via the overlay
+                    // User has proposed a new change via the overlay this session
                     FieldStatus::Editable
                 } else if self.lua_set_fields.contains(f.name) {
                     // Lua explicitly set this field (user's hand-written config)
@@ -308,6 +336,8 @@ impl OverlayState {
                     kind: f.kind.clone(),
                     domain_header: None,
                     domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
                 }
             })
             .collect();
@@ -349,6 +379,8 @@ impl OverlayState {
                         expanded: entry.expanded,
                     }),
                     domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
                 });
 
                 // If expanded, show child fields
@@ -369,6 +401,8 @@ impl OverlayState {
                             kind: field_kind.clone(),
                             domain_header: None,
                             domain_child: Some(idx),
+                            monitor_header: None,
+                            monitor_child: None,
                         });
                     }
 
@@ -383,6 +417,8 @@ impl OverlayState {
                             kind: FieldKind::Text,
                             domain_header: None,
                             domain_child: Some(idx),
+                            monitor_header: None,
+                            monitor_child: None,
                         });
                     }
                 }
@@ -399,12 +435,14 @@ impl OverlayState {
                     kind: FieldKind::Text,
                     domain_header: None,
                     domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
                 });
             }
         }
 
         // --- weezterm remote features ---
-        // For Monitors section, show monitor override entries
+        // For Monitors section, show grouped monitor override entries
         if section == Section::Monitors {
             for (idx, entry) in self.monitor_entries.iter().enumerate() {
                 if !filter_lower.is_empty()
@@ -413,28 +451,55 @@ impl OverlayState {
                     continue;
                 }
 
-                let scheme_display = entry
+                let scheme_summary = entry
                     .color_scheme
                     .as_deref()
                     .unwrap_or("(default)")
                     .to_string();
 
-                let display_name = if entry.is_current {
-                    format!("▸ {}", entry.monitor_name)
-                } else {
-                    entry.monitor_name.clone()
-                };
-
+                // Monitor group header row
                 rows.push(SettingRow {
-                    field_name: format!("__monitor_{}__", idx),
-                    display_name,
-                    current_value: scheme_display,
+                    field_name: format!("__monitor_header_{}__", idx),
+                    display_name: entry.monitor_name.clone(),
+                    current_value: scheme_summary,
                     proposed_value: None,
-                    status: FieldStatus::Editable,
-                    kind: FieldKind::ColorScheme,
+                    status: if entry.color_scheme.is_some() {
+                        FieldStatus::Editable
+                    } else {
+                        FieldStatus::Inherited
+                    },
+                    kind: FieldKind::Text,
                     domain_header: None,
                     domain_child: None,
+                    monitor_header: Some(MonitorHeaderInfo {
+                        monitor_index: idx,
+                        is_current: entry.is_current,
+                        expanded: entry.expanded,
+                    }),
+                    monitor_child: None,
                 });
+
+                // If expanded, show child fields
+                if entry.expanded {
+                    let scheme_display = entry
+                        .color_scheme
+                        .as_deref()
+                        .unwrap_or("(default)")
+                        .to_string();
+
+                    rows.push(SettingRow {
+                        field_name: format!("__monitor_{}_color_scheme__", idx),
+                        display_name: "  Color Scheme".to_string(),
+                        current_value: scheme_display,
+                        proposed_value: None,
+                        status: FieldStatus::Editable,
+                        kind: FieldKind::ColorScheme,
+                        domain_header: None,
+                        domain_child: None,
+                        monitor_header: None,
+                        monitor_child: Some(idx),
+                    });
+                }
             }
 
             if self.monitor_entries.is_empty() && filter_lower.is_empty() {
@@ -447,6 +512,8 @@ impl OverlayState {
                     kind: FieldKind::Text,
                     domain_header: None,
                     domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
                 });
             }
         }
@@ -518,20 +585,22 @@ impl OverlayState {
     /// Apply an edit: toggle bool, cycle enum, or accept inline text.
     fn apply_edit_for_field(&mut self, field_name: &str, new_value: Value) {
         // --- weezterm remote features ---
-        // Intercept monitor override field names
-        if let Some(idx_str) = field_name
-            .strip_prefix("__monitor_")
-            .and_then(|s| s.strip_suffix("__"))
-        {
-            if let Ok(idx) = idx_str.parse::<usize>() {
-                if idx < self.monitor_entries.len() {
-                    let scheme = match &new_value {
-                        Value::String(s) => Some(s.clone()),
-                        _ => None,
-                    };
-                    self.monitor_entries[idx].color_scheme = scheme;
-                    self.monitors_dirty = true;
-                    self.dirty = true;
+        // Intercept monitor override child field names (__monitor_N_color_scheme__)
+        if let Some(rest) = field_name.strip_prefix("__monitor_") {
+            if let Some(rest) = rest.strip_suffix("__") {
+                if let Some(sep) = rest.find('_') {
+                    let idx_str = &rest[..sep];
+                    if let Ok(idx) = idx_str.parse::<usize>() {
+                        if idx < self.monitor_entries.len() {
+                            let scheme = match &new_value {
+                                Value::String(s) => Some(s.clone()),
+                                _ => None,
+                            };
+                            self.monitor_entries[idx].color_scheme = scheme;
+                            self.monitors_dirty = true;
+                            self.dirty = true;
+                        }
+                    }
                 }
             }
             return;
@@ -717,6 +786,50 @@ impl OverlayState {
             .map(|e| e.config.clone())
             .collect()
     }
+
+    // --- weezterm remote features ---
+    /// Handle Enter on a monitor-related row.
+    fn handle_monitor_enter(&mut self, row: &SettingRow) {
+        // Monitor header: toggle expand/collapse
+        if let Some(ref header) = row.monitor_header {
+            self.monitor_entries[header.monitor_index].expanded =
+                !self.monitor_entries[header.monitor_index].expanded;
+            return;
+        }
+
+        // Monitor child field: open color scheme picker
+        if let Some(monitor_idx) = row.monitor_child {
+            if monitor_idx < self.monitor_entries.len() {
+                self.open_monitor_scheme_picker(monitor_idx);
+            }
+        }
+    }
+
+    /// Open a color scheme picker for a monitor override.
+    fn open_monitor_scheme_picker(&mut self, monitor_idx: usize) {
+        let schemes = data::get_color_schemes();
+        let current = self
+            .monitor_entries
+            .get(monitor_idx)
+            .and_then(|e| e.color_scheme.clone())
+            .unwrap_or_default();
+
+        let filtered: Vec<usize> = (0..schemes.len()).collect();
+        let selected = schemes
+            .iter()
+            .position(|(name, _)| name == &current)
+            .unwrap_or(0);
+
+        self.monitor_scheme_picker = Some(ColorSchemePicker {
+            schemes,
+            filtered,
+            selected,
+            filter: String::new(),
+            scroll_offset: 0,
+        });
+        self.selected_monitor = monitor_idx;
+    }
+    // --- end weezterm remote features ---
 }
 
 /// Extract the field key from a domain child field name like `__domain_2_remote_address__`.
@@ -788,6 +901,19 @@ pub fn run_config_overlay(
 
         match input {
             Ok(Some(input)) => {
+                // --- weezterm remote features ---
+                // Suppress the first mouse click to avoid passthrough from
+                // the overlay that opened us (e.g. command palette click).
+                if state.ignore_first_mouse {
+                    if matches!(input, InputEvent::Mouse(_)) {
+                        state.ignore_first_mouse = false;
+                        continue;
+                    }
+                    // Any key press also clears the flag
+                    state.ignore_first_mouse = false;
+                }
+                // --- end weezterm remote features ---
+
                 // If in inline edit mode, handle separately
                 if let Some(ref mut edit) = state.inline_edit {
                     match input {
@@ -1056,6 +1182,118 @@ pub fn run_config_overlay(
                     continue;
                 }
 
+                // --- weezterm remote features ---
+                // If in monitor color scheme picker mode, handle picker input
+                if let Some(ref mut picker) = state.monitor_scheme_picker {
+                    match input {
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Escape,
+                            ..
+                        }) => {
+                            state.monitor_scheme_picker = None;
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Enter,
+                            ..
+                        }) => {
+                            if let Some(&idx) = picker.filtered.get(picker.selected) {
+                                let name = picker.schemes[idx].0.clone();
+                                let monitor_idx = state.selected_monitor;
+                                state.monitor_scheme_picker = None;
+                                let field =
+                                    format!("__monitor_{}_color_scheme__", monitor_idx);
+                                state.apply_edit_for_field(&field, Value::String(name));
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::UpArrow,
+                            ..
+                        }) => {
+                            if picker.selected > 0 {
+                                picker.selected -= 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::DownArrow,
+                            ..
+                        }) => {
+                            if picker.selected + 1 < picker.filtered.len() {
+                                picker.selected += 1;
+                            }
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Backspace,
+                            ..
+                        }) => {
+                            picker.filter.pop();
+                            picker.refilter();
+                        }
+                        InputEvent::Key(KeyEvent {
+                            key: KeyCode::Char(c),
+                            ..
+                        }) => {
+                            picker.filter.push(c);
+                            picker.refilter();
+                        }
+                        InputEvent::Mouse(MouseEvent {
+                            y, mouse_buttons, ..
+                        }) => {
+                            if mouse_buttons.contains(MouseButtons::VERT_WHEEL) {
+                                if mouse_buttons.contains(MouseButtons::WHEEL_POSITIVE) {
+                                    picker.selected =
+                                        picker.selected.saturating_sub(3);
+                                } else {
+                                    picker.selected = (picker.selected + 3)
+                                        .min(picker.filtered.len().saturating_sub(1));
+                                }
+                            } else if mouse_buttons == MouseButtons::LEFT {
+                                // Click to select/confirm scheme
+                                let size = ratatui_term.backend().size().unwrap_or_default();
+                                let (area, _, _) =
+                                    render::overlay_rect_pub(size.width, size.height);
+                                let popup_h = area.height.saturating_sub(4).min(30).max(10);
+                                let popup_y =
+                                    area.y + (area.height.saturating_sub(popup_h)) / 2;
+                                let list_start_y = popup_y + 3;
+                                if y >= list_start_y {
+                                    let row_in_list = (y - list_start_y) as usize / 2;
+                                    let visible_items =
+                                        (popup_h.saturating_sub(4)) as usize / 2;
+                                    let scroll = if picker.selected >= visible_items {
+                                        picker.selected.saturating_sub(visible_items - 1)
+                                    } else {
+                                        0
+                                    };
+                                    let clicked_idx = scroll + row_in_list;
+                                    if clicked_idx < picker.filtered.len() {
+                                        if clicked_idx == picker.selected {
+                                            // Double-click: confirm
+                                            let scheme_idx = picker.filtered[clicked_idx];
+                                            let name =
+                                                picker.schemes[scheme_idx].0.clone();
+                                            let monitor_idx = state.selected_monitor;
+                                            state.monitor_scheme_picker = None;
+                                            let field = format!(
+                                                "__monitor_{}_color_scheme__",
+                                                monitor_idx
+                                            );
+                                            state.apply_edit_for_field(
+                                                &field,
+                                                Value::String(name),
+                                            );
+                                        } else {
+                                            picker.selected = clicked_idx;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                    continue;
+                }
+                // --- end weezterm remote features ---
+
                 // If in filter mode, handle filter input
                 if state.filter_active {
                     match input {
@@ -1188,6 +1426,13 @@ pub fn run_config_overlay(
                                     || row.field_name.starts_with(DELETE_DOMAIN_FIELD_NAME)
                                 {
                                     state.handle_domain_enter(&row);
+                                // --- weezterm remote features ---
+                                // Monitor-related rows
+                                } else if row.monitor_header.is_some()
+                                    || row.monitor_child.is_some()
+                                {
+                                    state.handle_monitor_enter(&row);
+                                // --- end weezterm remote features ---
                                 } else if !OverlayState::is_row_editable(&row) {
                                     // FixedByLua: don't allow edits
                                 } else {
@@ -1258,6 +1503,12 @@ pub fn run_config_overlay(
                                     }
                                 } else if row.domain_header.is_some() {
                                     state.handle_domain_enter(&row);
+                                // --- weezterm remote features ---
+                                } else if row.monitor_header.is_some()
+                                    || row.monitor_child.is_some()
+                                {
+                                    state.handle_monitor_enter(&row);
+                                // --- end weezterm remote features ---
                                 } else if OverlayState::is_row_editable(&row) {
                                     match &row.kind {
                                         FieldKind::Bool => {
@@ -1399,6 +1650,7 @@ pub fn run_config_overlay(
                                             && state.active_panel == Panel::Settings;
                                         state.selected_setting = idx;
                                         state.active_panel = Panel::Settings;
+
                                         if was_selected {
                                             if let Some(sr) = state.selected_row() {
                                                 // Domain rows
@@ -1410,6 +1662,12 @@ pub fn run_config_overlay(
                                                         .starts_with(DELETE_DOMAIN_FIELD_NAME)
                                                 {
                                                     state.handle_domain_enter(&sr);
+                                                // --- weezterm remote features ---
+                                                } else if sr.monitor_header.is_some()
+                                                    || sr.monitor_child.is_some()
+                                                {
+                                                    state.handle_monitor_enter(&sr);
+                                                // --- end weezterm remote features ---
                                                 } else if OverlayState::is_row_editable(&sr) {
                                                     match &sr.kind {
                                                         FieldKind::Bool => {
@@ -1555,6 +1813,8 @@ mod test {
                 expanded: false,
             }),
             domain_child: None,
+            monitor_header: None,
+            monitor_child: None,
         };
         assert!(row.domain_header.is_some());
         assert!(row.domain_child.is_none());

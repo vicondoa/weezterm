@@ -998,6 +998,19 @@ pub struct MonitorOverrideEntry {
     pub color_scheme: Option<String>,
     /// Whether this monitor is the one the current window is on.
     pub is_current: bool,
+    /// Whether this entry is expanded in the overlay UI.
+    pub expanded: bool,
+    /// Screen position and size in pixels (for layout diagram).
+    pub screen_rect: Option<MonitorRect>,
+}
+
+/// Screen rectangle for layout diagram rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorRect {
+    pub x: isize,
+    pub y: isize,
+    pub width: isize,
+    pub height: isize,
 }
 
 /// Build MonitorOverrideEntry list from the current system monitors
@@ -1006,23 +1019,31 @@ pub struct MonitorOverrideEntry {
 /// This must be called from code that has access to the screen list
 /// (typically the GUI thread). Pass the result to the config overlay.
 pub fn monitors_from_config_with_screens(
-    screens: &[String],
+    screen_info: &std::collections::HashMap<String, window::screen::ScreenInfo>,
     current_screen: Option<&str>,
 ) -> Vec<MonitorOverrideEntry> {
     let config = config::configuration();
 
     let mut entries: Vec<MonitorOverrideEntry> = Vec::new();
-    for name in screens {
+    for (name, info) in screen_info {
         let color_scheme = config
             .monitor_overrides
             .iter()
             .find(|mo| &mo.monitor == name)
             .and_then(|mo| mo.color_scheme.clone());
 
+        let rect = info.rect;
         entries.push(MonitorOverrideEntry {
             monitor_name: name.clone(),
             color_scheme,
             is_current: current_screen == Some(name.as_str()),
+            expanded: false,
+            screen_rect: Some(MonitorRect {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            }),
         });
     }
 
@@ -1033,6 +1054,8 @@ pub fn monitors_from_config_with_screens(
                 monitor_name: mo.monitor.clone(),
                 color_scheme: mo.color_scheme.clone(),
                 is_current: false,
+                expanded: false,
+                screen_rect: None,
             });
         }
     }

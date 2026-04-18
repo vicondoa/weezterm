@@ -1149,12 +1149,11 @@ impl Config {
                         .set_name(p.to_string_lossy())
                         .eval_async(),
                 )?;
-                let config = Config::apply_overrides_to(&lua, config)?;
-                let config = Config::apply_overrides_obj_to(&lua, config, overrides)?;
-
                 // --- weezterm remote features ---
-                // Capture which top-level keys are present in the Lua config table.
-                // This tells us which fields the user explicitly set (even to defaults).
+                // Capture which top-level keys are present in the Lua config table
+                // BEFORE overrides are applied. This ensures lua_set_fields only
+                // contains keys the user explicitly set in their Lua config, not
+                // keys injected by window-level overrides (e.g. config overlay).
                 if let mlua::Value::Table(ref tbl) = config {
                     let mut keys = std::collections::HashSet::new();
                     for pair in tbl.clone().pairs::<mlua::Value, mlua::Value>() {
@@ -1167,6 +1166,9 @@ impl Config {
                     crate::set_lua_config_keys(keys);
                 }
                 // --- end weezterm remote features ---
+
+                let config = Config::apply_overrides_to(&lua, config)?;
+                let config = Config::apply_overrides_obj_to(&lua, config, overrides)?;
 
                 cfg = Config::from_lua(config, &lua).with_context(|| {
                     format!(

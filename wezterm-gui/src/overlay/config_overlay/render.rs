@@ -92,9 +92,15 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
     let right_area = horiz[1];
 
     // Right area: split into settings + details
+    // Use more detail rows for the Monitors section to show the layout diagram
+    let detail_rows = if state.current_section() == super::data::Section::Monitors {
+        8
+    } else {
+        DETAIL_ROWS
+    };
     let right_vert = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Min(3), Constraint::Length(DETAIL_ROWS)])
+        .constraints([Constraint::Min(3), Constraint::Length(detail_rows)])
         .split(right_area);
 
     let settings_area = right_vert[0];
@@ -126,6 +132,13 @@ pub fn ui(frame: &mut Frame, state: &mut OverlayState, theme: &Theme) -> LayoutG
     if state.scheme_picker.is_some() {
         render_scheme_picker(frame, state, theme, area);
     }
+
+    // --- weezterm remote features ---
+    // ── Monitor color scheme picker popup ─────────────────────────────
+    if state.monitor_scheme_picker.is_some() {
+        render_monitor_scheme_picker(frame, state, theme, area);
+    }
+    // --- end weezterm remote features ---
 
     LayoutGeo {
         left_pad,
@@ -246,6 +259,47 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                     ratatui::text::Text::styled(badge.to_string(), bdg_style),
                 ]);
             }
+
+            // --- weezterm remote features ---
+            // Monitor group header row
+            if let Some(ref header) = setting.monitor_header {
+                let arrow = if header.expanded {
+                    "\u{25be}"
+                } else {
+                    "\u{25b8}"
+                };
+                let current_marker = if header.is_current { " \u{25c6}" } else { "" };
+                let label = format!(" {} {}{} ", arrow, setting.display_name, current_marker);
+                let badge = if setting.status == FieldStatus::Inherited {
+                    "inherited"
+                } else {
+                    "modified"
+                };
+                let (name_style, val_style, bdg_style) = if is_selected {
+                    (theme.selected, theme.selected_value, theme.selected_badge)
+                } else {
+                    (
+                        theme.text.add_modifier(Modifier::BOLD),
+                        theme.value,
+                        if setting.status == FieldStatus::Inherited {
+                            theme.badge_inherited
+                        } else {
+                            theme.badge_editable
+                        },
+                    )
+                };
+                let sep_line = "\u{2500}".repeat(name_w.saturating_sub(label.len()).max(1));
+                let name_cell = Line::from(vec![
+                    Span::styled(label, name_style),
+                    Span::styled(sep_line, theme.border),
+                ]);
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::styled(setting.current_value.clone(), val_style),
+                    ratatui::text::Text::styled(badge.to_string(), bdg_style),
+                ]);
+            }
+            // --- end weezterm remote features ---
 
             // "Add SSH Domain..." action row
             if setting.field_name == super::ADD_DOMAIN_FIELD_NAME {
@@ -399,6 +453,21 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         theme.detail,
                     )),
                 ]
+            // --- weezterm remote features ---
+            } else if row.monitor_header.is_some() || row.monitor_child.is_some() {
+                let selected_idx = row
+                    .monitor_header
+                    .as_ref()
+                    .map(|h| h.monitor_index)
+                    .or(row.monitor_child);
+                render_monitor_layout_diagram(
+                    &state.monitor_entries,
+                    selected_idx,
+                    area.width.saturating_sub(2) as usize,
+                    area.height.saturating_sub(1) as usize,
+                    theme,
+                )
+            // --- end weezterm remote features ---
             } else {
                 let field_def = state.field_defs.iter().find(|f| f.name == row.field_name);
                 let kind_label = field_def
@@ -464,6 +533,215 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
     let paragraph = Paragraph::new(lines).block(block);
     frame.render_widget(paragraph, area);
 }
+
+// --- weezterm remote features ---
+// ─── Monitor layout diagram ────────────────────────────────────────────────
+
+/// Render an ASCII layout diagram of monitor positions with numbered boxes.
+/// Uses a connection-based approach so shared edges produce proper junctions
+/// (┬ ┴ ├ ┤ ┼) instead of overwriting each other.
+fn render_monitor_layout_diagram(
+    monitors: &[super::data::MonitorOverrideEntry],
+    selected_idx: Option<usize>,
+    avail_w: usize,
+    avail_h: usize,
+    theme: &super::theme::Theme,
+) -> Vec<Line<'static>> {
+    use super::data::MonitorRect;
+
+    let rects: Vec<(usize, MonitorRect)> = monitors
+        .iter()
+        .enumerate()
+        .filter_map(|(i, m)| m.screen_rect.map(|r| (i, r)))
+        .collect();
+
+    if rects.is_empty() {
+        return vec![Line::from(Span::styled(
+            " (no monitor geometry available)",
+            theme.text_dim,
+        ))];
+    }
+
+    // Bounding box
+    let min_x = rects.iter().map(|(_, r)| r.x).min().unwrap();
+    let min_y = rects.iter().map(|(_, r)| r.y).min().unwrap();
+    let max_x = rects.iter().map(|(_, r)| r.x + r.width).max().unwrap();
+    let max_y = rects.iter().map(|(_, r)| r.y + r.height).max().unwrap();
+
+    let total_w = (max_x - min_x) as f64;
+    let total_h = (max_y - min_y) as f64;
+    if total_w <= 0.0 || total_h <= 0.0 {
+        return vec![Line::from(Span::styled(
+            " (invalid monitor geometry)",
+            theme.text_dim,
+        ))];
+    }
+
+    let draw_w = avail_w.saturating_sub(1).max(10);
+    let draw_h = avail_h.max(3);
+
+    // Scale to fit, preserving aspect ratio (terminal chars ~2:1)
+    let char_aspect = 2.0_f64;
+    let scale_x = draw_w as f64 / total_w;
+    let scale_y = draw_h as f64 / (total_h / char_aspect);
+    let scale = scale_x.min(scale_y);
+
+    let grid_w = (total_w * scale).ceil() as usize + 1;
+    let grid_h = (total_h / char_aspect * scale).ceil() as usize + 1;
+    let grid_w = grid_w.min(draw_w).max(1);
+    let grid_h = grid_h.min(draw_h).max(1);
+
+    // Connection grid: at each point, which directions have border lines?
+    // Packed as bits: 1=up, 2=down, 4=left, 8=right
+    let mut conn: Vec<Vec<u8>> = vec![vec![0u8; grid_w]; grid_h];
+    // Owner grid: which monitor index owns each cell (for styling)
+    let mut owner: Vec<Vec<Option<usize>>> = vec![vec![None; grid_w]; grid_h];
+    // Character overlay: for labels placed on top of interior cells
+    let mut label_grid: Vec<Vec<Option<char>>> = vec![vec![None; grid_w]; grid_h];
+
+    // Convert each monitor rect to grid coordinates and draw
+    for &(idx, ref rect) in &rects {
+        let x1 = ((rect.x - min_x) as f64 * scale).round() as usize;
+        let y1 = ((rect.y - min_y) as f64 / char_aspect * scale).round() as usize;
+        let x2 = (((rect.x + rect.width - min_x) as f64) * scale).round() as usize;
+        let y2 =
+            (((rect.y + rect.height - min_y) as f64) / char_aspect * scale).round() as usize;
+
+        let x1 = x1.min(grid_w.saturating_sub(1));
+        let x2 = x2.min(grid_w.saturating_sub(1)).max(x1 + 2);
+        let y1 = y1.min(grid_h.saturating_sub(1));
+        let y2 = y2.min(grid_h.saturating_sub(1)).max(y1 + 2);
+
+        // Top border: horizontal connections
+        for x in x1..x2 {
+            if y1 < grid_h && x + 1 < grid_w {
+                conn[y1][x] |= 8; // right
+                conn[y1][x + 1] |= 4; // left
+            }
+        }
+        // Bottom border
+        for x in x1..x2 {
+            if y2 < grid_h && x + 1 < grid_w {
+                conn[y2][x] |= 8;
+                conn[y2][x + 1] |= 4;
+            }
+        }
+        // Left border: vertical connections
+        for y in y1..y2 {
+            if x1 < grid_w && y + 1 < grid_h {
+                conn[y][x1] |= 2; // down
+                conn[y + 1][x1] |= 1; // up
+            }
+        }
+        // Right border
+        for y in y1..y2 {
+            if x2 < grid_w && y + 1 < grid_h {
+                conn[y][x2] |= 2;
+                conn[y + 1][x2] |= 1;
+            }
+        }
+
+        // Fill interior ownership
+        for y in y1..=y2.min(grid_h.saturating_sub(1)) {
+            for x in x1..=x2.min(grid_w.saturating_sub(1)) {
+                owner[y][x] = Some(idx);
+            }
+        }
+
+        // Place label in center
+        let center_y = (y1 + y2) / 2;
+        let center_x = (x1 + x2) / 2;
+        let is_current = monitors.get(idx).map_or(false, |m| m.is_current);
+        let label = if is_current {
+            format!("\u{25c6}{}", idx + 1)
+        } else {
+            format!("{}", idx + 1)
+        };
+        let label_start = center_x.saturating_sub(label.len() / 2);
+        for (ci, ch) in label.chars().enumerate() {
+            let px = label_start + ci;
+            if center_y > y1 && center_y < y2 && px > x1 && px < x2 && px < grid_w {
+                label_grid[center_y][px] = Some(ch);
+            }
+        }
+    }
+
+    // Resolve connections to box-drawing characters and build output
+    let resolve = |c: u8| -> char {
+        match (c & 1 != 0, c & 2 != 0, c & 4 != 0, c & 8 != 0) {
+            // (up, down, left, right)
+            (false, true, false, true) => '\u{250c}',  // ┌
+            (false, true, true, false) => '\u{2510}',  // ┐
+            (true, false, false, true) => '\u{2514}',  // └
+            (true, false, true, false) => '\u{2518}',  // ┘
+            (false, false, true, true) => '\u{2500}',  // ─
+            (true, true, false, false) => '\u{2502}',  // │
+            (true, true, false, true) => '\u{251c}',   // ├
+            (true, true, true, false) => '\u{2524}',   // ┤
+            (false, true, true, true) => '\u{252c}',   // ┬
+            (true, false, true, true) => '\u{2534}',   // ┴
+            (true, true, true, true) => '\u{253c}',    // ┼
+            // Partial (dead-end lines)
+            (false, true, false, false) => '\u{2502}', // │
+            (true, false, false, false) => '\u{2502}', // │
+            (false, false, true, false) => '\u{2500}', // ─
+            (false, false, false, true) => '\u{2500}', // ─
+            _ => ' ',
+        }
+    };
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+    for y in 0..grid_h {
+        let mut spans: Vec<Span<'static>> = vec![Span::raw(" ")];
+        let mut current_text = String::new();
+        let mut current_owner: Option<usize> = None;
+        let mut current_is_border = false;
+
+        for x in 0..grid_w {
+            let c = conn[y][x];
+            let own = owner[y][x];
+            let lbl = label_grid[y][x];
+            let is_border = c != 0;
+
+            let ch = if let Some(label_ch) = lbl {
+                label_ch
+            } else if c != 0 {
+                resolve(c)
+            } else {
+                ' '
+            };
+
+            // Flush span when owner or border-ness changes
+            if own != current_owner || is_border != current_is_border {
+                if !current_text.is_empty() {
+                    let style = match current_owner {
+                        Some(i) if Some(i) == selected_idx => theme.selected,
+                        Some(_) if current_is_border => theme.border,
+                        Some(_) => theme.text,
+                        None => theme.text_dim,
+                    };
+                    spans.push(Span::styled(current_text, style));
+                    current_text = String::new();
+                }
+                current_owner = own;
+                current_is_border = is_border;
+            }
+            current_text.push(ch);
+        }
+        if !current_text.is_empty() {
+            let style = match current_owner {
+                Some(i) if Some(i) == selected_idx => theme.selected,
+                Some(_) if current_is_border => theme.border,
+                Some(_) => theme.text,
+                None => theme.text_dim,
+            };
+            spans.push(Span::styled(current_text, style));
+        }
+        lines.push(Line::from(spans));
+    }
+    lines
+}
+// --- end weezterm remote features ---
 
 // ─── Footer ─────────────────────────────────────────────────────────────────
 
@@ -654,11 +932,21 @@ fn render_enum_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, pa
 
 // ─── Color scheme picker popup ──────────────────────────────────────────────
 
-fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, parent: Rect) {
+fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, _theme: &Theme, parent: Rect) {
     let picker = match &state.scheme_picker {
         Some(p) => p,
         None => return,
     };
+    render_scheme_picker_common(frame, picker, _theme, parent, "Color Scheme");
+}
+
+fn render_scheme_picker_common(
+    frame: &mut Frame,
+    picker: &super::ColorSchemePicker,
+    _theme: &Theme,
+    parent: Rect,
+    label: &str,
+) {
 
     let popup_w = parent.width.saturating_sub(4).min(80).max(40);
     let popup_h = parent.height.saturating_sub(4).min(30).max(10);
@@ -689,7 +977,8 @@ fn render_scheme_picker(frame: &mut Frame, state: &OverlayState, theme: &Theme, 
         .unwrap_or(ratatui::style::Color::Black);
 
     let title = format!(
-        " Color Scheme ({}/{}) ",
+        " {} ({}/{}) ",
+        label,
         picker.filtered.len(),
         picker.schemes.len()
     );
@@ -828,3 +1117,25 @@ fn rgba_to_color(color: &config::RgbaColor) -> ratatui::style::Color {
     let (r, g, b, _) = color.to_srgb_u8();
     ratatui::style::Color::Rgb(r, g, b)
 }
+
+// --- weezterm remote features ---
+fn render_monitor_scheme_picker(
+    frame: &mut Frame,
+    state: &OverlayState,
+    theme: &Theme,
+    parent: Rect,
+) {
+    let picker = match &state.monitor_scheme_picker {
+        Some(p) => p,
+        None => return,
+    };
+
+    let monitor_name = state
+        .monitor_entries
+        .get(state.selected_monitor)
+        .map(|e| e.monitor_name.as_str())
+        .unwrap_or("Monitor");
+
+    render_scheme_picker_common(frame, picker, theme, parent, monitor_name);
+}
+// --- end weezterm remote features ---

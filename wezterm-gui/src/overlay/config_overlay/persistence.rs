@@ -298,6 +298,8 @@ fn parse_monitor_overrides(val: &serde_json::Value) -> Vec<MonitorOverrideEntry>
                         monitor_name,
                         color_scheme,
                         is_current: false,
+                        expanded: false,
+                        screen_rect: None,
                     });
                 }
             }
