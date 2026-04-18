@@ -51,16 +51,31 @@ pub fn ensure_remote_weezterm(
             return Ok(Some(format!("{}/weezterm", install_dir)));
         }
         Some(rv) => {
-            // Version mismatch — prompt user before overwriting
+            // Version mismatch — check if the remote mux server is already
+            // running.  If so, updating would kill existing sessions, so
+            // just log a warning and proceed with the installed version.
+            let mux_running = is_remote_mux_running(sess, install_dir);
+            if mux_running {
+                log::warn!(
+                    "Remote weezterm version ({}) differs from local ({}), \
+                     but mux server is already running — skipping update to \
+                     preserve existing sessions",
+                    rv,
+                    local_version,
+                );
+                ui.output_str(&format!(
+                    "Remote version ({}) differs from local ({}) — \
+                     mux server is running, skipping update.\n",
+                    rv, local_version,
+                ));
+                return Ok(Some(format!("{}/weezterm", install_dir)));
+            }
+
+            // Mux not running — safe to prompt for update
             let prompt = format!(
                 "\n\u{26a0}\u{fe0f}  Remote weezterm version ({}) differs from local ({}).\n\
                  \n\
                  Updating is recommended to avoid compatibility issues.\n\
-                 \u{26a0}\u{fe0f}  WARNING: Updating will restart the remote mux server,\n\
-                 which will terminate all existing sessions on this host.\n\
-                 \n\
-                 Declining (N) is at your own risk — protocol mismatches\n\
-                 between client and server may cause crashes or hangs.\n\
                  \n\
                  Update remote installation? [Y/n]: ",
                 rv, local_version
@@ -152,6 +167,18 @@ fn check_remote_version(sess: &Session, install_dir: &str) -> anyhow::Result<Opt
         Ok(None)
     } else {
         Ok(Some(trimmed))
+    }
+}
+
+/// Check whether the remote mux server process is running.
+fn is_remote_mux_running(sess: &Session, install_dir: &str) -> bool {
+    let cmd = format!(
+        "pgrep -f '{}/weezterm-mux-server' >/dev/null 2>&1 && echo running || echo stopped",
+        install_dir
+    );
+    match exec_remote(sess, &cmd) {
+        Ok(output) => output.trim() == "running",
+        Err(_) => false,
     }
 }
 
