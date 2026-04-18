@@ -18,16 +18,22 @@ mod render;
 pub mod theme;
 
 pub use data::{FieldDef, FieldKind, Section, SshDomainConfig};
+// --- weezterm remote features ---
+pub use data::MonitorOverrideEntry;
+// --- end weezterm remote features ---
 
 /// Result returned by the config overlay to the caller.
 #[derive(Debug, Clone)]
 pub enum ConfigOverlayAction {
     /// User closed the overlay without saving.
     Close,
-    /// User chose to save proposals (includes domain changes).
+    /// User chose to save proposals (includes domain changes and monitor overrides).
     Save {
         proposals: HashMap<String, Value>,
         ssh_domains: Vec<SshDomainConfig>,
+        // --- weezterm remote features ---
+        monitor_overrides: Vec<MonitorOverrideEntry>,
+        // --- end weezterm remote features ---
     },
     /// User chose to preview proposals (apply as window overrides).
     Preview(HashMap<String, Value>),
@@ -111,6 +117,16 @@ struct OverlayState {
     adding_domain: Option<SshDomainConfig>,
     /// Whether domain_entries has been modified.
     domains_dirty: bool,
+    // --- weezterm remote features ---
+    /// Monitor override entries.
+    monitor_entries: Vec<MonitorOverrideEntry>,
+    /// Selected monitor index (for the Monitors section).
+    selected_monitor: usize,
+    /// Whether monitor overrides have been modified.
+    monitors_dirty: bool,
+    /// Monitor scheme picker popup.
+    monitor_scheme_picker: Option<ColorSchemePicker>,
+    // --- end weezterm remote features ---
 }
 
 /// State for inline editing of a field value.
@@ -223,6 +239,12 @@ impl OverlayState {
             domain_entries,
             adding_domain: None,
             domains_dirty: false,
+            // --- weezterm remote features ---
+            monitor_entries: vec![],
+            selected_monitor: 0,
+            monitors_dirty: false,
+            monitor_scheme_picker: None,
+            // --- end weezterm remote features ---
         }
     }
 
@@ -381,6 +403,55 @@ impl OverlayState {
             }
         }
 
+        // --- weezterm remote features ---
+        // For Monitors section, show monitor override entries
+        if section == Section::Monitors {
+            for (idx, entry) in self.monitor_entries.iter().enumerate() {
+                if !filter_lower.is_empty()
+                    && !entry.monitor_name.to_lowercase().contains(&filter_lower)
+                {
+                    continue;
+                }
+
+                let scheme_display = entry
+                    .color_scheme
+                    .as_deref()
+                    .unwrap_or("(default)")
+                    .to_string();
+
+                let display_name = if entry.is_current {
+                    format!("▸ {}", entry.monitor_name)
+                } else {
+                    entry.monitor_name.clone()
+                };
+
+                rows.push(SettingRow {
+                    field_name: format!("__monitor_{}__", idx),
+                    display_name,
+                    current_value: scheme_display,
+                    proposed_value: None,
+                    status: FieldStatus::Editable,
+                    kind: FieldKind::ColorScheme,
+                    domain_header: None,
+                    domain_child: None,
+                });
+            }
+
+            if self.monitor_entries.is_empty() && filter_lower.is_empty() {
+                rows.push(SettingRow {
+                    field_name: "__no_monitors__".to_string(),
+                    display_name: "(no monitors detected)".to_string(),
+                    current_value: String::new(),
+                    proposed_value: None,
+                    status: FieldStatus::Inherited,
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                });
+            }
+        }
+        // --- end weezterm remote features ---
+
         rows
     }
 
@@ -446,6 +517,26 @@ impl OverlayState {
 
     /// Apply an edit: toggle bool, cycle enum, or accept inline text.
     fn apply_edit_for_field(&mut self, field_name: &str, new_value: Value) {
+        // --- weezterm remote features ---
+        // Intercept monitor override field names
+        if let Some(idx_str) = field_name
+            .strip_prefix("__monitor_")
+            .and_then(|s| s.strip_suffix("__"))
+        {
+            if let Ok(idx) = idx_str.parse::<usize>() {
+                if idx < self.monitor_entries.len() {
+                    let scheme = match &new_value {
+                        Value::String(s) => Some(s.clone()),
+                        _ => None,
+                    };
+                    self.monitor_entries[idx].color_scheme = scheme;
+                    self.monitors_dirty = true;
+                    self.dirty = true;
+                }
+            }
+            return;
+        }
+        // --- end weezterm remote features ---
         self.proposals.insert(field_name.to_string(), new_value);
         self.dirty = true;
     }
@@ -666,6 +757,9 @@ pub fn run_config_overlay(
     default_values: HashMap<String, Value>,
     saved_proposals: HashMap<String, Value>,
     saved_domains: Vec<SshDomainConfig>,
+    // --- weezterm remote features ---
+    saved_monitors: Vec<MonitorOverrideEntry>,
+    // --- end weezterm remote features ---
     palette: config::Palette,
 ) -> anyhow::Result<ConfigOverlayAction> {
     let mut state = OverlayState::new(
@@ -674,6 +768,9 @@ pub fn run_config_overlay(
         saved_proposals,
         saved_domains,
     );
+    // --- weezterm remote features ---
+    state.monitor_entries = saved_monitors;
+    // --- end weezterm remote features ---
     let theme = theme::Theme::from_palette(&palette);
 
     term.set_raw_mode()?;
@@ -1236,6 +1333,9 @@ pub fn run_config_overlay(
                             return Ok(ConfigOverlayAction::Save {
                                 proposals: state.proposals.clone(),
                                 ssh_domains: state.overlay_domains(),
+                                // --- weezterm remote features ---
+                                monitor_overrides: state.monitor_entries.clone(),
+                                // --- end weezterm remote features ---
                             });
                         }
                     }
@@ -1469,11 +1569,13 @@ mod test {
                 remote_address: "host:22".to_string(),
                 ..Default::default()
             }],
+            monitor_overrides: vec![],
         };
         match action {
             ConfigOverlayAction::Save {
                 proposals,
                 ssh_domains,
+                ..
             } => {
                 assert!(proposals.is_empty());
                 assert_eq!(ssh_domains.len(), 1);

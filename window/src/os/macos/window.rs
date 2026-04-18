@@ -502,6 +502,9 @@ impl Window {
                 ime_last_event: None,
                 live_resizing: false,
                 ime_text: String::new(),
+                // --- weezterm remote features ---
+                current_monitor_name: None,
+                // --- end weezterm remote features ---
             }));
 
             let window: id = msg_send![get_window_class(), alloc];
@@ -1572,6 +1575,10 @@ struct Inner {
     live_resizing: bool,
 
     ime_text: String,
+
+    // --- weezterm remote features ---
+    current_monitor_name: Option<String>,
+    // --- end weezterm remote features ---
 }
 
 #[repr(C)]
@@ -3055,6 +3062,34 @@ impl WindowView {
                 // event that will in turn trigger an invalidation
                 // and a repaint.
                 inner.screen_changed = false;
+
+                // --- weezterm remote features ---
+                // Detect the new monitor name and emit ScreenChanged if it changed
+                if let Some(ref window) = inner.window {
+                    let window = window.load();
+                    let ns_screen: id = unsafe { msg_send![*window, screen] };
+                    if !ns_screen.is_null() {
+                        let screen_info =
+                            crate::os::macos::connection::nsscreen_to_screen_info(ns_screen);
+                        let changed = match &inner.current_monitor_name {
+                            Some(old) => old != &screen_info.name,
+                            None => true,
+                        };
+                        if changed {
+                            log::debug!(
+                                "macOS monitor changed: {:?} -> {:?}",
+                                inner.current_monitor_name,
+                                screen_info.name
+                            );
+                            inner.current_monitor_name = Some(screen_info.name.clone());
+                            inner.events.dispatch(WindowEvent::ScreenChanged {
+                                screen_name: screen_info.name,
+                            });
+                        }
+                    }
+                }
+                // --- end weezterm remote features ---
+
                 drop(inner);
                 Self::did_resize(view, sel, nil);
                 return;

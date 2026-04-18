@@ -330,6 +330,9 @@ impl WaylandWindow {
 
             wegl_surface: None,
             gl_state: None,
+            // --- weezterm remote features ---
+            current_monitor_name: None,
+            // --- end weezterm remote features ---
         }));
 
         let window_handle = Window::Wayland(WaylandWindow(window_id));
@@ -596,6 +599,9 @@ pub struct WaylandWindowInner {
     // libraries will segfault on shutdown
     wegl_surface: Option<WlEglSurface>,
     gl_state: Option<Rc<glium::backend::Context>>,
+    // --- weezterm remote features ---
+    current_monitor_name: Option<String>,
+    // --- end weezterm remote features ---
 }
 
 impl WaylandWindowInner {
@@ -1399,9 +1405,43 @@ impl CompositorHandler for WaylandState {
         &mut self,
         _conn: &WConnection,
         _qh: &wayland_client::QueueHandle<Self>,
-        _surface: &wayland_client::protocol::wl_surface::WlSurface,
-        _output: &wayland_client::protocol::wl_output::WlOutput,
+        surface: &wayland_client::protocol::wl_surface::WlSurface,
+        output: &wayland_client::protocol::wl_output::WlOutput,
     ) {
+        // --- weezterm remote features ---
+        // When the surface enters an output, detect the monitor name and
+        // emit ScreenChanged if it differs from the current monitor.
+        use smithay_client_toolkit::output::OutputState;
+        let output_name = self.output.info(output).and_then(|info| {
+            info.name
+                .clone()
+                .or_else(|| Some(format!("{} {}", info.model, info.make)))
+        });
+        if let Some(name) = output_name {
+            if let Some(surface_data) = SurfaceUserData::try_from_wl(surface) {
+                let window_id = surface_data.window_id;
+                let name_clone = name.clone();
+                WaylandConnection::with_window_inner(window_id, move |inner| {
+                    let changed = match &inner.current_monitor_name {
+                        Some(old) => old != &name_clone,
+                        None => true,
+                    };
+                    if changed {
+                        log::debug!(
+                            "Wayland monitor changed: {:?} -> {:?}",
+                            inner.current_monitor_name,
+                            name_clone
+                        );
+                        inner.current_monitor_name = Some(name_clone.clone());
+                        inner.events.dispatch(WindowEvent::ScreenChanged {
+                            screen_name: name_clone,
+                        });
+                    }
+                    Ok(())
+                });
+            }
+        }
+        // --- end weezterm remote features ---
     }
 
     fn surface_leave(

@@ -22,6 +22,7 @@ use wezterm_term::UnicodeVersion;
 
 // --- weezterm remote features ---
 pub mod branding;
+pub mod monitor;
 // --- end weezterm remote features ---
 mod background;
 mod bell;
@@ -65,6 +66,10 @@ pub use units::*;
 pub use unix::*;
 pub use version::*;
 pub use wsl::*;
+
+// --- weezterm remote features ---
+pub use monitor::*;
+// --- end weezterm remote features ---
 
 type ErrorCallback = fn(&str);
 

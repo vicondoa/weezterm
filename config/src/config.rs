@@ -112,6 +112,13 @@ pub struct Config {
     #[dynamic(default)]
     pub dpi_by_screen: HashMap<String, f64>,
 
+    // --- weezterm remote features ---
+    /// Per-monitor configuration overrides. When the terminal window
+    /// moves onto a matching monitor, the specified settings (e.g.
+    /// color_scheme) are applied. When it leaves, they are reverted.
+    #[dynamic(default)]
+    pub monitor_overrides: Vec<crate::monitor::MonitorOverride>,
+    // --- end weezterm remote features ---
     /// The baseline font to use
     #[dynamic(default)]
     pub font: TextStyle,

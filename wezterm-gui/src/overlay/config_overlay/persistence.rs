@@ -6,15 +6,21 @@
 //! --- weezterm remote features ---
 
 use super::data::SshDomainConfig;
+// --- weezterm remote features ---
+use super::data::MonitorOverrideEntry;
+// --- end weezterm remote features ---
 use std::collections::HashMap;
 use wezterm_dynamic::Value;
 
 const OVERLAY_FILE_NAME: &str = "config-overlay.json";
 
-/// Combined overlay data: proposals + user-managed SSH domains.
+/// Combined overlay data: proposals + user-managed SSH domains + monitor overrides.
 pub struct OverlayData {
     pub proposals: HashMap<String, Value>,
     pub ssh_domains: Vec<SshDomainConfig>,
+    // --- weezterm remote features ---
+    pub monitor_overrides: Vec<MonitorOverrideEntry>,
+    // --- end weezterm remote features ---
 }
 
 impl Default for OverlayData {
@@ -22,6 +28,9 @@ impl Default for OverlayData {
         Self {
             proposals: HashMap::new(),
             ssh_domains: vec![],
+            // --- weezterm remote features ---
+            monitor_overrides: vec![],
+            // --- end weezterm remote features ---
         }
     }
 }
@@ -40,19 +49,11 @@ fn overlay_file_path() -> Option<std::path::PathBuf> {
 pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
     let path = match overlay_file_path() {
         Some(p) => p,
-        None => {
-            return Ok(OverlayData {
-                proposals: HashMap::new(),
-                ssh_domains: vec![],
-            })
-        }
+        None => return Ok(OverlayData::default()),
     };
 
     if !path.exists() {
-        return Ok(OverlayData {
-            proposals: HashMap::new(),
-            ssh_domains: vec![],
-        });
+        return Ok(OverlayData::default());
     }
 
     let content = std::fs::read_to_string(&path)?;
@@ -60,7 +61,7 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
 
     match &json {
         serde_json::Value::Object(obj) if obj.contains_key("proposals") => {
-            // New format: { "proposals": {...}, "ssh_domains": [...] }
+            // New format: { "proposals": {...}, "ssh_domains": [...], "monitor_overrides": [...] }
             let proposals = if let Some(p) = obj.get("proposals") {
                 parse_proposals(p)
             } else {
@@ -71,9 +72,19 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
             } else {
                 vec![]
             };
+            // --- weezterm remote features ---
+            let monitor_overrides = if let Some(m) = obj.get("monitor_overrides") {
+                parse_monitor_overrides(m)
+            } else {
+                vec![]
+            };
+            // --- end weezterm remote features ---
             Ok(OverlayData {
                 proposals,
                 ssh_domains,
+                // --- weezterm remote features ---
+                monitor_overrides,
+                // --- end weezterm remote features ---
             })
         }
         serde_json::Value::Object(_) => {
@@ -81,11 +92,13 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
             Ok(OverlayData {
                 proposals: parse_proposals(&json),
                 ssh_domains: vec![],
+                monitor_overrides: vec![],
             })
         }
         _ => Ok(OverlayData {
             proposals: HashMap::new(),
             ssh_domains: vec![],
+            monitor_overrides: vec![],
         }),
     }
 }
@@ -95,10 +108,11 @@ pub fn load_proposals() -> anyhow::Result<HashMap<String, Value>> {
     Ok(load_overlay_data()?.proposals)
 }
 
-/// Save overlay data (proposals + domains) to disk as JSON.
+/// Save overlay data (proposals + domains + monitor overrides) to disk as JSON.
 pub fn save_overlay_data(
     proposals: &HashMap<String, Value>,
     ssh_domains: &[SshDomainConfig],
+    monitor_overrides: &[MonitorOverrideEntry],
 ) -> anyhow::Result<()> {
     let path = match overlay_file_path() {
         Some(p) => p,
@@ -128,6 +142,19 @@ pub fn save_overlay_data(
         serde_json::Value::Array(domains_arr),
     );
 
+    // --- weezterm remote features ---
+    // Serialize monitor overrides (only those with at least one override set)
+    let monitors_arr: Vec<serde_json::Value> = monitor_overrides
+        .iter()
+        .filter(|e| e.color_scheme.is_some())
+        .map(monitor_override_to_json)
+        .collect();
+    root.insert(
+        "monitor_overrides".to_string(),
+        serde_json::Value::Array(monitors_arr),
+    );
+    // --- end weezterm remote features ---
+
     let json_str = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
     std::fs::write(&path, json_str)?;
 
@@ -137,12 +164,17 @@ pub fn save_overlay_data(
 
 /// Save proposals to disk as JSON (backward-compatible wrapper).
 pub fn save_proposals(proposals: &HashMap<String, Value>) -> anyhow::Result<()> {
-    // Load existing data to preserve domains
+    // Load existing data to preserve domains and monitor overrides
     let existing = load_overlay_data().unwrap_or(OverlayData {
         proposals: HashMap::new(),
         ssh_domains: vec![],
+        monitor_overrides: vec![],
     });
-    save_overlay_data(proposals, &existing.ssh_domains)
+    save_overlay_data(
+        proposals,
+        &existing.ssh_domains,
+        &existing.monitor_overrides,
+    )
 }
 
 /// Convert proposals map into a `wezterm_dynamic::Value::Object` suitable
@@ -244,6 +276,51 @@ fn domain_to_json(dom: &SshDomainConfig) -> serde_json::Value {
     );
     serde_json::Value::Object(obj)
 }
+
+// --- weezterm remote features ---
+fn parse_monitor_overrides(val: &serde_json::Value) -> Vec<MonitorOverrideEntry> {
+    let mut entries = vec![];
+    if let serde_json::Value::Array(arr) = val {
+        for item in arr {
+            if let serde_json::Value::Object(obj) = item {
+                let monitor_name = obj
+                    .get("monitor")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let color_scheme = obj
+                    .get("color_scheme")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+
+                if !monitor_name.is_empty() {
+                    entries.push(MonitorOverrideEntry {
+                        monitor_name,
+                        color_scheme,
+                        is_current: false,
+                    });
+                }
+            }
+        }
+    }
+    entries
+}
+
+fn monitor_override_to_json(entry: &MonitorOverrideEntry) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "monitor".to_string(),
+        serde_json::Value::String(entry.monitor_name.clone()),
+    );
+    if let Some(ref scheme) = entry.color_scheme {
+        obj.insert(
+            "color_scheme".to_string(),
+            serde_json::Value::String(scheme.clone()),
+        );
+    }
+    serde_json::Value::Object(obj)
+}
+// --- end weezterm remote features ---
 
 /// Convert a `serde_json::Value` to `wezterm_dynamic::Value`.
 fn json_to_dynamic(val: &serde_json::Value) -> Value {

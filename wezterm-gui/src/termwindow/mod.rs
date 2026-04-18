@@ -465,6 +465,15 @@ pub struct TermWindow {
     gl: Option<Rc<glium::backend::Context>>,
     webgpu: Option<Rc<WebGpuState>>,
     config_subscription: Option<config::ConfigSubscription>,
+
+    // --- weezterm remote features ---
+    /// The name of the monitor the window is currently on.
+    current_screen_name: Option<String>,
+    /// Tracks the color_scheme value injected by monitor overrides,
+    /// so we can distinguish it from user-set overrides and restore
+    /// the user's value when leaving the monitor.
+    monitor_injected_color_scheme: Option<String>,
+    // --- end weezterm remote features ---
 }
 
 impl TermWindow {
@@ -687,6 +696,10 @@ impl TermWindow {
             last_frame_duration: Duration::ZERO,
             fps: 0.,
             config_subscription: None,
+            // --- weezterm remote features ---
+            current_screen_name: None,
+            monitor_injected_color_scheme: None,
+            // --- end weezterm remote features ---
             os_parameters: None,
             gl: None,
             webgpu: None,
@@ -1058,6 +1071,11 @@ impl TermWindow {
                 Ok(true)
             }
             WindowEvent::DraggedFile(_) => Ok(true),
+            // --- weezterm remote features ---
+            WindowEvent::ScreenChanged { screen_name } => {
+                self.handle_screen_changed(screen_name);
+                Ok(true)
+            } // --- end weezterm remote features ---
         }
     }
 
@@ -1845,6 +1863,74 @@ impl TermWindow {
         self.emit_window_event("window-config-reloaded", None);
     }
 
+    // --- weezterm remote features ---
+    /// Called when the window moves to a different monitor.
+    /// Looks up `monitor_overrides` for the new screen name and
+    /// applies or removes the color_scheme override accordingly.
+    fn handle_screen_changed(&mut self, screen_name: String) {
+        log::info!("Window moved to monitor: {:?}", screen_name);
+        self.current_screen_name = Some(screen_name.clone());
+        self.apply_monitor_overrides(&screen_name);
+    }
+
+    /// Applies or removes monitor-specific config overrides
+    /// based on the current monitor name.
+    fn apply_monitor_overrides(&mut self, screen_name: &str) {
+        // Find a matching monitor override in the config
+        let matching_scheme = self
+            .config
+            .monitor_overrides
+            .iter()
+            .find(|mo| mo.monitor == screen_name)
+            .and_then(|mo| mo.color_scheme.clone());
+
+        // Check if anything actually changed
+        if matching_scheme == self.monitor_injected_color_scheme {
+            return;
+        }
+
+        let old = self.monitor_injected_color_scheme.take();
+
+        // Build a mutable copy of config_overrides as an Object
+        let mut overrides_obj = match self.config_overrides.clone() {
+            wezterm_dynamic::Value::Object(obj) => obj,
+            _ => Default::default(),
+        };
+
+        let key = wezterm_dynamic::Value::String("color_scheme".to_string());
+
+        match matching_scheme {
+            Some(scheme) => {
+                log::info!(
+                    "Applying monitor override: color_scheme={:?} for monitor {:?}",
+                    scheme,
+                    screen_name
+                );
+                overrides_obj.insert(key, wezterm_dynamic::Value::String(scheme.clone()));
+                self.monitor_injected_color_scheme = Some(scheme);
+            }
+            None => {
+                // No override for this monitor — remove any previously
+                // injected color_scheme, but only if it was set by the
+                // monitor system (not by the user via config overlay / Lua).
+                if old.is_some() {
+                    log::info!(
+                        "Removing monitor override for monitor {:?}, reverting color_scheme",
+                        screen_name
+                    );
+                    overrides_obj.remove(&key);
+                }
+            }
+        }
+
+        let new_overrides = wezterm_dynamic::Value::Object(overrides_obj);
+        if new_overrides != self.config_overrides {
+            self.config_overrides = new_overrides;
+            self.config_was_reloaded();
+        }
+    }
+    // --- end weezterm remote features ---
+
     fn invalidate_modal(&mut self) {
         if let Some(modal) = self.get_modal() {
             modal.reconfigure(self);
@@ -2439,6 +2525,7 @@ impl TermWindow {
     // --- weezterm remote features ---
     fn show_config_overlay(&mut self) {
         use crate::overlay::config_overlay;
+        use crate::overlay::config_overlay::data;
         use wezterm_dynamic::ToDynamic;
 
         let mux = Mux::get();
@@ -2459,6 +2546,18 @@ impl TermWindow {
 
         let window = self.window.clone().unwrap();
         let tab_id = tab.tab_id();
+        // --- weezterm remote features ---
+        let current_screen = self.current_screen_name.clone();
+        let screen_names: Vec<String> = {
+            use ::window::ConnectionOps;
+            ::window::Connection::get()
+                .and_then(|conn| conn.screens().ok())
+                .map(|screens| screens.by_name.keys().cloned().collect())
+                .unwrap_or_default()
+        };
+        let monitor_entries =
+            data::monitors_from_config_with_screens(&screen_names, current_screen.as_deref());
+        // --- end weezterm remote features ---
         let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
             config_overlay::run_config_overlay(
                 term,
@@ -2466,6 +2565,9 @@ impl TermWindow {
                 default_values,
                 overlay_data.proposals,
                 overlay_data.ssh_domains,
+                // --- weezterm remote features ---
+                monitor_entries,
+                // --- end weezterm remote features ---
                 palette,
             )
         });
@@ -2477,16 +2579,23 @@ impl TermWindow {
                 Ok(config_overlay::ConfigOverlayAction::Save {
                     proposals,
                     ssh_domains,
+                    // --- weezterm remote features ---
+                    monitor_overrides,
+                    // --- end weezterm remote features ---
                 }) => {
                     log::info!(
                         "Config overlay: saving {} proposals, {} domains",
                         proposals.len(),
                         ssh_domains.len()
                     );
-                    // Persist proposals + domains to disk
-                    if let Err(e) =
-                        config_overlay::persistence::save_overlay_data(&proposals, &ssh_domains)
-                    {
+                    // Persist proposals + domains + monitor overrides to disk
+                    if let Err(e) = config_overlay::persistence::save_overlay_data(
+                        &proposals,
+                        &ssh_domains,
+                        // --- weezterm remote features ---
+                        &monitor_overrides,
+                        // --- end weezterm remote features ---
+                    ) {
                         log::error!("Failed to save config overlay data: {:#}", e);
                     }
 

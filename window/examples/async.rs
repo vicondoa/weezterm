@@ -90,6 +90,9 @@ impl MyWindow {
             | WindowEvent::PerformKeyAssignment(_)
             | WindowEvent::MouseLeave
             | WindowEvent::SetInnerSizeCompleted => {}
+            // --- weezterm remote features ---
+            WindowEvent::ScreenChanged { .. } => {}
+            // --- end weezterm remote features ---
         }
     }
 }
