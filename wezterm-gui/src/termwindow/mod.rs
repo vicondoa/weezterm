@@ -832,10 +832,27 @@ impl TermWindow {
                 .map(|w| w.get_workspace().to_string())
                 .unwrap_or_else(|| mux.active_workspace());
             if let Some(saved) = crate::window_state_persistence::load_window_state(&workspace) {
-                x.replace(Dimension::Pixels(saved.x as f32));
-                y.replace(Dimension::Pixels(saved.y as f32));
-                origin = GeometryOrigin::ScreenCoordinateSystem;
-                // Override dimensions from saved state
+                // Use the saved monitor name to place window on the right monitor.
+                // Coordinates are relative to the monitor origin.
+                if let Some(ref monitor) = saved.monitor {
+                    log::info!(
+                        "Restoring window to monitor {:?} (workspace {:?})",
+                        monitor,
+                        workspace,
+                    );
+                    origin = GeometryOrigin::Named(monitor.clone());
+                    if saved.x != 0 || saved.y != 0 {
+                        x.replace(Dimension::Pixels(saved.x as f32));
+                        y.replace(Dimension::Pixels(saved.y as f32));
+                    }
+                    // else leave x/y as None so OS centers on the monitor
+                } else {
+                    origin = GeometryOrigin::ScreenCoordinateSystem;
+                    x.replace(Dimension::Pixels(saved.x as f32));
+                    y.replace(Dimension::Pixels(saved.y as f32));
+                }
+                // Override dimensions from saved state (unless maximized — use
+                // saved normal size so maximize can expand from it)
                 dimensions.pixel_width = saved.width;
                 dimensions.pixel_height = saved.height;
                 saved_maximized = saved.maximized;
@@ -931,6 +948,9 @@ impl TermWindow {
                 log::debug!("Restoring fullscreen state from saved window state");
                 window.toggle_fullscreen();
             }
+            // Bring the window to front after restoring state, otherwise
+            // maximize/fullscreen can leave it behind other windows.
+            window.focus();
             // --- end weezterm remote features ---
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
@@ -1005,6 +1025,9 @@ impl TermWindow {
                 Ok(false)
             }
             WindowEvent::CloseRequested => {
+                // --- weezterm remote features ---
+                self.save_current_window_state();
+                // --- end weezterm remote features ---
                 self.close_requested(window);
                 Ok(true)
             }
@@ -1152,6 +1175,9 @@ impl TermWindow {
             // --- weezterm remote features ---
             WindowEvent::ScreenChanged { screen_name } => {
                 self.handle_screen_changed(screen_name);
+                // Save state when moving between monitors so the monitor
+                // name is persisted even if the process exits ungracefully.
+                self.save_current_window_state();
                 Ok(true)
             } // --- end weezterm remote features ---
         }
