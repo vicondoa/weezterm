@@ -398,6 +398,16 @@ impl Pane for ClientPane {
             || inner.dimensions.pixel_width != size.pixel_width
             || inner.dimensions.pixel_height != size.pixel_height
         {
+            // --- weezterm remote features ---
+            log::debug!(
+                "ClientPane::resize: pane {} sending resize RPC: {}x{} -> {}x{}",
+                self.remote_pane_id,
+                inner.dimensions.cols,
+                inner.dimensions.viewport_rows,
+                cols,
+                rows,
+            );
+            // --- end weezterm remote features ---
             inner.dimensions.cols = cols;
             inner.dimensions.viewport_rows = rows;
             inner.dimensions.pixel_width = size.pixel_width;
@@ -421,6 +431,15 @@ impl Pane for ClientPane {
             })
             .detach();
             inner.update_last_send();
+        // --- weezterm remote features ---
+        } else {
+            log::debug!(
+                "ClientPane::resize: pane {} skipped (dims unchanged: {}x{})",
+                self.remote_pane_id,
+                cols,
+                rows,
+            );
+            // --- end weezterm remote features ---
         }
         Ok(())
     }

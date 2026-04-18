@@ -57,6 +57,9 @@ mod unicode_names;
 mod uniforms;
 mod update;
 mod utilsprites;
+// --- weezterm remote features ---
+mod window_state_persistence;
+// --- end weezterm remote features ---
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

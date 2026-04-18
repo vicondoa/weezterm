@@ -349,7 +349,25 @@ impl RenderableInner {
         {
             self.cursor_position = delta.cursor_position;
         }
-        self.dimensions = delta.dimensions;
+        // --- weezterm remote features ---
+        // Don't overwrite dimensions from a server push when a local resize
+        // was recently sent. The client-side resize (from ClientPane::resize)
+        // takes precedence until the server acknowledges it. Without this,
+        // the server push can overwrite the intended new dimensions, causing
+        // a subsequent ClientPane::resize() to think no change is needed.
+        let recent_local_resize =
+            now.duration_since(self.last_send_time) < std::time::Duration::from_millis(500);
+        if recent_local_resize {
+            log::debug!(
+                "apply_changes_to_surface: skipping server dimension update for pane {} \
+                 (local resize pending, last_send {}ms ago)",
+                self.local_pane_id,
+                now.duration_since(self.last_send_time).as_millis(),
+            );
+        } else {
+            self.dimensions = delta.dimensions;
+        }
+        // --- end weezterm remote features ---
         self.title = delta.title;
         self.working_dir = delta.working_dir.map(Into::into);
         log::trace!(
