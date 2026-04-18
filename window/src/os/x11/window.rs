@@ -110,6 +110,9 @@ pub(crate) struct XWindowInner {
     dragging: bool,
     outstanding_configure_requests: usize,
     pending_finished_resizes: usize,
+    // --- weezterm remote features ---
+    current_monitor_name: Option<String>,
+    // --- end weezterm remote features ---
 }
 
 /// <https://specifications.freedesktop.org/wm-spec/wm-spec-latest.html#idm46409506331616>
@@ -484,6 +487,9 @@ impl XWindowInner {
         self.update_ime_position();
 
         let mut dpi = conn.default_dpi();
+        // --- weezterm remote features ---
+        let mut detected_screen_name: Option<String> = None;
+        // --- end weezterm remote features ---
 
         if !self.config.dpi_by_screen.is_empty() {
             let coords = conn
@@ -514,12 +520,69 @@ impl XWindowInner {
                 .ok_or_else(|| anyhow::anyhow!("window is not in any screen"))?
                 .0;
 
+            // --- weezterm remote features ---
+            detected_screen_name = Some(screen.name.clone());
+            // --- end weezterm remote features ---
+
             if let Some(value) = self.config.dpi_by_screen.get(&screen.name).copied() {
                 dpi = value;
             } else if let Some(value) = self.config.dpi {
                 dpi = value;
             }
         }
+
+        // --- weezterm remote features ---
+        // If dpi_by_screen was empty, we still need to detect the screen
+        // for monitor override support. Do a lightweight screen lookup.
+        if detected_screen_name.is_none() {
+            if let Ok(coords) = conn.send_and_wait_request(&xcb::x::TranslateCoordinates {
+                src_window: self.window_id,
+                dst_window: conn.root,
+                src_x: 0,
+                src_y: 0,
+            }) {
+                if let Ok(screens) = conn.get_cached_screens() {
+                    let window_rect: ScreenRect = euclid::rect(
+                        coords.dst_x().into(),
+                        coords.dst_y().into(),
+                        width as isize,
+                        height as isize,
+                    );
+                    if let Some((screen, _)) = screens
+                        .by_name
+                        .values()
+                        .filter_map(|screen| {
+                            screen
+                                .rect
+                                .intersection(&window_rect)
+                                .map(|r| (screen, r.area()))
+                        })
+                        .max_by_key(|s| s.1)
+                    {
+                        detected_screen_name = Some(screen.name.clone());
+                    }
+                }
+            }
+        }
+        // Emit ScreenChanged if the monitor changed
+        if let Some(ref name) = detected_screen_name {
+            let changed = match &self.current_monitor_name {
+                Some(old) => old != name,
+                None => true,
+            };
+            if changed {
+                log::debug!(
+                    "X11 monitor changed: {:?} -> {:?}",
+                    self.current_monitor_name,
+                    name
+                );
+                self.current_monitor_name = Some(name.clone());
+                self.queue_pending(WindowEvent::ScreenChanged {
+                    screen_name: name.clone(),
+                });
+            }
+        }
+        // --- end weezterm remote features ---
 
         if width == self.width && height == self.height && dpi == self.dpi {
             // Effectively unchanged; perhaps it was simply moved?
@@ -1499,6 +1562,9 @@ impl XWindow {
                 dragging: false,
                 outstanding_configure_requests: 0,
                 pending_finished_resizes: 0,
+                // --- weezterm remote features ---
+                current_monitor_name: None,
+                // --- end weezterm remote features ---
             }))
         };
 

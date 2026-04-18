@@ -216,6 +216,14 @@ pub enum WindowEvent {
     PerformKeyAssignment(config::keyassignment::KeyAssignment),
 
     AdviseModifiersLedStatus(Modifiers, KeyboardLedStatus),
+
+    // --- weezterm remote features ---
+    /// Called when the window moves to a different monitor.
+    /// `screen_name` is the friendly/localized name of the new monitor.
+    ScreenChanged {
+        screen_name: String,
+    },
+    // --- end weezterm remote features ---
 }
 
 pub struct WindowEventSender {

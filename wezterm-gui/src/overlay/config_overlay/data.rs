@@ -159,6 +159,9 @@ pub enum Section {
     Input,
     SshAndDomains,
     Rendering,
+    // --- weezterm remote features ---
+    Monitors,
+    // --- end weezterm remote features ---
 }
 
 impl Section {
@@ -172,6 +175,9 @@ impl Section {
             Section::Input => "Input",
             Section::SshAndDomains => "SSH & Domains",
             Section::Rendering => "Rendering",
+            // --- weezterm remote features ---
+            Section::Monitors => "Monitors",
+            // --- end weezterm remote features ---
         }
     }
 }
@@ -210,6 +216,9 @@ pub fn get_sections() -> Vec<Section> {
         Section::Input,
         Section::SshAndDomains,
         Section::Rendering,
+        // --- weezterm remote features ---
+        Section::Monitors,
+        // --- end weezterm remote features ---
     ]
 }
 
@@ -978,6 +987,98 @@ pub fn to_config_ssh_domain(dom: &SshDomainConfig) -> config::SshDomain {
         ..Default::default()
     }
 }
+
+// --- weezterm remote features ---
+/// A monitor override entry for the config overlay.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MonitorOverrideEntry {
+    /// The monitor name (from ScreenInfo).
+    pub monitor_name: String,
+    /// The assigned color scheme, or None for "use default".
+    pub color_scheme: Option<String>,
+    /// Whether this monitor is the one the current window is on.
+    pub is_current: bool,
+    /// Whether this entry is expanded in the overlay UI.
+    pub expanded: bool,
+    /// Screen position and size in pixels (for layout diagram).
+    pub screen_rect: Option<MonitorRect>,
+}
+
+/// Screen rectangle for layout diagram rendering.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MonitorRect {
+    pub x: isize,
+    pub y: isize,
+    pub width: isize,
+    pub height: isize,
+}
+
+/// Build MonitorOverrideEntry list from the current system monitors
+/// and the config's monitor_overrides settings.
+///
+/// This must be called from code that has access to the screen list
+/// (typically the GUI thread). Pass the result to the config overlay.
+pub fn monitors_from_config_with_screens(
+    screen_info: &std::collections::HashMap<String, window::screen::ScreenInfo>,
+    current_screen: Option<&str>,
+) -> Vec<MonitorOverrideEntry> {
+    let config = config::configuration();
+
+    let mut entries: Vec<MonitorOverrideEntry> = Vec::new();
+    for (name, info) in screen_info {
+        let color_scheme = config
+            .monitor_overrides
+            .iter()
+            .find(|mo| &mo.monitor == name)
+            .and_then(|mo| mo.color_scheme.clone());
+
+        let rect = info.rect;
+        entries.push(MonitorOverrideEntry {
+            monitor_name: name.clone(),
+            color_scheme,
+            is_current: current_screen == Some(name.as_str()),
+            expanded: false,
+            screen_rect: Some(MonitorRect {
+                x: rect.origin.x,
+                y: rect.origin.y,
+                width: rect.size.width,
+                height: rect.size.height,
+            }),
+        });
+    }
+
+    // Also include any configured monitors that aren't currently connected
+    for mo in &config.monitor_overrides {
+        if !entries.iter().any(|e| e.monitor_name == mo.monitor) {
+            entries.push(MonitorOverrideEntry {
+                monitor_name: mo.monitor.clone(),
+                color_scheme: mo.color_scheme.clone(),
+                is_current: false,
+                expanded: false,
+                screen_rect: None,
+            });
+        }
+    }
+
+    entries.sort_by(|a, b| a.monitor_name.cmp(&b.monitor_name));
+    entries
+}
+
+/// Convert MonitorOverrideEntry list to config::MonitorOverride list
+/// (only entries with at least one override set).
+pub fn to_config_monitor_overrides(
+    entries: &[MonitorOverrideEntry],
+) -> Vec<config::MonitorOverride> {
+    entries
+        .iter()
+        .filter(|e| e.color_scheme.is_some())
+        .map(|e| config::MonitorOverride {
+            monitor: e.monitor_name.clone(),
+            color_scheme: e.color_scheme.clone(),
+        })
+        .collect()
+}
+// --- end weezterm remote features ---
 
 #[cfg(test)]
 mod test {

@@ -127,6 +127,11 @@ pub(crate) struct WindowInner {
     config: ConfigHandle,
     paint_throttled: bool,
     invalidated: bool,
+    // --- weezterm remote features ---
+    /// Tracks the friendly name of the monitor the window is currently on,
+    /// so we can emit `ScreenChanged` when it moves to a different monitor.
+    current_monitor_name: Option<String>,
+    // --- end weezterm remote features ---
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Ord, PartialOrd)]
@@ -286,6 +291,49 @@ impl WindowInner {
         }
     }
 
+    // --- weezterm remote features ---
+    /// Resolve the friendly monitor name for the monitor this window is currently on.
+    fn current_monitor_name_now(&self) -> Option<String> {
+        unsafe {
+            let mut mi: MONITORINFOEXW = std::mem::zeroed();
+            mi.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+            let mon = MonitorFromWindow(self.hwnd.0, MONITOR_DEFAULTTONEAREST);
+            if mon.is_null() {
+                return None;
+            }
+            GetMonitorInfoW(mon, &mut mi as *mut MONITORINFOEXW as *mut MONITORINFO);
+
+            if let Ok(info) = crate::os::windows::connection::ScreenInfoHelper::new() {
+                Some(info.monitor_name(&mi))
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Check if the window has moved to a different monitor and emit
+    /// `WindowEvent::ScreenChanged` if so.
+    fn check_and_emit_screen_changed(&mut self) {
+        if let Some(new_name) = self.current_monitor_name_now() {
+            let changed = match &self.current_monitor_name {
+                Some(old_name) => old_name != &new_name,
+                None => true,
+            };
+            if changed {
+                log::debug!(
+                    "Monitor changed: {:?} -> {:?}",
+                    self.current_monitor_name,
+                    new_name
+                );
+                self.current_monitor_name = Some(new_name.clone());
+                self.events.dispatch(WindowEvent::ScreenChanged {
+                    screen_name: new_name,
+                });
+            }
+        }
+    }
+    // --- end weezterm remote features ---
+
     /// Check if we need to generate a resize callback.
     /// Calls resize if needed.
     /// Returns true if we did.
@@ -336,6 +384,11 @@ impl WindowInner {
                 live_resizing: self.in_size_move,
             });
         }
+
+        // --- weezterm remote features ---
+        // Detect if the window has moved to a different monitor
+        self.check_and_emit_screen_changed();
+        // --- end weezterm remote features ---
 
         !same
     }
@@ -547,6 +600,9 @@ impl Window {
             config: config.clone(),
             paint_throttled: false,
             invalidated: true,
+            // --- weezterm remote features ---
+            current_monitor_name: None,
+            // --- end weezterm remote features ---
         }));
 
         // Careful: `raw` owns a ref to inner, but there is no Drop impl
