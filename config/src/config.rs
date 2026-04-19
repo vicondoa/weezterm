@@ -118,6 +118,11 @@ pub struct Config {
     /// color_scheme) are applied. When it leaves, they are reverted.
     #[dynamic(default)]
     pub monitor_overrides: Vec<crate::monitor::MonitorOverride>,
+
+    /// DevContainer domain configurations. Each entry defines a domain
+    /// that connects to Docker devcontainers, optionally via SSH.
+    #[dynamic(default)]
+    pub devcontainer_domains: Vec<crate::devcontainer::DevContainerDomainConfig>,
     // --- end weezterm remote features ---
     /// The baseline font to use
     #[dynamic(default)]

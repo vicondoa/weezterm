@@ -650,6 +650,7 @@ pub enum KeyAssignment {
     // --- weezterm remote features ---
     ShowPortForwardOverlay,
     ShowConfigOverlay,
+    ShowDevContainerManager,
     // --- end weezterm remote features ---
 }
 impl_lua_conversion_dynamic!(KeyAssignment);

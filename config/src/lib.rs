@@ -22,6 +22,7 @@ use wezterm_term::UnicodeVersion;
 
 // --- weezterm remote features ---
 pub mod branding;
+pub mod devcontainer;
 pub mod monitor;
 // --- end weezterm remote features ---
 mod background;

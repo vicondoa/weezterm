@@ -40,6 +40,7 @@ pub mod domain;
 pub mod localpane;
 pub mod pane;
 // --- weezterm remote features ---
+pub mod devcontainer_discover;
 pub mod port_detect;
 pub mod port_forward;
 pub mod port_forward_proxy;
