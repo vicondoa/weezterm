@@ -95,11 +95,40 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
             continue;
         }
 
-        // For now, register local devcontainer domains (no SSH).
-        // SSH-backed devcontainer domains will be registered in Phase 4.
         if dc_dom.ssh.is_none() {
+            // Local Docker — use DevContainerDomain directly
             let domain: Arc<dyn Domain> = Arc::new(DevContainerDomain::new(dc_dom.clone()));
             mux.add_domain(&domain);
+        } else if let Some(ref ssh_config) = dc_dom.ssh {
+            if ssh_config.multiplexing == SshMultiplexing::None {
+                // Direct SSH mode — DevContainerDomain wraps SSH PTY
+                // For now, register as a DevContainerDomain that builds
+                // docker exec commands and runs them via SSH
+                let domain: Arc<dyn Domain> = Arc::new(DevContainerDomain::new(dc_dom.clone()));
+                mux.add_domain(&domain);
+            }
+            // Mux mode (SshMultiplexing::WezTerm) — requires ClientDomain
+            // infrastructure. For now, this is handled in client_domains()
+            // below, which registers the SSH connection as a ClientDomain.
+        }
+    }
+
+    // Register SSH mux connections for devcontainer domains that use multiplexing
+    for dc_dom in &config.devcontainer_domains {
+        if let Some(ref ssh_config) = dc_dom.ssh {
+            if ssh_config.multiplexing == SshMultiplexing::WezTerm {
+                if mux.get_domain_by_name(&dc_dom.name).is_some() {
+                    continue;
+                }
+                // Create an SshDomain with the devcontainer's name for the
+                // ClientDomain registration. The mux server on the remote host
+                // will run docker exec commands sent via SpawnV2.
+                let mut ssh_dom = ssh_config.clone();
+                ssh_dom.name = dc_dom.name.clone();
+                let client_config = ClientDomainConfig::Ssh(ssh_dom);
+                let domain: Arc<dyn Domain> = Arc::new(ClientDomain::new(client_config));
+                mux.add_domain(&domain);
+            }
         }
     }
     // --- end weezterm remote features ---
