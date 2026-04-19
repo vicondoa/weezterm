@@ -336,6 +336,79 @@ fn render_settings(frame: &mut Frame, state: &mut OverlayState, theme: &Theme, a
                 ]);
             }
 
+            // --- weezterm remote features ---
+            // DevContainer group header row
+            if let Some(ref header) = setting.devcontainer_header {
+                let arrow = if header.expanded {
+                    "\u{25be}"
+                } else {
+                    "\u{25b8}"
+                };
+                let label = format!(" {} {} ", arrow, setting.display_name);
+                let badge = match header.source {
+                    super::data::DomainSource::Lua => "lua",
+                    super::data::DomainSource::Overlay => "editable",
+                };
+                let (name_style, val_style, bdg_style) = if is_selected {
+                    (theme.selected, theme.selected_value, theme.selected_badge)
+                } else {
+                    (
+                        theme.text.add_modifier(Modifier::BOLD),
+                        theme.value,
+                        match header.source {
+                            super::data::DomainSource::Lua => theme.badge_inherited,
+                            super::data::DomainSource::Overlay => theme.badge_editable,
+                        },
+                    )
+                };
+                let sep_line = "\u{2500}".repeat(name_w.saturating_sub(label.len()).max(1));
+                let name_cell = Line::from(vec![
+                    Span::styled(label, name_style),
+                    Span::styled(sep_line, theme.border),
+                ]);
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::styled(setting.current_value.clone(), val_style),
+                    ratatui::text::Text::styled(badge.to_string(), bdg_style),
+                ]);
+            }
+
+            // "Add DevContainer Domain..." action row
+            if setting.field_name == super::ADD_DEVCONTAINER_FIELD_NAME {
+                let label = format!("{}+ {}", prefix, setting.display_name);
+                let style = if is_selected {
+                    theme.selected
+                } else {
+                    theme.value_proposed
+                };
+                let name_cell = Line::from(Span::styled(label, style));
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::raw(""),
+                    ratatui::text::Text::raw(""),
+                ]);
+            }
+
+            // "Delete DevContainer Domain" action row
+            if setting
+                .field_name
+                .starts_with(super::DELETE_DEVCONTAINER_FIELD_NAME)
+            {
+                let label = format!("{}  \u{2717} Delete Domain", prefix);
+                let style = if is_selected {
+                    theme.selected
+                } else {
+                    theme.badge_fixed
+                };
+                let name_cell = Line::from(Span::styled(label, style));
+                return Row::new(vec![
+                    ratatui::text::Text::from(name_cell),
+                    ratatui::text::Text::raw(""),
+                    ratatui::text::Text::raw(""),
+                ]);
+            }
+            // --- end weezterm remote features ---
+
             // Regular setting row (including domain child fields)
             let name = &setting.display_name;
             let raw_value = setting
@@ -467,6 +540,47 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                     area.height.saturating_sub(1) as usize,
                     theme,
                 )
+            } else if let Some(ref header) = row.devcontainer_header {
+                let source_str = match header.source {
+                    super::data::DomainSource::Lua => "Lua config",
+                    super::data::DomainSource::Overlay => "User-added",
+                };
+                vec![
+                    Line::from(Span::styled(
+                        format!(" DevContainer: {} ", row.display_name),
+                        theme.detail_title,
+                    )),
+                    Line::from(Span::styled(
+                        format!(
+                            " Host: {}  Source: {}",
+                            row.current_value, source_str
+                        ),
+                        theme.detail,
+                    )),
+                    Line::from(Span::styled(" Enter to expand/collapse", theme.text_dim)),
+                ]
+            } else if row.field_name == super::ADD_DEVCONTAINER_FIELD_NAME {
+                vec![
+                    Line::from(Span::styled(
+                        " Add DevContainer Domain",
+                        theme.detail_title,
+                    )),
+                    Line::from(Span::styled(
+                        " Press Enter to create a new devcontainer domain",
+                        theme.detail,
+                    )),
+                ]
+            } else if row
+                .field_name
+                .starts_with(super::DELETE_DEVCONTAINER_FIELD_NAME)
+            {
+                vec![
+                    Line::from(Span::styled(" Delete Domain", theme.detail_title)),
+                    Line::from(Span::styled(
+                        " Press Enter to remove this devcontainer domain",
+                        theme.detail,
+                    )),
+                ]
             // --- end weezterm remote features ---
             } else {
                 let field_def = state.field_defs.iter().find(|f| f.name == row.field_name);
@@ -503,6 +617,14 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         .find(|(key, _, _, _)| row.field_name.ends_with(&format!("{}__", key)))
                         .map(|(_, _, _, d)| *d)
                         .unwrap_or(doc)
+                // --- weezterm remote features ---
+                } else if row.devcontainer_child.is_some() {
+                    super::data::devcontainer_field_defs()
+                        .iter()
+                        .find(|(key, _, _, _)| row.field_name.ends_with(&format!("{}__", key)))
+                        .map(|(_, _, _, d)| *d)
+                        .unwrap_or(doc)
+                // --- end weezterm remote features ---
                 } else {
                     doc
                 };

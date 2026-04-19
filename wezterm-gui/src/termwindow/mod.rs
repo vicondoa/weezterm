@@ -2809,6 +2809,7 @@ impl TermWindow {
                 overlay_data.ssh_domains,
                 // --- weezterm remote features ---
                 monitor_entries,
+                overlay_data.devcontainer_domains,
                 // --- end weezterm remote features ---
                 palette,
             )
@@ -2823,6 +2824,7 @@ impl TermWindow {
                     ssh_domains,
                     // --- weezterm remote features ---
                     monitor_overrides,
+                    devcontainer_domains,
                     // --- end weezterm remote features ---
                 }) => {
                     log::info!(
@@ -2830,12 +2832,13 @@ impl TermWindow {
                         proposals.len(),
                         ssh_domains.len()
                     );
-                    // Persist proposals + domains + monitor overrides to disk
+                    // Persist proposals + domains + monitor overrides + devcontainers to disk
                     if let Err(e) = config_overlay::persistence::save_overlay_data(
                         &proposals,
                         &ssh_domains,
                         // --- weezterm remote features ---
                         &monitor_overrides,
+                        &devcontainer_domains,
                         // --- end weezterm remote features ---
                     ) {
                         log::error!("Failed to save config overlay data: {:#}", e);
