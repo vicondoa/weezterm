@@ -2041,6 +2041,17 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Edit"],
             icon: None,
         },
+        ShowDevContainerManager => CommandDef {
+            brief: "DevContainer: Open Manager".into(),
+            doc: "Opens the DevContainer Manager overlay for managing \
+                  Docker devcontainers. List, connect, start, stop, \
+                  and create devcontainers."
+                .into(),
+            keys: vec![(Modifiers::CTRL.union(Modifiers::SHIFT), "d".into())],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: None,
+        },
         // --- end weezterm remote features ---
     })
 }
@@ -2170,6 +2181,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         // --- weezterm remote features ---
         ShowPortForwardOverlay,
         ShowConfigOverlay,
+        ShowDevContainerManager,
         // --- end weezterm remote features ---
         // ----------------- Help
         OpenUri("https://wezterm.org/".to_string()),

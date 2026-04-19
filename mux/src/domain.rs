@@ -538,7 +538,7 @@ impl std::io::Write for WriterWrapper {
 /// Wraps the underlying pty; we use this as a marker for when
 /// the spawn attempt failed in order to hold the pane open
 pub(crate) struct FailedSpawnPty {
-    inner: Mutex<Box<dyn MasterPty>>,
+    pub(crate) inner: Mutex<Box<dyn MasterPty>>,
 }
 
 impl portable_pty::MasterPty for FailedSpawnPty {

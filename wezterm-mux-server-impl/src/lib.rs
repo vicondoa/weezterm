@@ -1,4 +1,5 @@
 use config::{ConfigHandle, SshMultiplexing};
+use mux::devcontainer::DevContainerDomain;
 use mux::domain::{Domain, LocalDomain};
 use mux::ssh::RemoteSshDomain;
 use mux::Mux;
@@ -87,6 +88,21 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
         let domain: Arc<dyn Domain> = Arc::new(LocalDomain::new_serial_domain(serial.clone())?);
         mux.add_domain(&domain);
     }
+
+    // --- weezterm remote features ---
+    for dc_dom in &config.devcontainer_domains {
+        if mux.get_domain_by_name(&dc_dom.name).is_some() {
+            continue;
+        }
+
+        // For now, register local devcontainer domains (no SSH).
+        // SSH-backed devcontainer domains will be registered in Phase 4.
+        if dc_dom.ssh.is_none() {
+            let domain: Arc<dyn Domain> = Arc::new(DevContainerDomain::new(dc_dom.clone()));
+            mux.add_domain(&domain);
+        }
+    }
+    // --- end weezterm remote features ---
 
     if is_standalone_mux {
         if let Some(name) = &config.default_mux_server_domain {

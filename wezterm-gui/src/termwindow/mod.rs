@@ -3639,6 +3639,10 @@ impl TermWindow {
             ShowConfigOverlay => {
                 self.show_config_overlay();
             }
+            ShowDevContainerManager => {
+                // TODO: Phase 5 — implement devcontainer manager overlay
+                log::info!("ShowDevContainerManager: overlay not yet implemented");
+            }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
             Confirmation(args) => self.show_confirmation(args),
