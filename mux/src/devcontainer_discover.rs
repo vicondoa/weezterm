@@ -64,7 +64,7 @@ pub struct DevContainerInfo {
 /// Raw JSON output from `docker ps --format '{{json .}}'`
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct DockerPsEntry {
+pub(crate) struct DockerPsEntry {
     #[serde(rename = "ID")]
     id: String,
     names: String,
@@ -98,7 +98,7 @@ struct DevContainerMetadataEntry {
 /// Full inspect output (subset of fields we care about)
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
-struct DockerInspectResult {
+pub(crate) struct DockerInspectResult {
     id: String,
     name: String,
     created: Option<String>,
@@ -123,7 +123,7 @@ struct DockerInspectState {
 /// Parse the JSON output of `docker ps -a --filter "label=devcontainer.local_folder" --format '{{json .}}'`.
 ///
 /// Each line is a separate JSON object.
-pub fn parse_docker_ps_output(output: &str) -> Vec<DockerPsEntry> {
+pub(crate) fn parse_docker_ps_output(output: &str) -> Vec<DockerPsEntry> {
     output
         .lines()
         .filter(|line| !line.trim().is_empty())
@@ -141,12 +141,12 @@ pub fn parse_docker_ps_output(output: &str) -> Vec<DockerPsEntry> {
 /// Parse the JSON output of `docker inspect <ids...>`.
 ///
 /// Output is a JSON array of inspect results.
-pub fn parse_docker_inspect_output(output: &str) -> anyhow::Result<Vec<DockerInspectResult>> {
+pub(crate) fn parse_docker_inspect_output(output: &str) -> anyhow::Result<Vec<DockerInspectResult>> {
     serde_json::from_str(output).context("Failed to parse docker inspect output")
 }
 
 /// Convert a `DockerInspectResult` into a `DevContainerInfo`.
-pub fn inspect_to_container_info(inspect: &DockerInspectResult) -> Option<DevContainerInfo> {
+pub(crate) fn inspect_to_container_info(inspect: &DockerInspectResult) -> Option<DevContainerInfo> {
     let labels = inspect.config.labels.as_ref()?;
     let local_folder = labels.get("devcontainer.local_folder")?.clone();
 

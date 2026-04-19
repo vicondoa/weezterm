@@ -5,19 +5,16 @@
 //! Supports both local Docker and remote Docker via SSH (with optional
 //! mux server for session persistence).
 
-use crate::devcontainer_discover::{
-    self, ContainerStatus, DevContainerInfo,
-};
+use crate::devcontainer_discover::DevContainerInfo;
 use crate::domain::{
     alloc_domain_id, Domain, DomainId, DomainState, FailedProcessSpawn, FailedSpawnPty,
-    SplitSource, WriterWrapper,
+    WriterWrapper,
 };
 use crate::localpane::LocalPane;
 use crate::pane::{alloc_pane_id, Pane};
-use crate::tab::{SplitRequest, Tab, TabId};
 use crate::window::WindowId;
 use crate::Mux;
-use anyhow::{bail, Context};
+use anyhow::bail;
 use async_trait::async_trait;
 use config::devcontainer::DevContainerDomainConfig;
 use parking_lot::Mutex;
@@ -241,7 +238,7 @@ impl Domain for DevContainerDomain {
         let child_result = pair.slave.spawn_command(cmd);
         let mut writer = WriterWrapper::new(pair.master.take_writer()?);
 
-        let mut terminal = wezterm_term::Terminal::new(
+        let terminal = wezterm_term::Terminal::new(
             size,
             std::sync::Arc::new(config::TermConfig::new()),
             config::branding::APP_NAME_DISPLAY,
