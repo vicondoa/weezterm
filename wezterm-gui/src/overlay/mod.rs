@@ -17,6 +17,7 @@ pub mod selector;
 
 // --- weezterm remote features ---
 pub mod config_overlay;
+pub mod devcontainer;
 pub mod port_forward;
 
 pub use confirm_close_pane::{

@@ -2675,6 +2675,83 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    fn show_devcontainer_overlay(&mut self) {
+        use mux::devcontainer::DevContainerDomain;
+        use mux::devcontainer_discover::DevContainerInfo;
+        use mux::domain::Domain;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let pane = match tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let domain_id = pane.domain_id();
+
+        // Helper to find any devcontainer domain when the active pane isn't in one
+        fn find_any_dc(
+            mux: &Arc<Mux>,
+        ) -> (Vec<DevContainerInfo>, String, String, Option<String>, Option<String>) {
+            use mux::domain::Domain as DomainTrait;
+            for domain in mux.iter_domains() {
+                if let Some(dc) = domain.downcast_ref::<DevContainerDomain>() {
+                    return (
+                        dc.containers(),
+                        DomainTrait::domain_name(dc).to_string(),
+                        dc.config()
+                            .ssh
+                            .as_ref()
+                            .map(|s| s.remote_address.clone())
+                            .unwrap_or_else(|| "localhost".to_string()),
+                        dc.primary_container().map(|c| c.container_id),
+                        dc.config().default_workspace_folder.clone(),
+                    );
+                }
+            }
+            (vec![], "devcontainer".to_string(), "localhost".to_string(), None, None)
+        }
+
+        let (entries, domain_name, host_label, primary_id, default_workspace) =
+            if let Some(domain) = mux.get_domain(domain_id) {
+                if let Some(dc_domain) = domain.downcast_ref::<DevContainerDomain>() {
+                    (
+                        dc_domain.containers(),
+                        Domain::domain_name(dc_domain).to_string(),
+                        dc_domain
+                            .config()
+                            .ssh
+                            .as_ref()
+                            .map(|s| s.remote_address.clone())
+                            .unwrap_or_else(|| "localhost".to_string()),
+                        dc_domain.primary_container().map(|c| c.container_id),
+                        dc_domain.config().default_workspace_folder.clone(),
+                    )
+                } else {
+                    find_any_dc(&mux)
+                }
+            } else {
+                find_any_dc(&mux)
+            };
+
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::devcontainer::run_devcontainer_overlay(
+                term,
+                entries,
+                domain_name,
+                host_label,
+                primary_id,
+                default_workspace,
+            )
+        });
+        self.assign_overlay(tab_id, overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     // --- weezterm remote features ---
     fn show_config_overlay(&mut self) {
         use crate::overlay::config_overlay;
@@ -3640,8 +3717,7 @@ impl TermWindow {
                 self.show_config_overlay();
             }
             ShowDevContainerManager => {
-                // TODO: Phase 5 — implement devcontainer manager overlay
-                log::info!("ShowDevContainerManager: overlay not yet implemented");
+                self.show_devcontainer_overlay();
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),
