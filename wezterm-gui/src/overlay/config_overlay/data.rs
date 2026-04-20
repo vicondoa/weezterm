@@ -161,7 +161,6 @@ pub enum Section {
     Rendering,
     // --- weezterm remote features ---
     Monitors,
-    DevContainers,
     // --- end weezterm remote features ---
 }
 
@@ -174,11 +173,10 @@ impl Section {
             Section::CursorAndAnimation => "Cursor",
             Section::Terminal => "Terminal",
             Section::Input => "Input",
-            Section::SshAndDomains => "SSH & Domains",
+            Section::SshAndDomains => "Domains",
             Section::Rendering => "Rendering",
             // --- weezterm remote features ---
             Section::Monitors => "Monitors",
-            Section::DevContainers => "Dev Containers",
             // --- end weezterm remote features ---
         }
     }
@@ -220,7 +218,6 @@ pub fn get_sections() -> Vec<Section> {
         Section::Rendering,
         // --- weezterm remote features ---
         Section::Monitors,
-        Section::DevContainers,
         // --- end weezterm remote features ---
     ]
 }
@@ -1137,19 +1134,19 @@ pub fn devcontainer_own_field_defs() -> Vec<(&'static str, &'static str, FieldKi
     vec![
         (
             "default_workspace_folder",
-            "Default Workspace",
+            "DevContainer Workspace",
             Text,
             "Workspace folder on host to auto-match",
         ),
         (
             "default_container",
-            "Default Container",
+            "DevContainer Default",
             Text,
             "Container name/ID to auto-connect to",
         ),
         (
             "docker_command",
-            "Docker Command",
+            "DevContainer Docker Cmd",
             Text,
             "Path to the Docker CLI",
         ),
@@ -1161,25 +1158,25 @@ pub fn devcontainer_own_field_defs() -> Vec<(&'static str, &'static str, FieldKi
         ),
         (
             "default_shell",
-            "Default Shell",
+            "DevContainer Shell",
             Text,
             "Shell inside containers (empty = auto-detect)",
         ),
         (
             "override_user",
-            "Override User",
+            "DevContainer User",
             Text,
             "Override container default user (empty = use container default)",
         ),
         (
             "poll_interval_secs",
-            "Poll Interval (s)",
+            "DevContainer Poll (s)",
             Integer,
             "Seconds between container discovery polls",
         ),
         (
             "auto_discover",
-            "Auto Discover",
+            "DevContainer Auto Discover",
             Bool,
             "Discover running devcontainers on domain attach",
         ),

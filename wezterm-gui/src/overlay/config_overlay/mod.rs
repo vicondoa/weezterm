@@ -476,6 +476,115 @@ impl OverlayState {
                     devcontainer_child: None,
                 });
             }
+            // --- weezterm remote features ---
+            // DevContainer domain entries in the same Domains section
+            let dc_fields = data::devcontainer_all_field_defs();
+            let filter_matches_dc = |entry: &data::DevContainerEntry| -> bool {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                entry.config.name.to_lowercase().contains(&filter_lower)
+                    || entry
+                        .config
+                        .ssh
+                        .remote_address
+                        .to_lowercase()
+                        .contains(&filter_lower)
+            };
+
+            for (idx, entry) in self.devcontainer_entries.iter().enumerate() {
+                if !filter_matches_dc(entry) {
+                    continue;
+                }
+
+                let value_summary = if entry.config.ssh.remote_address.is_empty() {
+                    "local".to_string()
+                } else {
+                    entry.config.ssh.remote_address.clone()
+                };
+
+                rows.push(SettingRow {
+                    field_name: format!("__devcontainer_header_{}__", idx),
+                    display_name: entry.config.name.clone(),
+                    current_value: value_summary,
+                    proposed_value: None,
+                    status: match entry.source {
+                        data::DomainSource::Lua => FieldStatus::FixedByLua,
+                        data::DomainSource::Overlay => FieldStatus::Editable,
+                    },
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
+                    devcontainer_header: Some(DevContainerHeaderInfo {
+                        domain_index: idx,
+                        source: entry.source,
+                        expanded: entry.expanded,
+                    }),
+                    devcontainer_child: None,
+                });
+
+                if entry.expanded {
+                    for (field_key, field_display, field_kind, _doc) in &dc_fields {
+                        let value = data::devcontainer_field_value(&entry.config, field_key);
+                        let is_editable = entry.source == data::DomainSource::Overlay;
+                        rows.push(SettingRow {
+                            field_name: format!("__devcontainer_{}_{}__", idx, field_key),
+                            display_name: format!("  {}", field_display),
+                            current_value: value,
+                            proposed_value: None,
+                            status: if is_editable {
+                                FieldStatus::Editable
+                            } else {
+                                FieldStatus::FixedByLua
+                            },
+                            kind: field_kind.clone(),
+                            domain_header: None,
+                            domain_child: None,
+                            monitor_header: None,
+                            monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: Some(idx),
+                        });
+                    }
+
+                    if entry.source == data::DomainSource::Overlay {
+                        rows.push(SettingRow {
+                            field_name: format!("{}_{}", DELETE_DEVCONTAINER_FIELD_NAME, idx),
+                            display_name: "  Delete Domain".to_string(),
+                            current_value: String::new(),
+                            proposed_value: None,
+                            status: FieldStatus::Editable,
+                            kind: FieldKind::Text,
+                            domain_header: None,
+                            domain_child: None,
+                            monitor_header: None,
+                            monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: Some(idx),
+                        });
+                    }
+                }
+            }
+
+            if filter_lower.is_empty() || "add devcontainer domain".contains(&filter_lower) {
+                rows.push(SettingRow {
+                    field_name: ADD_DEVCONTAINER_FIELD_NAME.to_string(),
+                    display_name: "Add DevContainer Domain...".to_string(),
+                    current_value: String::new(),
+                    proposed_value: None,
+                    status: FieldStatus::Editable,
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
+                });
+            }
+            // --- end weezterm remote features ---
         }
 
         // --- weezterm remote features ---
@@ -550,122 +659,6 @@ impl OverlayState {
                     current_value: String::new(),
                     proposed_value: None,
                     status: FieldStatus::Inherited,
-                    kind: FieldKind::Text,
-                    domain_header: None,
-                    domain_child: None,
-                    monitor_header: None,
-                    monitor_child: None,
-                    devcontainer_header: None,
-                    devcontainer_child: None,
-                });
-            }
-        }
-        // --- end weezterm remote features ---
-
-        // --- weezterm remote features ---
-        // For Dev Containers section, show grouped devcontainer domain entries
-        if section == Section::DevContainers {
-            let dc_fields = data::devcontainer_all_field_defs();
-            let filter_matches_dc = |entry: &data::DevContainerEntry| -> bool {
-                if filter_lower.is_empty() {
-                    return true;
-                }
-                entry.config.name.to_lowercase().contains(&filter_lower)
-                    || entry
-                        .config
-                        .ssh
-                        .remote_address
-                        .to_lowercase()
-                        .contains(&filter_lower)
-            };
-
-            for (idx, entry) in self.devcontainer_entries.iter().enumerate() {
-                if !filter_matches_dc(entry) {
-                    continue;
-                }
-
-                let value_summary = if entry.config.ssh.remote_address.is_empty() {
-                    "local".to_string()
-                } else {
-                    entry.config.ssh.remote_address.clone()
-                };
-
-                // DevContainer group header
-                rows.push(SettingRow {
-                    field_name: format!("__devcontainer_header_{}__", idx),
-                    display_name: entry.config.name.clone(),
-                    current_value: value_summary,
-                    proposed_value: None,
-                    status: match entry.source {
-                        data::DomainSource::Lua => FieldStatus::FixedByLua,
-                        data::DomainSource::Overlay => FieldStatus::Editable,
-                    },
-                    kind: FieldKind::Text,
-                    domain_header: None,
-                    domain_child: None,
-                    monitor_header: None,
-                    monitor_child: None,
-                    devcontainer_header: Some(DevContainerHeaderInfo {
-                        domain_index: idx,
-                        source: entry.source,
-                        expanded: entry.expanded,
-                    }),
-                    devcontainer_child: None,
-                });
-
-                // If expanded, show child fields
-                if entry.expanded {
-                    for (field_key, field_display, field_kind, _doc) in &dc_fields {
-                        let value = data::devcontainer_field_value(&entry.config, field_key);
-                        let is_editable = entry.source == data::DomainSource::Overlay;
-                        rows.push(SettingRow {
-                            field_name: format!("__devcontainer_{}_{}__", idx, field_key),
-                            display_name: format!("  {}", field_display),
-                            current_value: value,
-                            proposed_value: None,
-                            status: if is_editable {
-                                FieldStatus::Editable
-                            } else {
-                                FieldStatus::FixedByLua
-                            },
-                            kind: field_kind.clone(),
-                            domain_header: None,
-                            domain_child: None,
-                            monitor_header: None,
-                            monitor_child: None,
-                            devcontainer_header: None,
-                            devcontainer_child: Some(idx),
-                        });
-                    }
-
-                    // Delete action for overlay devcontainers
-                    if entry.source == data::DomainSource::Overlay {
-                        rows.push(SettingRow {
-                            field_name: format!("{}_{}", DELETE_DEVCONTAINER_FIELD_NAME, idx),
-                            display_name: "  Delete Domain".to_string(),
-                            current_value: String::new(),
-                            proposed_value: None,
-                            status: FieldStatus::Editable,
-                            kind: FieldKind::Text,
-                            domain_header: None,
-                            domain_child: None,
-                            monitor_header: None,
-                            monitor_child: None,
-                            devcontainer_header: None,
-                            devcontainer_child: Some(idx),
-                        });
-                    }
-                }
-            }
-
-            // "Add DevContainer Domain..." action row
-            if filter_lower.is_empty() || "add devcontainer domain".contains(&filter_lower) {
-                rows.push(SettingRow {
-                    field_name: ADD_DEVCONTAINER_FIELD_NAME.to_string(),
-                    display_name: "Add DevContainer Domain...".to_string(),
-                    current_value: String::new(),
-                    proposed_value: None,
-                    status: FieldStatus::Editable,
                     kind: FieldKind::Text,
                     domain_header: None,
                     domain_child: None,
