@@ -355,22 +355,66 @@ fn parse_devcontainer_domains(val: &serde_json::Value) -> Vec<DevContainerOverla
     if let serde_json::Value::Array(arr) = val {
         for item in arr {
             if let serde_json::Value::Object(obj) = item {
+                // Parse embedded SSH config
+                let ssh = if let Some(serde_json::Value::Object(ssh_obj)) = obj.get("ssh") {
+                    SshDomainConfig {
+                        name: ssh_obj
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        remote_address: ssh_obj
+                            .get("remote_address")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        username: ssh_obj
+                            .get("username")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        multiplexing: ssh_obj
+                            .get("multiplexing")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("None")
+                            .to_string(),
+                        ssh_backend: ssh_obj
+                            .get("ssh_backend")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("LibSsh")
+                            .to_string(),
+                        no_agent_auth: ssh_obj
+                            .get("no_agent_auth")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        connect_automatically: ssh_obj
+                            .get("connect_automatically")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    }
+                } else {
+                    // Backwards compat: read flat ssh_host/ssh_username
+                    SshDomainConfig {
+                        remote_address: obj
+                            .get("ssh_host")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        username: obj
+                            .get("ssh_username")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        ..SshDomainConfig::default()
+                    }
+                };
                 domains.push(DevContainerOverlayConfig {
                     name: obj
                         .get("name")
                         .and_then(|v| v.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    ssh_host: obj
-                        .get("ssh_host")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
-                    ssh_username: obj
-                        .get("ssh_username")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("")
-                        .to_string(),
+                    ssh,
                     default_workspace_folder: obj
                         .get("default_workspace_folder")
                         .and_then(|v| v.as_str())
@@ -423,14 +467,37 @@ fn devcontainer_to_json(dc: &DevContainerOverlayConfig) -> serde_json::Value {
         "name".to_string(),
         serde_json::Value::String(dc.name.clone()),
     );
-    obj.insert(
-        "ssh_host".to_string(),
-        serde_json::Value::String(dc.ssh_host.clone()),
+    // Embed the full SSH config as a nested object
+    let mut ssh_obj = serde_json::Map::new();
+    ssh_obj.insert(
+        "name".to_string(),
+        serde_json::Value::String(dc.ssh.name.clone()),
     );
-    obj.insert(
-        "ssh_username".to_string(),
-        serde_json::Value::String(dc.ssh_username.clone()),
+    ssh_obj.insert(
+        "remote_address".to_string(),
+        serde_json::Value::String(dc.ssh.remote_address.clone()),
     );
+    ssh_obj.insert(
+        "username".to_string(),
+        serde_json::Value::String(dc.ssh.username.clone()),
+    );
+    ssh_obj.insert(
+        "multiplexing".to_string(),
+        serde_json::Value::String(dc.ssh.multiplexing.clone()),
+    );
+    ssh_obj.insert(
+        "ssh_backend".to_string(),
+        serde_json::Value::String(dc.ssh.ssh_backend.clone()),
+    );
+    ssh_obj.insert(
+        "no_agent_auth".to_string(),
+        serde_json::Value::Bool(dc.ssh.no_agent_auth),
+    );
+    ssh_obj.insert(
+        "connect_automatically".to_string(),
+        serde_json::Value::Bool(dc.ssh.connect_automatically),
+    );
+    obj.insert("ssh".to_string(), serde_json::Value::Object(ssh_obj));
     obj.insert(
         "default_workspace_folder".to_string(),
         serde_json::Value::String(dc.default_workspace_folder.clone()),

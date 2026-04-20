@@ -619,7 +619,7 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         .unwrap_or(doc)
                 // --- weezterm remote features ---
                 } else if row.devcontainer_child.is_some() {
-                    super::data::devcontainer_field_defs()
+                    super::data::devcontainer_all_field_defs()
                         .iter()
                         .find(|(key, _, _, _)| row.field_name.ends_with(&format!("{}__", key)))
                         .map(|(_, _, _, d)| *d)

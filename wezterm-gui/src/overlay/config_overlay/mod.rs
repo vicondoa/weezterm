@@ -565,7 +565,7 @@ impl OverlayState {
         // --- weezterm remote features ---
         // For Dev Containers section, show grouped devcontainer domain entries
         if section == Section::DevContainers {
-            let dc_fields = data::devcontainer_field_defs();
+            let dc_fields = data::devcontainer_all_field_defs();
             let filter_matches_dc = |entry: &data::DevContainerEntry| -> bool {
                 if filter_lower.is_empty() {
                     return true;
@@ -573,7 +573,8 @@ impl OverlayState {
                 entry.config.name.to_lowercase().contains(&filter_lower)
                     || entry
                         .config
-                        .ssh_host
+                        .ssh
+                        .remote_address
                         .to_lowercase()
                         .contains(&filter_lower)
             };
@@ -583,10 +584,10 @@ impl OverlayState {
                     continue;
                 }
 
-                let value_summary = if entry.config.ssh_host.is_empty() {
+                let value_summary = if entry.config.ssh.remote_address.is_empty() {
                     "local".to_string()
                 } else {
-                    entry.config.ssh_host.clone()
+                    entry.config.ssh.remote_address.clone()
                 };
 
                 // DevContainer group header

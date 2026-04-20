@@ -1085,12 +1085,15 @@ pub fn to_config_monitor_overrides(
 
 // --- weezterm remote features ---
 
-/// A user-managed DevContainer domain configuration (simplified for overlay editing).
+/// A user-managed DevContainer domain configuration for overlay editing.
+/// Embeds a full `SshDomainConfig` so all SSH options are available and
+/// reuse the same field definitions / getters / setters — no drift.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DevContainerOverlayConfig {
     pub name: String,
-    pub ssh_host: String,
-    pub ssh_username: String,
+    /// Full SSH configuration (reuses the same type as SSH domains).
+    /// When all SSH fields are empty/default, the domain uses local Docker.
+    pub ssh: SshDomainConfig,
     pub default_workspace_folder: String,
     pub default_container: String,
     pub docker_command: String,
@@ -1105,8 +1108,7 @@ impl Default for DevContainerOverlayConfig {
     fn default() -> Self {
         Self {
             name: String::new(),
-            ssh_host: String::new(),
-            ssh_username: String::new(),
+            ssh: SshDomainConfig::default(),
             default_workspace_folder: String::new(),
             default_container: String::new(),
             docker_command: "docker".to_string(),
@@ -1127,21 +1129,12 @@ pub struct DevContainerEntry {
     pub expanded: bool,
 }
 
-pub fn devcontainer_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)> {
+/// Field definitions for devcontainer-specific settings (NOT the SSH sub-fields).
+/// SSH fields are provided by `domain_field_defs()` and rendered as a nested group.
+pub fn devcontainer_own_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)>
+{
     use FieldKind::*;
     vec![
-        (
-            "ssh_host",
-            "SSH Host",
-            Text,
-            "Remote host:port (empty = local Docker)",
-        ),
-        (
-            "ssh_username",
-            "SSH Username",
-            Text,
-            "SSH username for remote connections",
-        ),
         (
             "default_workspace_folder",
             "Default Workspace",
@@ -1193,10 +1186,9 @@ pub fn devcontainer_field_defs() -> Vec<(&'static str, &'static str, FieldKind, 
     ]
 }
 
+/// Read a devcontainer-own field value by name.
 pub fn devcontainer_field_value(config: &DevContainerOverlayConfig, field: &str) -> String {
     match field {
-        "ssh_host" => config.ssh_host.clone(),
-        "ssh_username" => config.ssh_username.clone(),
         "default_workspace_folder" => config.default_workspace_folder.clone(),
         "default_container" => config.default_container.clone(),
         "docker_command" => config.docker_command.clone(),
@@ -1205,14 +1197,14 @@ pub fn devcontainer_field_value(config: &DevContainerOverlayConfig, field: &str)
         "override_user" => config.override_user.clone(),
         "poll_interval_secs" => config.poll_interval_secs.clone(),
         "auto_discover" => if config.auto_discover { "On" } else { "Off" }.to_string(),
-        _ => String::new(),
+        // Delegate SSH fields to the shared getter
+        _ => domain_field_value(&config.ssh, field),
     }
 }
 
+/// Write a devcontainer field value by name.
 pub fn set_devcontainer_field(config: &mut DevContainerOverlayConfig, field: &str, value: &str) {
     match field {
-        "ssh_host" => config.ssh_host = value.to_string(),
-        "ssh_username" => config.ssh_username = value.to_string(),
         "default_workspace_folder" => config.default_workspace_folder = value.to_string(),
         "default_container" => config.default_container = value.to_string(),
         "docker_command" => config.docker_command = value.to_string(),
@@ -1221,8 +1213,19 @@ pub fn set_devcontainer_field(config: &mut DevContainerOverlayConfig, field: &st
         "override_user" => config.override_user = value.to_string(),
         "poll_interval_secs" => config.poll_interval_secs = value.to_string(),
         "auto_discover" => config.auto_discover = value == "On" || value == "true",
-        _ => {}
+        // Delegate SSH fields to the shared setter
+        _ => set_domain_field(&mut config.ssh, field, value),
     }
+}
+
+/// Returns ALL field definitions for a devcontainer domain: own fields + SSH fields.
+/// Used by `visible_settings()` to build the flattened child row list.
+pub fn devcontainer_all_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)>
+{
+    let mut fields = devcontainer_own_field_defs();
+    // Append the full SSH domain fields — same defs, no duplication
+    fields.extend(domain_field_defs());
+    fields
 }
 
 pub fn devcontainers_from_config() -> Vec<DevContainerEntry> {
@@ -1230,33 +1233,42 @@ pub fn devcontainers_from_config() -> Vec<DevContainerEntry> {
     config
         .devcontainer_domains
         .iter()
-        .map(|dc| DevContainerEntry {
-            config: DevContainerOverlayConfig {
-                name: dc.name.clone(),
-                ssh_host: dc
-                    .ssh
-                    .as_ref()
-                    .map(|s| s.remote_address.clone())
-                    .unwrap_or_default(),
-                ssh_username: dc
-                    .ssh
-                    .as_ref()
-                    .and_then(|s| s.username.clone())
-                    .unwrap_or_default(),
-                default_workspace_folder: dc
-                    .default_workspace_folder
-                    .clone()
-                    .unwrap_or_default(),
-                default_container: dc.default_container.clone().unwrap_or_default(),
-                docker_command: dc.docker_command.clone(),
-                devcontainer_command: dc.devcontainer_command.clone(),
-                default_shell: dc.default_shell.clone().unwrap_or_default(),
-                override_user: dc.override_user.clone().unwrap_or_default(),
-                poll_interval_secs: dc.poll_interval_secs.to_string(),
-                auto_discover: dc.auto_discover,
-            },
-            source: DomainSource::Lua,
-            expanded: false,
+        .map(|dc| {
+            let ssh = if let Some(ref s) = dc.ssh {
+                SshDomainConfig {
+                    name: s.name.clone(),
+                    remote_address: s.remote_address.clone(),
+                    username: s.username.clone().unwrap_or_default(),
+                    multiplexing: format!("{:?}", s.multiplexing),
+                    ssh_backend: s
+                        .ssh_backend
+                        .map(|b| format!("{:?}", b))
+                        .unwrap_or_else(|| "LibSsh".to_string()),
+                    no_agent_auth: s.no_agent_auth,
+                    connect_automatically: s.connect_automatically,
+                }
+            } else {
+                SshDomainConfig::default()
+            };
+            DevContainerEntry {
+                config: DevContainerOverlayConfig {
+                    name: dc.name.clone(),
+                    ssh,
+                    default_workspace_folder: dc
+                        .default_workspace_folder
+                        .clone()
+                        .unwrap_or_default(),
+                    default_container: dc.default_container.clone().unwrap_or_default(),
+                    docker_command: dc.docker_command.clone(),
+                    devcontainer_command: dc.devcontainer_command.clone(),
+                    default_shell: dc.default_shell.clone().unwrap_or_default(),
+                    override_user: dc.override_user.clone().unwrap_or_default(),
+                    poll_interval_secs: dc.poll_interval_secs.to_string(),
+                    auto_discover: dc.auto_discover,
+                },
+                source: DomainSource::Lua,
+                expanded: false,
+            }
         })
         .collect()
 }
@@ -1264,19 +1276,13 @@ pub fn devcontainers_from_config() -> Vec<DevContainerEntry> {
 pub fn to_config_devcontainer_domain(
     dc: &DevContainerOverlayConfig,
 ) -> config::devcontainer::DevContainerDomainConfig {
-    let ssh = if dc.ssh_host.is_empty() {
+    // Convert the embedded SSH config back to runtime SshDomain
+    let ssh = if dc.ssh.remote_address.is_empty() {
         None
     } else {
-        Some(config::SshDomain {
-            name: dc.name.clone(),
-            remote_address: dc.ssh_host.clone(),
-            username: if dc.ssh_username.is_empty() {
-                None
-            } else {
-                Some(dc.ssh_username.clone())
-            },
-            ..Default::default()
-        })
+        let mut ssh_dom = to_config_ssh_domain(&dc.ssh);
+        ssh_dom.name = dc.name.clone();
+        Some(ssh_dom)
     };
     config::devcontainer::DevContainerDomainConfig {
         name: dc.name.clone(),
