@@ -10,9 +10,22 @@ working on remote machines feel native. When you connect to a remote host via
    or manual copy-paste required.
 2. **Automatically detect and forward remote ports to localhost** — so you can
    access development servers, dashboards, and OAuth callbacks without manually
-   setting up SSH tunnels.
+   setting up SSH tunnels. Works with both direct SSH and multiplexed domains.
 3. **Auto-install weezterm on the remote host** for multiplexing mode — no
    manual setup required on the server.
+4. **Validate remote URLs with security policies** — allow-list and
+   per-domain policy (Allow / Confirm / Deny) with dangerous schemes always
+   blocked.
+5. **Auto-reconnect dropped SSH sessions** — exponential backoff retry after
+   connection loss (e.g., laptop suspend/resume), with port forwarding restart.
+6. **Browse and edit configuration from a TUI overlay** — `Ctrl+Shift+,` opens
+   a Ratatui-based editor for ~80 settings, SSH domains, DevContainer domains,
+   and per-monitor overrides.
+7. **Persist window state across restarts** — position, size, and
+   maximized/fullscreen state restored on the correct monitor.
+8. **Run shells inside Docker devcontainers** — auto-discover containers,
+   manage them from a TUI overlay (`Ctrl+Shift+D`), and connect via
+   `docker exec` with optional SSH tunneling.
 
 These extensions are inspired by
 [VS Code Remote - SSH](https://code.visualstudio.com/docs/remote/ssh) and aim
@@ -142,11 +155,12 @@ All port-forwarding options live under the `port_forwarding` table inside an
 |--------|------|---------|-------------|
 | `port_forwarding.enabled` | boolean | `true` | Master switch to enable/disable port forwarding. |
 | `port_forwarding.auto_forward` | boolean | `true` | Whether to automatically forward newly detected ports. |
-| `port_forwarding.detect_with_proc_net_tcp` | boolean | `true` | Enable detection via `/proc/net/tcp` polling (Linux only). |
+| `port_forwarding.detect_with_proc_net_tcp` | string | `"OnlyNew"` | Detection mode for `/proc/net/tcp` polling (Linux only). `"None"`: disabled. `"All"`: forward all listening ports. `"OnlyNew"`: only ports opened after connection (default). |
 | `port_forwarding.detect_with_terminal_scrape` | boolean | `true` | Enable detection of ports from URLs printed in the terminal. |
 | `port_forwarding.poll_interval_secs` | number | `2` | How often (in seconds) to poll `/proc/net/tcp` for new listeners. |
 | `port_forwarding.exclude_ports` | list of numbers | `[22]` | Ports to never auto-forward. |
 | `port_forwarding.include_ports` | list of numbers | `[]` | Ports to always forward when detected on connect. |
+| `port_forwarding.port_conflict_handling` | string | `"Skip"` | What to do when the preferred local port is already in use. `"Skip"`: don't forward, re-check periodically. `"RandomPort"`: forward on a random available local port. |
 
 Example configuration (inside an `ssh_domains` entry):
 
@@ -158,15 +172,26 @@ config.ssh_domains = {
     port_forwarding = {
       enabled = true,
       auto_forward = true,
-      detect_with_proc_net_tcp = true,
+      detect_with_proc_net_tcp = "OnlyNew",  -- "None", "All", or "OnlyNew"
       detect_with_terminal_scrape = true,
       poll_interval_secs = 3,
       exclude_ports = { 22, 3306, 5432 },
       include_ports = {},
+      port_conflict_handling = "Skip",  -- "Skip" or "RandomPort"
     },
   },
 }
 ```
+
+### Multiplexed Domain Support
+
+Port forwarding works with both direct SSH and multiplexed SSH domains
+(`multiplexing = "WezTerm"`). When using multiplexing mode, the SSH session
+used for port forwarding persists through the mux proxy, so:
+
+- Port forwards survive SSH reconnection
+- The port manager overlay shows ports from the underlying SSH session
+- All detection methods work the same as in direct SSH mode
 
 ---
 
@@ -301,10 +326,350 @@ on the remote host manually and set `remote_wezterm_path` to point to it.
 
 ---
 
+## Open-URL Security
+
+### How It Works
+
+When a remote program opens a URL via `$BROWSER` (OSC 7457), WeezTerm validates
+the URL against a security policy before opening it in your local browser. This
+prevents malicious or unexpected URLs from being opened automatically.
+
+The validation flow:
+
+```
+Remote program emits OSC 7457 with URL
+            │
+            ▼
+   Scheme check: http(s) only?
+      ├── No  → DENY (always blocked)
+      └── Yes ▼
+   Domain allow_list prefix match?
+      ├── Yes → ALLOW (open immediately)
+      └── No  ▼
+   Global allow_list prefix match?
+      ├── Yes → ALLOW (open immediately)
+      └── No  ▼
+   Apply default_policy (Allow / Confirm / Deny)
+```
+
+### Blocked Schemes
+
+The following URL schemes are **always blocked**, regardless of policy:
+
+- `file://` — local file access
+- `javascript:` — script injection
+- `data:` — inline content injection
+- Any non-`http://` or `https://` scheme
+
+### Confirmation Flow
+
+When the policy is `Confirm` (the default), WeezTerm shows a toast notification
+with the URL. You must click the notification to open the URL. The notification
+auto-dismisses after `confirm_timeout_secs` (default: 15 seconds) if not acted upon.
+
+### Configuration
+
+The `open_url` block can be set per-domain (inside `ssh_domains`) or globally.
+Per-domain settings take precedence, with the global allow-list used as fallback.
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `open_url.default_policy` | string | `"Confirm"` | Policy for URLs not on the allow-list. `"Allow"`: open immediately. `"Confirm"`: show toast, user clicks to open. `"Deny"`: silently block. |
+| `open_url.allow_list` | list of strings | `["https://login.microsoftonline.com/", "https://login.live.com/"]` | URL prefixes that are auto-approved (opened without confirmation). Uses prefix matching. |
+| `open_url.confirm_timeout_secs` | number | `15` | How long the confirmation toast stays visible (seconds). |
+
+**Per-domain configuration** (inside an `ssh_domains` entry):
+
+```lua
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    open_url = {
+      default_policy = "Confirm",
+      allow_list = {
+        "https://login.microsoftonline.com/",
+        "https://mycompany.okta.com/",
+      },
+      confirm_timeout_secs = 15,
+    },
+  },
+}
+```
+
+**Global configuration** (applies to all domains without a per-domain override):
+
+```lua
+config.open_url = {
+  default_policy = "Confirm",
+  allow_list = {
+    "https://login.microsoftonline.com/",
+    "https://login.live.com/",
+  },
+  confirm_timeout_secs = 15,
+}
+```
+
+---
+
+## SSH Auto-Reconnect
+
+### How It Works
+
+When an SSH connection drops (e.g., laptop suspend/resume, network interruption),
+WeezTerm automatically reconnects instead of closing your terminal windows. The
+reconnection uses exponential backoff to avoid overwhelming the server.
+
+On successful reconnect:
+- Terminal sessions resume (when using multiplexing mode)
+- Port forwarding restarts automatically
+- No manual intervention is needed
+
+### Configuration
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `auto_reconnect` | boolean | `true` | Whether to automatically reconnect when the SSH connection is lost. When `true`, the client retries with exponential backoff. When `false`, the connection is closed and terminal windows are destroyed. |
+
+Example configuration (inside an `ssh_domains` entry):
+
+```lua
+config.ssh_domains = {
+  {
+    name = "my-server",
+    remote_address = "my.server.com",
+    auto_reconnect = true,  -- default: true
+  },
+}
+```
+
+---
+
+## Config Overlay
+
+### How It Works
+
+Press **Ctrl+Shift+,** (comma) to open a built-in TUI overlay for browsing and
+editing WeezTerm configuration. The overlay is built with Ratatui and provides a
+visual interface for ~80 settings — no need to edit Lua config files.
+
+### Sections
+
+The overlay is organized into the following sections:
+
+| Section | Description |
+|---------|-------------|
+| General | Window appearance, scrollback, bell, updates |
+| Font & Text | Font family, size, line height, cell width, freetype settings |
+| Tabs & Panes | Tab bar position, style, pane split defaults |
+| Cursor & Animation | Cursor shape, blink rate, animation FPS |
+| Terminal | TERM value, scroll-to-bottom behavior, unicode version |
+| Input | Key handling, IME, dead keys, leader key |
+| SSH & Domains | SSH domain management (add/edit/remove), DevContainer domains |
+| Rendering | GPU frontend, WebGpu, color scheme selection |
+| Monitors | Per-monitor overrides with layout diagram |
+
+### Features
+
+- **Enum picker popup** — Enum-valued settings show a popup with all variants
+  and descriptions.
+- **Color scheme picker** — Browse color schemes with live preview applied to
+  the terminal.
+- **SSH domain management** — Add new SSH domains, edit existing ones, or
+  remove domains directly from the overlay.
+- **DevContainer domain management** — Same add/edit/remove workflow for
+  DevContainer domains.
+- **Monitor overrides** — Expandable per-monitor groups with an ASCII layout
+  diagram showing monitor arrangement. Override color scheme per monitor.
+- **Field status badges** — Each field shows its source: `lua` (from Lua
+  config), `editable` (from overlay), or `modified` (changed this session).
+- **Mouse support** — Click to select items, scroll through lists.
+- **Theme-aware styling** — The overlay adapts to the current terminal
+  color scheme.
+
+### Persistence
+
+Changes made through the config overlay are saved to `config-overlay.json` in
+the WeezTerm configuration directory (typically `~/.config/wezterm/` on Linux/macOS
+or `%APPDATA%\wezterm\` on Windows). These settings are applied as window-level
+overrides and do not modify your Lua configuration files.
+
+The file stores:
+- `proposals` — Individual setting overrides
+- `ssh_domains` — SSH domain configurations added/edited via the overlay
+- `devcontainer_domains` — DevContainer domain configurations
+- `monitor_overrides` — Per-monitor color scheme overrides
+
+---
+
+## Window State Persistence
+
+### How It Works
+
+WeezTerm automatically saves window state (position, size, maximized/fullscreen
+mode, and monitor) when a window is closed or the application exits. On the next
+launch, windows are restored to their previous positions.
+
+### Saved Properties
+
+| Property | Description |
+|----------|-------------|
+| `x`, `y` | Window position in screen coordinates |
+| `width`, `height` | Window dimensions in pixels |
+| `maximized` | Whether the window was maximized |
+| `fullscreen` | Whether the window was in fullscreen mode |
+| `monitor` | The name of the monitor the window was on |
+
+### Multi-Monitor Support
+
+Windows are restored to the same monitor they were on when saved. If a monitor
+is no longer connected, the window falls back to the primary monitor. State is
+tracked per workspace, so different workspaces can restore to different positions.
+
+### Persistence
+
+Window state is stored in `window-state.json` in the WeezTerm configuration
+directory. States with zero dimensions or extreme coordinates are ignored to
+prevent restoring to invalid positions.
+
+---
+
+## DevContainer Domain Support
+
+### How It Works
+
+WeezTerm supports Docker devcontainers as a first-class domain type. You can
+spawn terminal tabs inside running devcontainers using `docker exec` — no
+weezterm installation inside the container is needed.
+
+The flow:
+
+```
+WeezTerm ──▸ docker ps (discover devcontainers)
+                │
+                ▼
+         Filter by devcontainer.local_folder label
+                │
+                ▼
+         Select primary container (by config or auto-match)
+                │
+                ▼
+         docker exec -it <container> <shell>
+                │
+                ▼
+         Terminal tab connected to container
+```
+
+### Container Discovery
+
+WeezTerm discovers devcontainers by running `docker ps` with JSON format and
+filtering for containers that have `devcontainer.*` labels (set by the
+VS Code Dev Containers extension and the `devcontainer` CLI). The following
+labels are used:
+
+| Label | Description |
+|-------|-------------|
+| `devcontainer.local_folder` | The local workspace folder the container was created from |
+| `devcontainer.config_file` | Path to the `devcontainer.json` that defined the container |
+
+Discovery runs on initial attach and then periodically (configurable via
+`poll_interval_secs`).
+
+### Primary Container Selection
+
+When multiple devcontainers are running, WeezTerm selects a primary container
+using this priority:
+
+1. **`default_container`** — If set, matches by container name or ID
+2. **`default_workspace_folder`** — Matches the `devcontainer.local_folder`
+   label against this path
+3. **Auto-select** — If exactly one running container matches, it is selected
+   automatically
+
+### SSH Mode
+
+DevContainer domains support two modes:
+
+| Mode | `ssh` field | Description |
+|------|-------------|-------------|
+| Local Docker | `nil` (not set) | Connects to Docker running on the local machine |
+| Remote Docker via SSH | `SshDomain` config | Connects to Docker running on a remote host via SSH. Supports both direct SSH and multiplexing modes. All `SshDomain` options are available. |
+
+### DevContainer Manager Overlay
+
+Press **Ctrl+Shift+D** to open the DevContainer Manager overlay. It provides:
+
+- **List** all discovered devcontainers with status (Running, Exited, Paused)
+- **Connect** to a container (opens a new tab with a shell inside the container)
+- **Set as primary** — make a container the default for new tabs
+- **Start / Stop** containers
+- **Delete** containers
+- **Create** new devcontainers from a workspace folder
+
+### Launcher Integration
+
+DevContainer domains automatically appear in the tab bar chevron menu and the
+launcher, so you can connect to containers from the same UI used for SSH domains
+and local shells.
+
+### Configuration
+
+DevContainer domain options live under the `devcontainer_domains` top-level
+config key:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `name` | string | (required) | Unique domain name. |
+| `ssh` | `SshDomain` | `nil` | SSH connection config for remote Docker. If absent, uses local Docker. All `SshDomain` options are available. |
+| `default_workspace_folder` | string | `nil` | Local workspace folder. Auto-discovers the devcontainer whose `devcontainer.local_folder` label matches this path. |
+| `default_container` | string | `nil` | Container name or ID to auto-connect to. Takes priority over workspace-folder matching. |
+| `docker_command` | string | `"docker"` | Path to the Docker executable. |
+| `devcontainer_command` | string | `"devcontainer"` | Path to the `devcontainer` CLI executable. |
+| `default_shell` | string | `nil` | Shell to run inside the container (e.g., `"/bin/bash"`). If not set, uses the container's default. |
+| `override_user` | string | `nil` | Override the container's default user for `docker exec`. |
+| `poll_interval_secs` | number | `10` | How often (in seconds) to poll for container status changes. |
+| `auto_discover` | boolean | `true` | Whether to auto-discover running devcontainers on attach. |
+
+**Local Docker example:**
+
+```lua
+config.devcontainer_domains = {
+  {
+    name = "my-project",
+    default_workspace_folder = "/home/user/my-project",
+    docker_command = "docker",
+    auto_discover = true,
+    poll_interval_secs = 10,
+  },
+}
+```
+
+**Remote Docker via SSH example:**
+
+```lua
+config.devcontainer_domains = {
+  {
+    name = "remote-devcontainer",
+    ssh = {
+      name = "dev-host",
+      remote_address = "dev.example.com",
+      username = "developer",
+      multiplexing = "WezTerm",
+    },
+    default_workspace_folder = "/home/developer/project",
+    auto_discover = true,
+  },
+}
+```
+
+---
+
 ## Full Configuration Reference
 
 Below is a consolidated reference of all remote extension configuration
-options and their defaults (inside an `ssh_domains` entry):
+options and their defaults.
+
+### SSH Domain Options (`ssh_domains`)
 
 ```lua
 config.ssh_domains = {
@@ -319,12 +684,26 @@ config.ssh_domains = {
     port_forwarding = {
       enabled = true,
       auto_forward = true,
-      detect_with_proc_net_tcp = true,
+      detect_with_proc_net_tcp = "OnlyNew",  -- "None", "All", or "OnlyNew"
       detect_with_terminal_scrape = true,
       poll_interval_secs = 2,
       exclude_ports = { 22 },
       include_ports = {},
+      port_conflict_handling = "Skip",  -- "Skip" or "RandomPort"
     },
+
+    -- Open-URL Security
+    open_url = {
+      default_policy = "Confirm",  -- "Allow", "Confirm", or "Deny"
+      allow_list = {
+        "https://login.microsoftonline.com/",
+        "https://login.live.com/",
+      },
+      confirm_timeout_secs = 15,
+    },
+
+    -- SSH Auto-Reconnect
+    auto_reconnect = true,
 
     -- Auto-Install for Multiplexing
     auto_install_mux = true,
@@ -334,6 +713,55 @@ config.ssh_domains = {
   },
 }
 ```
+
+### Global Open-URL Security (`open_url`)
+
+```lua
+-- Applies to all SSH domains without a per-domain open_url override
+config.open_url = {
+  default_policy = "Confirm",
+  allow_list = {
+    "https://login.microsoftonline.com/",
+    "https://login.live.com/",
+  },
+  confirm_timeout_secs = 15,
+}
+```
+
+### DevContainer Domain Options (`devcontainer_domains`)
+
+```lua
+config.devcontainer_domains = {
+  {
+    name = "my-devcontainer",
+
+    -- SSH connection (nil for local Docker)
+    ssh = nil,  -- or a full SshDomain table for remote Docker
+
+    -- Container selection
+    default_workspace_folder = nil,  -- match by devcontainer.local_folder label
+    default_container = nil,         -- match by container name or ID
+
+    -- Docker settings
+    docker_command = "docker",
+    devcontainer_command = "devcontainer",
+    default_shell = nil,      -- e.g., "/bin/bash"
+    override_user = nil,      -- override container's default user
+
+    -- Discovery
+    auto_discover = true,
+    poll_interval_secs = 10,
+  },
+}
+```
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Ctrl+Shift+G` | Open Port Manager overlay |
+| `Ctrl+Shift+,` | Open Config Overlay |
+| `Ctrl+Shift+D` | Open DevContainer Manager overlay |
 
 ---
 
@@ -371,9 +799,15 @@ other systems, this file does not exist.
 ### Port conflicts
 
 If a port is already in use on your local machine, the auto-forward for that
-port will fail. WeezTerm will log a warning and skip the forward.
+port will fail. The behavior depends on the `port_conflict_handling` setting:
 
-**Solutions:**
+- **`Skip`** (default) — The forward is skipped and the port is shown as
+  inactive. WeezTerm re-checks periodically and auto-forwards when the local
+  port is freed.
+- **`RandomPort`** — The forward is created on a random available local port
+  instead. The Port Manager Overlay shows the actual local port.
+
+**Other solutions:**
 
 - Free the conflicting local port.
 - Use the Port Manager Overlay to manually set up a forward with a different
