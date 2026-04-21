@@ -6,11 +6,76 @@ use crate::termwindow::render::corners::*;
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
 use crate::utilsprites::RenderMetrics;
-use config::{Dimension, DimensionContext, TabBarColors};
+use config::{Dimension, DimensionContext, RgbaColor, TabBarColor, TabBarColors};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
-use wezterm_term::color::{ColorAttribute, ColorPalette};
+use wezterm_term::color::{ColorAttribute, ColorPalette, SrgbaTuple};
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
+
+// --- weezterm remote features ---
+/// Derive sensible tab bar colors from a terminal color palette.
+/// This is used when no explicit `tab_bar` colors are configured, so
+/// the tab bar follows the active color scheme automatically.
+fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
+    let bg = palette.background;
+    let fg = palette.foreground;
+
+    // Helper to convert SrgbaTuple to RgbaColor
+    let to_rgba = |c: SrgbaTuple| -> RgbaColor {
+        let (r, g, b, _a) = c.as_rgba_u8();
+        RgbaColor::from((r, g, b))
+    };
+
+    // Helper to lighten or darken a color for visual hierarchy
+    let adjust = |c: SrgbaTuple, amount: i16| -> RgbaColor {
+        let (r, g, b, _a) = c.as_rgba_u8();
+        let r = (r as i16 + amount).clamp(0, 255) as u8;
+        let g = (g as i16 + amount).clamp(0, 255) as u8;
+        let b = (b as i16 + amount).clamp(0, 255) as u8;
+        RgbaColor::from((r, g, b))
+    };
+
+    // Detect if this is a "light" scheme (bright background)
+    let (br, bg_g, bb, _) = bg.as_rgba_u8();
+    let luminance = (br as u16 + bg_g as u16 + bb as u16) / 3;
+    let is_light = luminance > 128;
+
+    // For light themes, darken for contrast; for dark themes, lighten
+    let step = if is_light { -20i16 } else { 20i16 };
+
+    TabBarColors {
+        background: Some(adjust(bg, step)),
+        active_tab: Some(TabBarColor {
+            bg_color: to_rgba(bg),
+            fg_color: to_rgba(fg),
+            ..TabBarColor::default()
+        }),
+        inactive_tab: Some(TabBarColor {
+            bg_color: adjust(bg, step),
+            fg_color: adjust(fg, if is_light { 60 } else { -60 }),
+            ..TabBarColor::default()
+        }),
+        inactive_tab_hover: Some(TabBarColor {
+            bg_color: adjust(bg, step * 2),
+            fg_color: to_rgba(fg),
+            italic: true,
+            ..TabBarColor::default()
+        }),
+        new_tab: Some(TabBarColor {
+            bg_color: adjust(bg, step),
+            fg_color: adjust(fg, if is_light { 60 } else { -60 }),
+            ..TabBarColor::default()
+        }),
+        new_tab_hover: Some(TabBarColor {
+            bg_color: adjust(bg, step * 2),
+            fg_color: to_rgba(fg),
+            ..TabBarColor::default()
+        }),
+        inactive_tab_edge: Some(adjust(bg, step * 3)),
+        inactive_tab_edge_hover: Some(adjust(bg, step * 2)),
+    }
+}
+// --- end weezterm remote features ---
 
 const X_BUTTON: &[Poly] = &[
     Poly {
@@ -73,34 +138,62 @@ impl crate::TermWindow {
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
         let items = self.tab_bar.items();
+        // --- weezterm remote features ---
+        // Derive tab bar colors from the resolved palette (which includes
+        // the active color scheme), falling back to the explicit `colors.tab_bar`
+        // config, then to scheme-derived defaults.  This ensures the tab bar
+        // updates when the user changes `color_scheme`.
         let colors = self
             .config
-            .colors
-            .as_ref()
-            .and_then(|c| c.tab_bar.as_ref())
-            .cloned()
-            .unwrap_or_else(TabBarColors::default);
+            .resolved_palette
+            .tab_bar
+            .clone()
+            .or_else(|| {
+                self.config
+                    .colors
+                    .as_ref()
+                    .and_then(|c| c.tab_bar.clone())
+            })
+            .unwrap_or_else(|| derive_tab_bar_colors_from_palette(palette));
+        // --- end weezterm remote features ---
 
         let mut left_status = vec![];
         let mut left_eles = vec![];
         let mut right_eles = vec![];
-        let bar_colors = ElementColors {
-            border: BorderColor::default(),
-            bg: if self.focused.is_some() {
+        // --- weezterm remote features ---
+        // Derive titlebar background/foreground from palette when window_frame
+        // uses its hardcoded defaults, so the tab bar matches the color scheme.
+        let frame_bg = self.config.resolved_palette.background
+            .map(|c| {
+                let (r, g, b, _a) = c.to_srgb_u8();
+                // Slightly darken bg for bar distinction
+                config::RgbaColor::from((
+                    r.saturating_sub(10),
+                    g.saturating_sub(10),
+                    b.saturating_sub(10),
+                ))
+            })
+            .unwrap_or(if self.focused.is_some() {
                 self.config.window_frame.active_titlebar_bg
             } else {
                 self.config.window_frame.inactive_titlebar_bg
-            }
-            .to_linear()
-            .into(),
-            text: if self.focused.is_some() {
+            });
+        let frame_fg = self.config.resolved_palette.foreground
+            .map(|c| {
+                let (r, g, b, _a) = c.to_srgb_u8();
+                config::RgbaColor::from((r, g, b))
+            })
+            .unwrap_or(if self.focused.is_some() {
                 self.config.window_frame.active_titlebar_fg
             } else {
                 self.config.window_frame.inactive_titlebar_fg
-            }
-            .to_linear()
-            .into(),
+            });
+        let bar_colors = ElementColors {
+            border: BorderColor::default(),
+            bg: frame_bg.to_linear().into(),
+            text: frame_fg.to_linear().into(),
         };
+        // --- end weezterm remote features ---
 
         let item_to_elem = |item: &TabEntry| -> Element {
             let element = Element::with_line(&font, &item.title, palette);
