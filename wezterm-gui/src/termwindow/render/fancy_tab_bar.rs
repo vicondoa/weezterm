@@ -1,7 +1,6 @@
 use crate::customglyph::*;
 use crate::tabbar::{TabBarItem, TabEntry};
 use crate::termwindow::box_model::*;
-use crate::termwindow::render::corners::*;
 
 use crate::termwindow::render::window_buttons::window_button_element;
 use crate::termwindow::{UIItem, UIItemType};
@@ -314,8 +313,8 @@ impl crate::TermWindow {
                     .vertical_align(VerticalAlign::Bottom)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
-                        left: Dimension::Cells(0.),
-                        right: Dimension::Cells(0.),
+                        left: Dimension::Cells(0.2),
+                        right: Dimension::Cells(0.2),
                         top: Dimension::Cells(0.2),
                         bottom: Dimension::Cells(0.),
                     })
@@ -325,46 +324,29 @@ impl crate::TermWindow {
                         top: Dimension::Cells(0.2),
                         bottom: Dimension::Cells(0.25),
                     })
-                    .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly::none(),
-                        bottom_right: SizedPoly::none(),
-                    }))
+                    // --- weezterm remote features ---
+                    // Clean rectangular border (no rounded corners — they
+                    // cause rendering notches on high-contrast/eink displays)
+                    .border(BoxDimension {
+                        left: Dimension::Pixels(1.),
+                        right: Dimension::Pixels(1.),
+                        top: Dimension::Pixels(2.),
+                        bottom: Dimension::Pixels(0.),
+                    })
                     .colors(ElementColors {
-                        // --- weezterm remote features ---
-                        // Use text color for active tab border so the tab
-                        // outline is visible on light/high-contrast schemes
                         border: BorderColor::new(
-                            fg_color
-                                .unwrap_or_else(|| active_tab.fg_color.into())
-                                .to_linear(),
+                            active_tab.fg_color.to_linear(),
                         ),
-                        // --- end weezterm remote features ---
-                        bg: bg_color
-                            .unwrap_or_else(|| active_tab.bg_color.into())
-                            .to_linear()
-                            .into(),
-                        text: fg_color
-                            .unwrap_or_else(|| active_tab.fg_color.into())
-                            .to_linear()
-                            .into(),
+                        bg: active_tab.bg_color.to_linear().into(),
+                        text: active_tab.fg_color.to_linear().into(),
                     }),
+                    // --- end weezterm remote features ---
                 TabBarItem::Tab { .. } => element
                     .vertical_align(VerticalAlign::Bottom)
                     .item_type(UIItemType::TabBar(item.item.clone()))
                     .margin(BoxDimension {
-                        left: Dimension::Cells(0.),
-                        right: Dimension::Cells(0.),
+                        left: Dimension::Cells(0.2),
+                        right: Dimension::Cells(0.2),
                         top: Dimension::Cells(0.2),
                         bottom: Dimension::Cells(0.),
                     })
@@ -374,68 +356,35 @@ impl crate::TermWindow {
                         top: Dimension::Cells(0.2),
                         bottom: Dimension::Cells(0.25),
                     })
-                    .border(BoxDimension::new(Dimension::Pixels(1.)))
-                    .border_corners(Some(Corners {
-                        top_left: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_LEFT_ROUNDED_CORNER,
-                        },
-                        top_right: SizedPoly {
-                            width: Dimension::Cells(0.5),
-                            height: Dimension::Cells(0.5),
-                            poly: TOP_RIGHT_ROUNDED_CORNER,
-                        },
-                        bottom_left: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                        bottom_right: SizedPoly {
-                            width: Dimension::Cells(0.),
-                            height: Dimension::Cells(0.33),
-                            poly: &[],
-                        },
-                    }))
+                    // --- weezterm remote features ---
+                    // Clean rectangular border — no rounded corners
+                    .border(BoxDimension {
+                        left: Dimension::Pixels(1.),
+                        right: Dimension::Pixels(1.),
+                        top: Dimension::Pixels(1.),
+                        bottom: Dimension::Pixels(0.),
+                    })
                     .colors({
                         let inactive_tab = colors.inactive_tab();
-                        let bg = bg_color
-                            .unwrap_or_else(|| inactive_tab.bg_color.into())
-                            .to_linear();
-                        // --- weezterm remote features ---
-                        // Use text color for inactive tab border so tabs are
-                        // outlined and visible on light/high-contrast schemes
-                        let text = fg_color
-                            .unwrap_or_else(|| inactive_tab.fg_color.into())
-                            .to_linear();
                         ElementColors {
-                            border: BorderColor {
-                                left: text,
-                                right: text,
-                                top: text,
-                                bottom: bg,
-                            },
-                            bg: bg.into(),
-                            text: text.into(),
+                            border: BorderColor::new(
+                                inactive_tab.fg_color.to_linear(),
+                            ),
+                            bg: inactive_tab.bg_color.to_linear().into(),
+                            text: inactive_tab.fg_color.to_linear().into(),
                         }
-                        // --- end weezterm remote features ---
                     })
                     .hover_colors({
                         let inactive_tab_hover = colors.inactive_tab_hover();
-                        // --- weezterm remote features ---
-                        let hover_text = fg_color
-                            .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
-                            .to_linear();
                         Some(ElementColors {
-                            border: BorderColor::new(hover_text),
-                            bg: bg_color
-                                .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                .to_linear()
-                                .into(),
-                            text: hover_text.into(),
+                            border: BorderColor::new(
+                                inactive_tab_hover.fg_color.to_linear(),
+                            ),
+                            bg: inactive_tab_hover.bg_color.to_linear().into(),
+                            text: inactive_tab_hover.fg_color.to_linear().into(),
                         })
-                        // --- end weezterm remote features ---
                     }),
+                    // --- end weezterm remote features ---
                 TabBarItem::WindowButton(button) => window_button_element(
                     button,
                     self.window_state.contains(window::WindowState::MAXIMIZED),
