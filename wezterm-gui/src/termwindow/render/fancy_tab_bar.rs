@@ -41,7 +41,7 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
     let is_light = luminance > 128;
 
     // For light themes, darken for contrast; for dark themes, lighten
-    let step = if is_light { -20i16 } else { 20i16 };
+    let step = if is_light { -25i16 } else { 25i16 };
 
     TabBarColors {
         background: Some(adjust(bg, step)),
@@ -52,18 +52,17 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
         }),
         inactive_tab: Some(TabBarColor {
             bg_color: adjust(bg, step),
-            fg_color: adjust(fg, if is_light { 60 } else { -60 }),
+            fg_color: adjust(fg, if is_light { 80 } else { -80 }),
             ..TabBarColor::default()
         }),
         inactive_tab_hover: Some(TabBarColor {
             bg_color: adjust(bg, step * 2),
             fg_color: to_rgba(fg),
-            italic: true,
             ..TabBarColor::default()
         }),
         new_tab: Some(TabBarColor {
             bg_color: adjust(bg, step),
-            fg_color: adjust(fg, if is_light { 60 } else { -60 }),
+            fg_color: adjust(fg, if is_light { 80 } else { -80 }),
             ..TabBarColor::default()
         }),
         new_tab_hover: Some(TabBarColor {
@@ -71,8 +70,8 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
             fg_color: to_rgba(fg),
             ..TabBarColor::default()
         }),
-        inactive_tab_edge: Some(adjust(bg, step * 3)),
-        inactive_tab_edge_hover: Some(adjust(bg, step * 2)),
+        inactive_tab_edge: Some(to_rgba(fg)),
+        inactive_tab_edge_hover: Some(to_rgba(fg)),
     }
 }
 // --- end weezterm remote features ---
@@ -342,11 +341,15 @@ impl crate::TermWindow {
                         bottom_right: SizedPoly::none(),
                     }))
                     .colors(ElementColors {
+                        // --- weezterm remote features ---
+                        // Use text color for active tab border so the tab
+                        // outline is visible on light/high-contrast schemes
                         border: BorderColor::new(
-                            bg_color
-                                .unwrap_or_else(|| active_tab.bg_color.into())
+                            fg_color
+                                .unwrap_or_else(|| active_tab.fg_color.into())
                                 .to_linear(),
                         ),
+                        // --- end weezterm remote features ---
                         bg: bg_color
                             .unwrap_or_else(|| active_tab.bg_color.into())
                             .to_linear()
@@ -399,38 +402,39 @@ impl crate::TermWindow {
                         let bg = bg_color
                             .unwrap_or_else(|| inactive_tab.bg_color.into())
                             .to_linear();
-                        let edge = colors.inactive_tab_edge().to_linear();
+                        // --- weezterm remote features ---
+                        // Use text color for inactive tab border so tabs are
+                        // outlined and visible on light/high-contrast schemes
+                        let text = fg_color
+                            .unwrap_or_else(|| inactive_tab.fg_color.into())
+                            .to_linear();
                         ElementColors {
                             border: BorderColor {
-                                left: bg,
-                                right: edge,
-                                top: bg,
+                                left: text,
+                                right: text,
+                                top: text,
                                 bottom: bg,
                             },
                             bg: bg.into(),
-                            text: fg_color
-                                .unwrap_or_else(|| inactive_tab.fg_color.into())
-                                .to_linear()
-                                .into(),
+                            text: text.into(),
                         }
+                        // --- end weezterm remote features ---
                     })
                     .hover_colors({
                         let inactive_tab_hover = colors.inactive_tab_hover();
+                        // --- weezterm remote features ---
+                        let hover_text = fg_color
+                            .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
+                            .to_linear();
                         Some(ElementColors {
-                            border: BorderColor::new(
-                                bg_color
-                                    .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
-                                    .to_linear(),
-                            ),
+                            border: BorderColor::new(hover_text),
                             bg: bg_color
                                 .unwrap_or_else(|| inactive_tab_hover.bg_color.into())
                                 .to_linear()
                                 .into(),
-                            text: fg_color
-                                .unwrap_or_else(|| inactive_tab_hover.fg_color.into())
-                                .to_linear()
-                                .into(),
+                            text: hover_text.into(),
                         })
+                        // --- end weezterm remote features ---
                     }),
                 TabBarItem::WindowButton(button) => window_button_element(
                     button,
