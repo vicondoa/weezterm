@@ -10,6 +10,7 @@ impl crate::TermWindow {
     pub fn paint_tab_bar(&mut self, layers: &mut TripleLayerQuadAllocator) -> anyhow::Result<()> {
         if self.config.use_fancy_tab_bar {
             if self.fancy_tab_bar.is_none() {
+                log::debug!("paint_tab_bar: rebuilding fancy tab bar (cache miss)");
                 let palette = self.palette().clone();
                 let tab_bar = self.build_fancy_tab_bar(&palette)?;
                 self.fancy_tab_bar.replace(tab_bar);

@@ -132,6 +132,7 @@ impl crate::TermWindow {
     }
 
     pub fn build_fancy_tab_bar(&self, palette: &ColorPalette) -> anyhow::Result<ComputedElement> {
+        let _t = std::time::Instant::now();
         let tab_bar_height = self.tab_bar_pixel_height()?;
         let font = self.fonts.title_font()?;
         let metrics = RenderMetrics::with_font_metrics(&font.metrics());
@@ -554,6 +555,7 @@ impl crate::TermWindow {
             },
         ));
 
+        log::debug!("build_fancy_tab_bar completed in {:?}", _t.elapsed());
         Ok(computed)
     }
 

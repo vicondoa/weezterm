@@ -1875,8 +1875,9 @@ impl TermWindow {
     }
 
     pub fn config_was_reloaded(&mut self) {
+        let _t = std::time::Instant::now();
         log::debug!(
-            "config was reloaded, overrides: {:?}",
+            "config_was_reloaded: overrides: {:?}",
             self.config_overrides
         );
         self.key_table_state.clear_stack();
@@ -1947,9 +1948,11 @@ impl TermWindow {
         self.render_state.as_mut().map(|rs| rs.config_changed());
         let dimensions = self.dimensions;
 
+        log::debug!("config_was_reloaded: loading fonts...");
         if let Err(err) = self.fonts.config_changed(&config) {
             log::error!("Failed to load font configuration: {:#}", err);
         }
+        log::debug!("config_was_reloaded: fonts loaded");
 
         if let Some(window) = mux.get_window(self.mux_window_id) {
             let term_config: Arc<dyn TerminalConfiguration> =
@@ -1972,11 +1975,13 @@ impl TermWindow {
         }
 
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+            log::debug!("config_was_reloaded: applying scale+dimensions...");
             self.load_os_parameters();
             self.apply_scale_change(&dimensions, self.fonts.get_font_scale());
             self.apply_dimensions(&dimensions, None, &window);
             window.config_did_change(&config);
             window.invalidate();
+            log::debug!("config_was_reloaded: scale+dimensions applied");
         }
 
         // Do this after we've potentially adjusted scaling based on config/padding
@@ -1990,6 +1995,7 @@ impl TermWindow {
 
         self.invalidate_modal();
         self.emit_window_event("window-config-reloaded", None);
+        log::debug!("config_was_reloaded completed in {:?}", _t.elapsed());
     }
 
     // --- weezterm remote features ---
@@ -2079,7 +2085,32 @@ impl TermWindow {
         let new_overrides = wezterm_dynamic::Value::Object(overrides_obj);
         if new_overrides != self.config_overrides {
             self.config_overrides = new_overrides;
-            self.config_was_reloaded();
+            // Lightweight color-only reload: update config + palette + tab bar
+            // but do NOT call config_was_reloaded() which does
+            // apply_scale_change/apply_dimensions — those can shift window
+            // geometry, triggering another ScreenChanged and causing an
+            // infinite bounce loop when the window is on a monitor boundary.
+            let _t = std::time::Instant::now();
+            match config::overridden_config(&self.config_overrides) {
+                Ok(config) => {
+                    self.config = config;
+                    self.palette.take();
+                    self.fancy_tab_bar.take();
+                    self.invalidate_fancy_tab_bar();
+                    self.shape_generation += 1;
+                    self.invalidate_modal();
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
+                    log::debug!(
+                        "monitor override color-only reload completed in {:?}",
+                        _t.elapsed()
+                    );
+                }
+                Err(err) => {
+                    log::error!("Failed to apply monitor override: {:#}", err);
+                }
+            }
         }
     }
     // --- end weezterm remote features ---
