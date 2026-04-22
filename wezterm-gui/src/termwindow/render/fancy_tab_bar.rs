@@ -267,16 +267,19 @@ impl crate::TermWindow {
                     bottom: Dimension::Cells(0.25),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
+                // --- weezterm remote features ---
+                // Match + button colors to active tab for visual cohesion
                 .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab.bg_color.to_linear().into(),
-                    text: new_tab.fg_color.to_linear().into(),
+                    border: BorderColor::new(active_tab.bg_color.to_linear()),
+                    bg: active_tab.bg_color.to_linear().into(),
+                    text: active_tab.fg_color.to_linear().into(),
                 })
                 .hover_colors(Some(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab_hover.bg_color.to_linear().into(),
-                    text: new_tab_hover.fg_color.to_linear().into(),
+                    border: BorderColor::new(active_tab.fg_color.to_linear()),
+                    bg: active_tab.fg_color.to_linear().into(),
+                    text: active_tab.bg_color.to_linear().into(),
                 })),
+                // --- end weezterm remote features ---
                 // --- weezterm remote features ---
                 TabBarItem::NewTabDropdown => Element::new(
                     &font,
@@ -304,15 +307,17 @@ impl crate::TermWindow {
                     bottom: Dimension::Cells(0.25),
                 })
                 .border(BoxDimension::new(Dimension::Pixels(1.)))
+                // --- weezterm remote features ---
+                // Match chevron colors to active tab
                 .colors(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab.bg_color.to_linear().into(),
-                    text: new_tab.fg_color.to_linear().into(),
+                    border: BorderColor::new(active_tab.bg_color.to_linear()),
+                    bg: active_tab.bg_color.to_linear().into(),
+                    text: active_tab.fg_color.to_linear().into(),
                 })
                 .hover_colors(Some(ElementColors {
-                    border: BorderColor::default(),
-                    bg: new_tab_hover.bg_color.to_linear().into(),
-                    text: new_tab_hover.fg_color.to_linear().into(),
+                    border: BorderColor::new(active_tab.fg_color.to_linear()),
+                    bg: active_tab.fg_color.to_linear().into(),
+                    text: active_tab.bg_color.to_linear().into(),
                 })),
                 // --- end weezterm remote features ---
                 TabBarItem::Tab { active, .. } if active => element
@@ -515,13 +520,37 @@ impl crate::TermWindow {
 
         let content = ElementContent::Children(children);
 
+        // --- weezterm remote features ---
+        // Bottom border spans full width in the active tab color,
+        // visually connecting the tab bar to the terminal content.
+        let active_tab_colors = colors.active_tab();
+        let bar_bottom_border = active_tab_colors.bg_color.to_linear();
+        // --- end weezterm remote features ---
+
         let tabs = Element::new(&font, content)
             .display(DisplayType::Block)
             .item_type(UIItemType::TabBar(TabBarItem::None))
             .min_width(Some(Dimension::Pixels(self.dimensions.pixel_width as f32)))
             .min_height(Some(Dimension::Pixels(tab_bar_height)))
             .vertical_align(VerticalAlign::Bottom)
-            .colors(bar_colors);
+            // --- weezterm remote features ---
+            .border(BoxDimension {
+                left: Dimension::Pixels(0.),
+                right: Dimension::Pixels(0.),
+                top: Dimension::Pixels(0.),
+                bottom: Dimension::Pixels(2.),
+            })
+            .colors(ElementColors {
+                border: BorderColor {
+                    left: frame_bg.to_linear(),
+                    right: frame_bg.to_linear(),
+                    top: frame_bg.to_linear(),
+                    bottom: bar_bottom_border,
+                },
+                bg: frame_bg.to_linear().into(),
+                text: frame_fg.to_linear().into(),
+            });
+            // --- end weezterm remote features ---
 
         let border = self.get_os_border();
 
