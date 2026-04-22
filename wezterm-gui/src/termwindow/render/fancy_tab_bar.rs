@@ -266,18 +266,15 @@ impl crate::TermWindow {
                     top: Dimension::Cells(0.2),
                     bottom: Dimension::Cells(0.25),
                 })
-                .border(BoxDimension::new(Dimension::Pixels(1.)))
                 // --- weezterm remote features ---
-                // Match + button colors to active tab for visual cohesion
-                .colors(ElementColors {
-                    border: BorderColor::new(active_tab.bg_color.to_linear()),
-                    bg: active_tab.bg_color.to_linear().into(),
-                    text: active_tab.fg_color.to_linear().into(),
-                })
+                // Borderless, blends with bar. Shape is fg, bg matches bar.
+                // Hover slightly shifts bg for subtle feedback.
+                .border(BoxDimension::new(Dimension::Pixels(0.)))
+                .colors(bar_colors.clone())
                 .hover_colors(Some(ElementColors {
-                    border: BorderColor::new(active_tab.fg_color.to_linear()),
-                    bg: active_tab.fg_color.to_linear().into(),
-                    text: active_tab.bg_color.to_linear().into(),
+                    border: BorderColor::default(),
+                    bg: colors.inactive_tab().bg_color.to_linear().into(),
+                    text: bar_colors.text.clone(),
                 })),
                 // --- end weezterm remote features ---
                 // --- weezterm remote features ---
@@ -306,18 +303,12 @@ impl crate::TermWindow {
                     top: Dimension::Cells(0.2),
                     bottom: Dimension::Cells(0.25),
                 })
-                .border(BoxDimension::new(Dimension::Pixels(1.)))
-                // --- weezterm remote features ---
-                // Match chevron colors to active tab
-                .colors(ElementColors {
-                    border: BorderColor::new(active_tab.bg_color.to_linear()),
-                    bg: active_tab.bg_color.to_linear().into(),
-                    text: active_tab.fg_color.to_linear().into(),
-                })
+                .border(BoxDimension::new(Dimension::Pixels(0.)))
+                .colors(bar_colors.clone())
                 .hover_colors(Some(ElementColors {
-                    border: BorderColor::new(active_tab.fg_color.to_linear()),
-                    bg: active_tab.fg_color.to_linear().into(),
-                    text: active_tab.bg_color.to_linear().into(),
+                    border: BorderColor::default(),
+                    bg: colors.inactive_tab().bg_color.to_linear().into(),
+                    text: bar_colors.text.clone(),
                 })),
                 // --- end weezterm remote features ---
                 TabBarItem::Tab { active, .. } if active => element
