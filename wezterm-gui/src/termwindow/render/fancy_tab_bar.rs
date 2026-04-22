@@ -42,14 +42,10 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
     // For light themes, darken for contrast; for dark themes, lighten
     let step = if is_light { -25i16 } else { 25i16 };
 
-    // Active tab should visually pop. For light schemes, use the fg
-    // color as bg (inverted) so it stands out from the light bar.
-    // For dark schemes, use the terminal bg so it blends with content.
-    let (active_bg, active_fg) = if is_light {
-        (to_rgba(fg), to_rgba(bg))
-    } else {
-        (to_rgba(bg), to_rgba(fg))
-    };
+    // Active tab should visually pop against the bar background.
+    // Always invert: use fg as bg and bg as fg so the active tab
+    // stands out regardless of whether the scheme is light or dark.
+    let (active_bg, active_fg) = (to_rgba(fg), to_rgba(bg));
 
     TabBarColors {
         background: Some(adjust(bg, step)),

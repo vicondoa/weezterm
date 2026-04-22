@@ -1868,8 +1868,12 @@ impl TermWindow {
 impl TermWindow {
     fn palette(&mut self) -> &ColorPalette {
         if self.palette.is_none() {
+            // --- weezterm remote features ---
+            // Build palette from self.config (which includes overrides like
+            // monitor_overrides color_scheme) rather than the global config.
             self.palette
-                .replace(config::TermConfig::new().color_palette());
+                .replace(config::TermConfig::with_config(self.config.clone()).color_palette());
+            // --- end weezterm remote features ---
         }
         self.palette.as_ref().unwrap()
     }
