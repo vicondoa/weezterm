@@ -42,11 +42,20 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
     // For light themes, darken for contrast; for dark themes, lighten
     let step = if is_light { -25i16 } else { 25i16 };
 
+    // Active tab should visually pop. For light schemes, use the fg
+    // color as bg (inverted) so it stands out from the light bar.
+    // For dark schemes, use the terminal bg so it blends with content.
+    let (active_bg, active_fg) = if is_light {
+        (to_rgba(fg), to_rgba(bg))
+    } else {
+        (to_rgba(bg), to_rgba(fg))
+    };
+
     TabBarColors {
         background: Some(adjust(bg, step)),
         active_tab: Some(TabBarColor {
-            bg_color: to_rgba(bg),
-            fg_color: to_rgba(fg),
+            bg_color: active_bg,
+            fg_color: active_fg,
             ..TabBarColor::default()
         }),
         inactive_tab: Some(TabBarColor {
@@ -336,7 +345,7 @@ impl crate::TermWindow {
                     })
                     .colors(ElementColors {
                         border: BorderColor::new(
-                            active_tab.fg_color.to_linear(),
+                            active_tab.bg_color.to_linear(),
                         ),
                         bg: active_tab.bg_color.to_linear().into(),
                         text: active_tab.fg_color.to_linear().into(),
