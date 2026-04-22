@@ -351,17 +351,21 @@ impl RenderableInner {
         }
         // --- weezterm remote features ---
         // Don't overwrite dimensions from a server push when a local resize
-        // was recently sent. The client-side resize (from ClientPane::resize)
-        // takes precedence until the server acknowledges it. Without this,
-        // the server push can overwrite the intended new dimensions, causing
-        // a subsequent ClientPane::resize() to think no change is needed.
+        // was recently sent AND the server hasn't caught up yet. Accept the
+        // server's dimensions once they match or exceed what we requested.
+        let server_matches_or_exceeds = delta.dimensions.cols == self.dimensions.cols
+            && delta.dimensions.viewport_rows == self.dimensions.viewport_rows;
         let recent_local_resize =
             now.duration_since(self.last_send_time) < std::time::Duration::from_millis(500);
-        if recent_local_resize {
+        if recent_local_resize && !server_matches_or_exceeds {
             log::debug!(
-                "apply_changes_to_surface: skipping server dimension update for pane {} \
-                 (local resize pending, last_send {}ms ago)",
+                "apply_changes_to_surface: skipping stale server dimensions for pane {} \
+                 (server={}x{} vs local={}x{}, last_send {}ms ago)",
                 self.local_pane_id,
+                delta.dimensions.cols,
+                delta.dimensions.viewport_rows,
+                self.dimensions.cols,
+                self.dimensions.viewport_rows,
                 now.duration_since(self.last_send_time).as_millis(),
             );
         } else {
