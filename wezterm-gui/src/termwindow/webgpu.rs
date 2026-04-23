@@ -560,10 +560,10 @@ impl WebGpuState {
     }
 
     // --- weezterm remote features ---
-    /// Immediately clear the surface to black and present, so the DWM
-    /// shows a clean background instead of the stretched old framebuffer
-    /// during live resize.
-    pub fn clear_and_present(&self) {
+    /// Immediately clear the surface and present. Used to paint the scheme
+    /// background color before the first real terminal paint, and to
+    /// eliminate white flash from newly-created WebGPU surfaces.
+    pub fn clear_and_present_with_color(&self, r: f64, g: f64, b: f64) {
         let dims = self.dimensions.borrow();
         if dims.pixel_width == 0 || dims.pixel_height == 0 {
             return;
@@ -589,12 +589,7 @@ impl WebGpuState {
                     view: &view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.0,
-                            g: 0.0,
-                            b: 0.0,
-                            a: 1.0,
-                        }),
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -605,6 +600,11 @@ impl WebGpuState {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
+    }
+
+    /// Convenience: clear to black.
+    pub fn clear_and_present(&self) {
+        self.clear_and_present_with_color(0.0, 0.0, 0.0);
     }
     // --- end weezterm remote features ---
 }

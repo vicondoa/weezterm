@@ -178,3 +178,55 @@ class TestMaximize:
         assert abs(normal.height - original.height) < 30, (
             f"Normal rect height wrong: {normal.height} vs {original.height}"
         )
+
+    def test_no_content_stretching_on_maximize(self, running_app: WeezTermApp):
+        """Maximizing should not stretch terminal content.
+
+        When going from a small window to maximized, the old content must not
+        be visually stretched to fill the maximized dimensions. Instead, the
+        surface should show the scheme background color in the new areas while
+        the terminal redraws at the correct size.
+        """
+        import numpy as np
+        hwnd = running_app.hwnd
+
+        set_window_rect(hwnd, 200, 150, 600, 400)
+        settle(2.0)
+
+        # Maximize and capture frames immediately
+        maximize(hwnd)
+
+        stretched_frames = []
+        for i in range(30):
+            try:
+                img = capture_window(hwnd)
+                if img:
+                    arr = np.array(img)
+                    h, w = arr.shape[:2]
+                    if w < 800 or h < 500:
+                        continue
+
+                    # Check expansion areas (right third, bottom third)
+                    right_third = arr[:, w * 2 // 3:, :3]
+                    bottom_third = arr[h * 2 // 3:, :, :3]
+                    right_bright = float(np.mean(right_third))
+                    bottom_bright = float(np.mean(bottom_third))
+
+                    if right_bright > 25 or bottom_bright > 25:
+                        save_screenshot(img, f"maximize_stretch_{i}")
+                        stretched_frames.append(
+                            (i, right_bright, bottom_bright)
+                        )
+            except Exception:
+                pass
+            time.sleep(0.016)
+
+        print(f"\n  Frames with potential stretching: {len(stretched_frames)}")
+        for idx, rb, bb in stretched_frames[:5]:
+            print(f"    Frame {idx}: right_bright={rb:.1f}, bottom_bright={bb:.1f}")
+
+        if stretched_frames:
+            pytest.fail(
+                f"Content stretching detected during maximize: "
+                f"{len(stretched_frames)} frames"
+            )

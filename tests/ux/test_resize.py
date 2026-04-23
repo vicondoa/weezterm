@@ -162,3 +162,81 @@ class TestResize:
         if artifacts:
             save_screenshot(img, "resize_very_large", "ARTIFACT")
             pytest.fail(f"Very large resize left artifact: {artifacts}")
+
+    def test_no_content_stretching_on_big_resize(self, running_app: WeezTermApp):
+        """A large resize should not show stretched content even briefly.
+
+        During a big resize (e.g., 600x400 → 1400x900), the old terminal
+        content must NOT be visually stretched to fill the new dimensions.
+        Instead, the new area should be filled with the background color
+        while the terminal redraws at the correct size.
+
+        We capture frames as fast as possible right after the resize and
+        check that none show stretched content (which would appear as the
+        old content scaled up with visible distortion).
+        """
+        import numpy as np
+        hwnd = running_app.hwnd
+
+        # Set a small initial size and wait for terminal to render
+        set_window_rect(hwnd, 200, 150, 600, 400)
+        settle(2.0)
+
+        # Capture the reference frame at the small size
+        ref_img = capture_window(hwnd)
+        ref_arr = np.array(ref_img)
+        ref_h, ref_w = ref_arr.shape[:2]
+
+        # The terminal at 600x400 has certain content.  If it gets stretched
+        # to 1400x900, that content occupies the full new size with distortion.
+        # If properly handled, the content stays at the old size or the surface
+        # is cleared to the bg color.
+
+        # Do a big resize
+        set_window_rect(hwnd, 200, 150, 1400, 900)
+
+        # Capture frames immediately (as fast as possible)
+        stretched_frames = []
+        for i in range(30):
+            try:
+                img = capture_window(hwnd)
+                if img:
+                    arr = np.array(img)
+                    h, w = arr.shape[:2]
+                    if w < 800 or h < 500:
+                        continue  # Capture was before resize took effect
+
+                    # Check the area that would only have content if stretched:
+                    # the right third and bottom third of the new window.
+                    # If the surface was cleared or kept at old size, these
+                    # areas would be bg color (dark). If stretched, they'd
+                    # contain visible terminal content (brighter).
+                    right_third = arr[:, w*2//3:, :3]
+                    bottom_third = arr[h*2//3:, :, :3]
+
+                    # Average brightness of these "expansion" areas
+                    right_bright = float(np.mean(right_third))
+                    bottom_bright = float(np.mean(bottom_third))
+
+                    # In the reference image, the right/bottom would not exist.
+                    # If stretched, they'd have terminal content (~30-60 brightness).
+                    # If properly cleared, they'd be bg color (~0-15 for dark themes).
+                    # We flag as stretched if brightness > 25 in the expansion area.
+                    if right_bright > 25 or bottom_bright > 25:
+                        save_screenshot(img, f"stretch_frame_{i}")
+                        stretched_frames.append(
+                            (i, right_bright, bottom_bright)
+                        )
+            except Exception:
+                pass
+            time.sleep(0.016)  # ~60fps capture rate
+
+        print(f"\n  Frames with potential stretching: {len(stretched_frames)}")
+        for idx, rb, bb in stretched_frames[:5]:
+            print(f"    Frame {idx}: right_bright={rb:.1f}, bottom_bright={bb:.1f}")
+
+        if stretched_frames:
+            pytest.fail(
+                f"Content stretching detected during resize: "
+                f"{len(stretched_frames)} frames showed stretched content"
+            )

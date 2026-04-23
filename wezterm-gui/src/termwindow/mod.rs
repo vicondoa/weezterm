@@ -935,6 +935,13 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+                // --- weezterm remote features ---
+                // Immediately clear the newly-created WebGPU surface to the
+                // scheme background color. Without this, the surface's initial
+                // white backbuffer is visible between show() and first paint.
+                let bg = myself.palette().background.to_linear();
+                webgpu.clear_and_present_with_color(bg.0 as f64, bg.1 as f64, bg.2 as f64);
+                // --- end weezterm remote features ---
             }
             myself.load_os_parameters();
             // --- weezterm remote features ---

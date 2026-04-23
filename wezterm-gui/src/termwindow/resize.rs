@@ -56,25 +56,24 @@ impl super::TermWindow {
             self.load_os_parameters();
         }
 
-        if let Some(webgpu) = self.webgpu.as_mut() {
-            // --- weezterm remote features ---
-            // Do NOT resize the WebGPU surface here. The DWM will show the
-            // old framebuffer content at its original size — cropped if the
-            // window shrinks, or with WM_ERASEBKGND background color
-            // filling new areas if the window grows. This avoids the ugly
-            // content stretching that occurs when the surface is reconfigured
-            // before terminal content is ready.
-            // The surface will be resized in do_paint_webgpu() right before
-            // the next paint, which renders new content in one atomic step.
-            let _ = webgpu;
-            // --- end weezterm remote features ---
+        // --- weezterm remote features ---
+        // Resize the WebGPU surface to match the new window dimensions
+        // and immediately clear+present with the scheme background color.
+        // This must happen synchronously before returning from the resize
+        // handler — if we defer, the DWM will stretch the old framebuffer
+        // to fill the new window size, causing visible content distortion.
+        {
+            let bg = self.palette().background.to_linear();
+            if let Some(webgpu) = self.webgpu.as_mut() {
+                webgpu.resize(dimensions);
+                webgpu.clear_and_present_with_color(bg.0 as f64, bg.1 as f64, bg.2 as f64);
+            }
         }
 
-        // --- weezterm remote features ---
         // During a live resize drag, defer terminal content recalculation
-        // entirely. The old framebuffer stays visible (cropped/padded).
-        // The full terminal resize happens on mouse release
-        // (live_resizing=false) with a single clean redraw.
+        // entirely. The surface has been cleared to bg color above, which
+        // is sufficient feedback. The full terminal resize happens on mouse
+        // release (live_resizing=false) with a single clean redraw.
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
             self.dimensions = dimensions;
             log::debug!("live resize: deferred terminal recalc in {:?}", _t.elapsed());
