@@ -464,6 +464,58 @@ fn get_primary_monitor_dpi() -> u32 {
 }
 
 impl Window {
+    // --- weezterm remote features ---
+    /// Convert a WINDOWPLACEMENT rcNormalPosition (window rect in screen coords)
+    /// to client (inner) dimensions: (x, y, client_width, client_height).
+    fn placement_rect_to_client(
+        &self,
+        rc: &RECT,
+        style: u32,
+        dpi: u32,
+    ) -> Option<(isize, isize, usize, usize)> {
+        // rcNormalPosition is the WINDOW rect (includes title bar, borders).
+        // Compute the frame added by AdjustWindowRectExForDpi for a 0x0 client.
+        let mut frame = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { AdjustWindowRectExForDpi(&mut frame, style, 0, 0, dpi) };
+        // frame.left is negative, frame.top is negative for the title bar
+        let frame_left = frame.left; // negative
+        let frame_top = frame.top; // negative
+        let frame_right = frame.right; // positive
+        let frame_bottom = frame.bottom; // positive
+
+        // Client origin = window origin + |frame_left|, + |frame_top|
+        let client_x = (rc.left - frame_left) as isize;
+        let client_y = (rc.top - frame_top) as isize;
+
+        // Client size = window size - frame size
+        let window_w = (rc.right - rc.left) as isize;
+        let window_h = (rc.bottom - rc.top) as isize;
+        let frame_w = (frame_right - frame_left) as isize;
+        let frame_h = (frame_bottom - frame_top) as isize;
+        let client_w = (window_w - frame_w).max(0) as usize;
+        let client_h = (window_h - frame_h).max(0) as usize;
+
+        log::trace!(
+            "placement_rect_to_client: frame=({},{},{},{}) \
+             client_pos=({},{}) client_size={}x{}",
+            frame_left, frame_top, frame_right, frame_bottom,
+            client_x, client_y, client_w, client_h,
+        );
+
+        if client_w == 0 || client_h == 0 {
+            log::warn!("placement_rect_to_client: zero client dimensions");
+            return None;
+        }
+
+        Some((client_x, client_y, client_w, client_h))
+    }
+    // --- end weezterm remote features ---
+
     fn create_window(
         config: ConfigHandle,
         class_name: &str,
@@ -947,6 +999,78 @@ impl WindowOps for Window {
             Ok(())
         });
     }
+
+    // --- weezterm remote features ---
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        let hwnd = self.0 .0;
+        if hwnd.is_null() {
+            log::debug!("get_window_placement: HWND is null");
+            return None;
+        }
+
+        // Determine current window state
+        let window_state = get_window_state(hwnd);
+
+        if window_state.contains(WindowState::MAXIMIZED)
+            || window_state.contains(WindowState::FULL_SCREEN)
+        {
+            // When maximized or fullscreen, use GetWindowPlacement.rcNormalPosition
+            // for the pre-maximize/pre-fullscreen rect.
+            let mut placement = unsafe { std::mem::zeroed::<WINDOWPLACEMENT>() };
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as _;
+            if unsafe { GetWindowPlacement(hwnd, &mut placement) }
+                != winapi::shared::minwindef::TRUE
+            {
+                log::warn!("get_window_placement: GetWindowPlacement failed");
+                return None;
+            }
+            let rc = &placement.rcNormalPosition;
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) as u32 };
+            log::trace!(
+                "get_window_placement: maximized/fullscreen, \
+                 rc=({},{})..({},{}) dpi={} style={:#x}",
+                rc.left, rc.top, rc.right, rc.bottom, dpi, style,
+            );
+            self.placement_rect_to_client(rc, style, dpi)
+        } else {
+            // Normal state: use GetWindowRect for actual window position
+            // and GetClientRect for client dimensions.
+            unsafe {
+                let mut window_rect: RECT = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut window_rect) == 0 {
+                    log::warn!("get_window_placement: GetWindowRect failed");
+                    return None;
+                }
+
+                let mut client_rect: RECT = std::mem::zeroed();
+                if GetClientRect(hwnd, &mut client_rect) == 0 {
+                    log::warn!("get_window_placement: GetClientRect failed");
+                    return None;
+                }
+
+                let client_w = (client_rect.right - client_rect.left) as usize;
+                let client_h = (client_rect.bottom - client_rect.top) as usize;
+
+                // Use the window rect origin (not client origin) because the
+                // restore code interprets saved x/y as window position.
+                let win_x = window_rect.left as isize;
+                let win_y = window_rect.top as isize;
+
+                log::trace!(
+                    "get_window_placement: normal, win_pos=({},{}) client={}x{}",
+                    win_x, win_y, client_w, client_h,
+                );
+
+                if client_w == 0 || client_h == 0 {
+                    return None;
+                }
+
+                Some((win_x, win_y, client_w, client_h))
+            }
+        }
+    }
+    // --- end weezterm remote features ---
 
     fn set_text_cursor_position(&self, cursor: Rect) {
         Connection::with_window_inner(self.0, move |inner| {
@@ -2998,6 +3122,37 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             mouse_button(hwnd, msg, wparam, lparam)
         }
         WM_DROPFILES => drop_files(hwnd, msg, wparam, lparam),
+        // --- weezterm remote features ---
+        // Handle DPI changes when the window moves between monitors with
+        // different DPI settings. The suggested rect in lParam is Windows'
+        // pre-calculated correct geometry for the new DPI.
+        0x02E0 /* WM_DPICHANGED */ => {
+            let suggested = unsafe { &*(lparam as *const RECT) };
+            log::debug!(
+                "WM_DPICHANGED: new DPI={}, suggested rect=({},{})..({},{})",
+                winapi::shared::minwindef::LOWORD(wparam as u32),
+                suggested.left,
+                suggested.top,
+                suggested.right,
+                suggested.bottom,
+            );
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    suggested.left,
+                    suggested.top,
+                    rect_width(suggested),
+                    rect_height(suggested),
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            // WM_WINDOWPOSCHANGED will fire naturally from SetWindowPos,
+            // propagating the resize and new DPI to the terminal via
+            // check_and_call_resize_if_needed() → scaling_changed().
+            Some(0)
+        }
+        // --- end weezterm remote features ---
         WM_ERASEBKGND => Some(1),
         WM_CLOSE => {
             if let Some(inner) = rc_from_hwnd(hwnd) {

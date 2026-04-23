@@ -1013,8 +1013,9 @@ impl TermWindow {
         match event {
             WindowEvent::Destroyed => {
                 // --- weezterm remote features ---
-                // Save window state before destruction for future restore.
-                self.save_current_window_state();
+                // Note: window state was already saved during CloseRequested.
+                // We don't save again here because the window may be partially
+                // destroyed and Win32 APIs might return stale data.
                 // --- end weezterm remote features ---
                 // Ensure that we cancel any overlays we had running, so
                 // that the mux can empty out, otherwise the mux keeps
@@ -1026,7 +1027,7 @@ impl TermWindow {
             }
             WindowEvent::CloseRequested => {
                 // --- weezterm remote features ---
-                self.save_current_window_state();
+                self.save_current_window_state(window);
                 // --- end weezterm remote features ---
                 self.close_requested(window);
                 Ok(true)
@@ -1177,7 +1178,7 @@ impl TermWindow {
                 self.handle_screen_changed(screen_name);
                 // Save state when moving between monitors so the monitor
                 // name is persisted even if the process exits ungracefully.
-                self.save_current_window_state();
+                self.save_current_window_state(window);
                 Ok(true)
             } // --- end weezterm remote features ---
         }
@@ -2005,18 +2006,35 @@ impl TermWindow {
     // --- weezterm remote features ---
     /// Save the current window state (position, size, maximized, monitor)
     /// to disk for future restore on reconnect/restart.
-    fn save_current_window_state(&self) {
+    fn save_current_window_state(&self, window: &Window) {
         let mux = Mux::get();
         let workspace = mux
             .get_window(self.mux_window_id)
             .map(|w| w.get_workspace().to_string())
             .unwrap_or_else(|| mux.active_workspace());
 
+        // Use get_window_placement() to get the NORMAL (restored) position
+        // and client dimensions. This correctly handles:
+        // - Normal state: returns current position and size
+        // - Maximized: returns the pre-maximize normal rect
+        // - Fullscreen: returns the pre-fullscreen normal rect
+        // If placement is unavailable, skip saving to avoid overwriting
+        // good state with default/zero values.
+        let (x, y, width, height) = match window.get_window_placement() {
+            Some(placement) => placement,
+            None => {
+                log::warn!(
+                    "Skipping window state save: placement unavailable"
+                );
+                return;
+            }
+        };
+
         let state = crate::window_state_persistence::SavedWindowState {
-            x: 0, // Will be overridden below if we can get position
-            y: 0,
-            width: self.dimensions.pixel_width,
-            height: self.dimensions.pixel_height,
+            x,
+            y,
+            width,
+            height,
             maximized: self.window_state.contains(WindowState::MAXIMIZED),
             fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
             monitor: self.current_screen_name.clone(),

@@ -343,6 +343,17 @@ pub trait WindowOps {
 
     fn config_did_change(&self, _config: &config::ConfigHandle) {}
 
+    // --- weezterm remote features ---
+    /// Returns the normal (restored) window placement as
+    /// `(x, y, client_width, client_height)` in screen coordinates.
+    /// When the window is maximized or fullscreen, this returns the
+    /// dimensions the window would have when restored to normal state.
+    /// Returns `None` if the position cannot be determined (e.g., Wayland).
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        None
+    }
+    // --- end weezterm remote features ---
+
     /// Configure the Window so that the desktop environment
     /// will constrain resizes so that they are multiples of
     /// the x and y values specified.

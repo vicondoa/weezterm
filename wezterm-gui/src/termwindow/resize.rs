@@ -60,13 +60,25 @@ impl super::TermWindow {
             webgpu.resize(dimensions);
         }
 
-        // For simple, user-interactive resizes where the dpi doesn't change,
-        // skip our scaling recalculation
+        // --- weezterm remote features ---
+        // During a live resize drag (user holding mouse button on window edge),
+        // defer terminal content recalculation. We already reconfigured the GPU
+        // surface above (required by the driver), so present a cleared frame to
+        // avoid showing stretched old content. The full terminal resize happens
+        // on WM_EXITSIZEMOVE (live_resizing=false) with a single clean redraw.
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
-            self.apply_dimensions(&dimensions, None, window);
-        } else {
-            self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
+            if let Some(webgpu) = self.webgpu.as_ref() {
+                webgpu.clear_and_present();
+            }
+            // Update dimensions tracking so the final resize on drag-end
+            // doesn't NOP due to stale self.dimensions.
+            self.dimensions = dimensions;
+            log::debug!("live resize: deferred terminal recalc, cleared surface in {:?}", _t.elapsed());
+            return;
         }
+        // --- end weezterm remote features ---
+
+        self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
         if let Some(modal) = self.get_modal() {
             modal.reconfigure(self);
         }

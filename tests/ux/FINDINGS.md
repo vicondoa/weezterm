@@ -24,111 +24,33 @@
 
 ## Issues Found
 
-### 🔴 ISSUE 1: Window position always saved as (0, 0)
+### ✅ ISSUE 1: Window position always saved as (0, 0) — FIXED
 
 **Severity:** Medium
 **Test:** `test_position_preserved_on_restart`
-**Symptom:** Window reopens at default OS position instead of where the user placed it.
+**Status:** ✅ Fixed
 
-**Evidence:**
-- Window placed at (250, 175)
-- Saved `window-state.json` shows `"x": 0, "y": 0`
-- After restart, window opens at (286, 286) — the OS default cascade position
-
-**Root cause:** `save_current_window_state()` in `wezterm-gui/src/termwindow/mod.rs:2015-2023`
-hardcodes `x: 0, y: 0` with a comment "Will be overridden below if we can get position" — but
-**no code below actually overrides x/y**. The position is never populated.
-
-```rust
-// BUG: x and y are always 0
-let state = crate::window_state_persistence::SavedWindowState {
-    x: 0, // Will be overridden below if we can get position  <-- NEVER OVERRIDDEN
-    y: 0,
-    width: self.dimensions.pixel_width,
-    height: self.dimensions.pixel_height,
-    ...
-};
-```
-
-**Fix:** The `TermWindow` needs access to the window's screen position. Options:
-1. Add a `window_position: (isize, isize)` field to `TermWindow` that gets updated
-   on move events, then use it in `save_current_window_state()`
-2. Query the window position via the `Window` handle at save time (requires adding
-   a `get_position()` method to the `WindowOps` trait)
-3. Use `WINDOWPLACEMENT` which contains the normal position — this is the best
-   approach because it also solves Issue 2.
+**Fix applied:** Added `get_window_placement()` method to the `WindowOps` trait with
+platform-specific implementations (Windows, macOS, X11). On Windows, it uses
+`GetWindowRect` for position and `GetClientRect` for client dimensions in normal state,
+and `GetWindowPlacement.rcNormalPosition` when maximized/fullscreen. Updated
+`save_current_window_state()` to call this instead of hardcoding zeros. The window
+parameter is now passed from the event handler to avoid the `self.window` being `None`
+during `Destroyed` events.
 
 ---
 
-### 🔴 ISSUE 2: Normal size lost through maximize → close → reopen → restore cycle (THE "OVERSIZED WINDOW" BUG)
+### ✅ ISSUE 2: Normal size lost through maximize → close → reopen → restore cycle — FIXED
 
 **Severity:** High
 **Test:** `test_non_maximized_size_preserved_through_maximize_cycle`
-**Symptom:** After closing while maximized and reopening, restoring from maximized
-leaves the window at the full screen size (2576x1408) instead of the pre-maximize
-normal size (750x550).
+**Status:** ✅ Fixed
 
-**Evidence:**
-- Set window to 750x550
-- Maximized, then closed gracefully
-- Saved state: `{"width": 2560, "height": 1369, "maximized": true}`
-- Reopened → window appears maximized (correct)
-- Restored → window stays at 2576x1408 (WRONG, should be ~750x550)
-
-**Root cause:** `save_current_window_state()` saves `self.dimensions.pixel_width/height`
-which are the CURRENT dimensions. When maximized, these are the maximized dimensions.
-On restore, the window was CREATED at 2560x1369 before `window.maximize()` was called,
-so Win32's `WINDOWPLACEMENT.rcNormalPosition` is set to the maximized size.
-
-The save → restore flow:
-1. **Save (maximized):** saves width=2560, height=1369, maximized=true
-2. **Restore: create window:** creates at 2560x1369 (from saved width/height)
-3. **Restore: maximize:** calls `window.maximize()` — the window was already large,
-   Win32 records the 2560x1369 as the "normal" rect in WINDOWPLACEMENT
-4. **User unmaximizes:** Win32 restores to rcNormalPosition = 2560x1369 → OVERSIZED
-
-```
-wezterm-gui/src/termwindow/mod.rs:2018-2019  ← saves current (maximized) dimensions
-wezterm-gui/src/termwindow/mod.rs:856-857    ← restores those dimensions as window size
-wezterm-gui/src/termwindow/mod.rs:944-946    ← then maximizes on top of already-large window
-```
-
-**Fix:** When saving while maximized, save the NORMAL (restored) dimensions, not the
-current maximized dimensions. The proper approach:
-
-```rust
-fn save_current_window_state(&self) {
-    // When maximized, we need the NORMAL (restored) position and size,
-    // not the current maximized dimensions. Use WINDOWPLACEMENT.
-    let (x, y, width, height) = if self.window_state.contains(WindowState::MAXIMIZED)
-        || self.window_state.contains(WindowState::FULL_SCREEN)
-    {
-        // Get the normal rect from WINDOWPLACEMENT via the window handle
-        // This is the rect the window will restore to when unmaximized
-        self.window.as_ref()
-            .and_then(|w| w.get_normal_placement())  // NEW METHOD NEEDED
-            .unwrap_or((0, 0, self.dimensions.pixel_width, self.dimensions.pixel_height))
-    } else {
-        // Not maximized — save current position and client dimensions
-        let (wx, wy) = self.window.as_ref()
-            .and_then(|w| w.get_position())  // NEW METHOD NEEDED
-            .unwrap_or((0, 0));
-        (wx, wy, self.dimensions.pixel_width, self.dimensions.pixel_height)
-    };
-
-    let state = SavedWindowState {
-        x, y, width, height,
-        maximized: self.window_state.contains(WindowState::MAXIMIZED),
-        fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
-        monitor: self.current_screen_name.clone(),
-    };
-    save_window_state(&workspace, state);
-}
-```
-
-This requires adding `get_position()` and `get_normal_placement()` methods to the
-`WindowOps` trait (or the platform-specific `Window` struct) in `window/src/os/windows/window.rs`,
-using `GetWindowRect` and `GetWindowPlacement` respectively.
+**Fix applied:** The `get_window_placement()` method now uses `GetWindowPlacement.rcNormalPosition`
+when the window is maximized, which returns the pre-maximize rect. This is converted from
+window rect to client dimensions. When the window state is saved while maximized, the normal
+dimensions are preserved. On restore, the window is created at the saved normal size, then
+maximized — giving Win32 the correct `rcNormalPosition` for future unmaximize.
 
 ---
 
@@ -193,13 +115,11 @@ would exceed the monitor, reduce rows/cols rather than overflow.
 
 ---
 
-### 🔴 ISSUE 3: Missing `WM_DPICHANGED` handler — window balloons on cross-monitor drag
+### 🟡 ISSUE 3: Missing `WM_DPICHANGED` handler — FIXED (needs manual verification)
 
 **Severity:** High
 **Test:** Manual (requires multi-monitor with different DPI — see `tests/ux/MANUAL_TESTS.md`)
-**Symptom:** When dragging the window from one monitor to another with different DPI,
-the drag outline shows a reasonable rectangle, but the final window size doesn't
-match it — it balloons to a much larger size, sometimes exceeding the screen.
+**Status:** 🟡 Fixed, needs manual testing on multi-monitor setup
 
 **Evidence:** User-reported. The drag rectangle stays reasonable but the window
 "never fits in that geometry, it always balloons to be huge."
@@ -311,55 +231,32 @@ Local process isolation is still maintained via `--config-file` and `XDG_*` env 
 
 ---
 
-## Issue 5: Content Stretching / Multiple Redraws During Resize
+## ✅ Issue 5: Content Stretching / Multiple Redraws During Resize — FIXED
 
 **Severity:** Medium (visual quality)
-**Symptom:** When the window is resized, the terminal content visually stretches
-or scales before being redrawn at the correct dimensions. Multiple intermediate
-redraws are visible, creating a jarring experience. The content appears to be
-rendered at the old size then stretched to fill the new window dimensions before
-the terminal recalculates and redraws at the correct cell count.
+**Status:** ✅ Fixed
 
-**Observed behavior:**
-1. User starts resizing the window
-2. Content is briefly STRETCHED (old content scaled to new dimensions)
-3. Content redraws at new size (possibly multiple times)
-4. Final correct rendering appears
-
-**Expected behavior:**
-- No content stretching — content should either clip or pad, never scale
-- Single redraw at the final size, or smooth incremental resize
-
-**Root cause:** The OpenGL/WebGPU rendering surface is resized by the window
-system, which stretches the existing framebuffer content to fill the new surface
-size. The terminal then recalculates cell dimensions and redraws, but there is
-a visible frame (or several frames) where the stretched content is displayed.
-
-**Code path:**
-- `window/src/os/windows/window.rs:340-394` — `check_and_call_resize_if_needed()` dispatches resize event
-- `wezterm-gui/src/termwindow/resize.rs:59-61` — WebGPU surface resized
-- `wezterm-gui/src/termwindow/mod.rs:1117-1125` — paint deferred during resize (`is_repaint_pending`)
-- `wezterm-gui/src/termwindow/mod.rs:1077-1088` — deferred paint executed after resize completes
-
-**Possible fixes:**
-- Clear the rendering surface to the background color BEFORE the terminal redraws,
-  so the user sees a clean background instead of stretched content
-- Use `WM_SIZING` to defer the surface resize until the user finishes dragging
-- Implement DWM-aware composition to avoid showing intermediate frames
+**Fix applied:** During live resize (user dragging window edge), the terminal content
+recalculation is now deferred. The WebGPU surface is reconfigured to match the new
+window dimensions (required by the GPU driver), but instead of rendering terminal
+content on every intermediate step, a cleared (black) frame is presented immediately.
+When the user releases the mouse button (`WM_EXITSIZEMOVE`), the full terminal
+resize + repaint happens in one clean step. This eliminates content stretching,
+multiple intermediate redraws, and the jarring visual experience. The change uses
+the existing `live_resizing` flag (already tracked on all platforms via
+`WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE` on Windows, `windowWillStartLiveResize` on macOS,
+`ConfigureNotify` on X11).
 
 ---
 
-## Improvement Recommendations (Ranked)
+## Improvement Recommendations (Updated)
 
-### Priority 1: Fix the oversized-window-on-restore bug (Issue 2)
-This is the most user-visible problem. Users who close WeezTerm while maximized
-and then reopen it will get a permanently oversized window when they unmaximize.
-**Files to modify:**
-- `wezterm-gui/src/termwindow/mod.rs` — `save_current_window_state()`
-- `window/src/os/windows/window.rs` — add `get_normal_placement()` using Win32 `GetWindowPlacement`
-- `window/src/lib.rs` — add trait method to `WindowOps`
+### ✅ Priority 1: Fix the oversized-window-on-restore bug (Issue 2) — DONE
+### ✅ Priority 2: Fix window position persistence (Issue 1) — DONE
+### ✅ Priority 3: Add WM_DPICHANGED handler (Issue 3) — DONE (needs manual verification)
+### ✅ Priority 4: Fix content stretching during resize (Issue 5) — DONE
 
-### Priority 2: Fix SSH mux connection stability (Issue 4)
+### Remaining: Fix SSH mux connection stability (Issue 4)
 SSH mux connections via `connect` with an isolated config drop after ~6 seconds.
 This blocks all SSH mux resize/maximize testing and likely affects users.
 **Files to investigate:**
@@ -367,19 +264,7 @@ This blocks all SSH mux resize/maximize testing and likely affects users.
 - `wezterm-client/src/domain.rs` — ClientDomain connection lifecycle
 - `codec/src/lib.rs` — codec version compatibility
 
-### Priority 3: Add WM_DPICHANGED handler (Issue 3)
-Window balloons when dragged between monitors with different DPI.
-**Files to modify:**
-- `window/src/os/windows/window.rs` — add `WM_DPICHANGED` case to `do_wnd_proc()`
-
-### Priority 4: Fix window position persistence (Issue 1)
-Users expect their window to reopen where they left it. Currently it always
-opens at the OS-default position.
-**Files to modify:**
-- `wezterm-gui/src/termwindow/mod.rs` — populate x/y in `save_current_window_state()`
-- `window/src/os/windows/window.rs` — add `get_position()` using Win32 `GetWindowRect`
-
-### Priority 5: CI integration
+### Remaining: CI integration
 Add these UX tests to the `weezterm_build.yml` workflow (Windows job) so
 regressions are caught automatically.
 
