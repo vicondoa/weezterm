@@ -16,6 +16,7 @@ working on this codebase.
 | Test all | `cargo nextest run` |
 | Test specific crate | `cargo nextest run -p <crate>` |
 | Test escape parser (no_std) | `cargo nextest run -p wezterm-escape-parser` |
+| **UX tests (Windows)** | **`cd tests/ux && pip install -r requirements.txt && python -m pytest -v -s`** |
 | Format | `cargo +nightly fmt` |
 | Lint | `cargo clippy` |
 
@@ -276,6 +277,87 @@ git merge upstream/main          # or rebase, per preference
 | Add overlay/picker UI | `wezterm-gui/src/overlay/` (follow `launcher.rs` pattern) |
 | Add config option | `config/src/ssh.rs` (for SSH), `config/src/lib.rs` (for global) |
 | Spawn env vars | `mux/src/domain.rs` (local), `mux/src/ssh.rs` (remote SSH) |
+| Window resize/DPI handling | `wezterm-gui/src/termwindow/resize.rs`, `window/src/os/windows/window.rs` |
+| Window state persistence | `wezterm-gui/src/window_state_persistence.rs` |
+| UX tests (automated) | `tests/ux/` (see UX Testing section below) |
+| UX tests (manual) | `tests/ux/MANUAL_TESTS.md` |
+
+## UX Testing
+
+WeezTerm has a Python-based UX test harness at `tests/ux/` that launches the
+real `weezterm-gui.exe` binary, manipulates windows via Win32 API, captures
+screenshots, and asserts on behavior. **Run these tests after any changes to
+window management, resize, DPI handling, or startup code.**
+
+### Automated Tests
+
+```bash
+# Prerequisites: build the binary first
+cargo build -p wezterm-gui
+
+# Install Python dependencies (once)
+cd tests/ux
+pip install -r requirements.txt
+
+# Run all UX tests
+python -m pytest -v -s
+
+# Run specific suite
+python -m pytest test_resize.py -v -s       # resize behavior
+python -m pytest test_maximize.py -v -s      # maximize/unmaximize
+python -m pytest test_dimensions.py -v -s    # state persistence across restarts
+python -m pytest test_startup.py -v -s       # startup time and rendering
+```
+
+The tests are **fully isolated** from any running WeezTerm instances via:
+- `--config-file <temp>` prevents connecting to existing GUI instances
+- `XDG_CONFIG_HOME=<temp>` isolates config dirs and `window-state.json`
+- `XDG_RUNTIME_DIR=<temp>` isolates sockets and pid files
+
+Test suites:
+- `test_startup.py` — startup time threshold, window fully drawn after launch
+- `test_resize.py` — shrink/grow without artifacts, rapid resize, extreme sizes
+- `test_maximize.py` — maximize/restore preserves dimensions, no oversized window
+- `test_dimensions.py` — window size/position/maximized state persisted across restarts
+- `test_ssh_mux.py` — SSH mux connection startup, resize, and maximize over SSH mux
+  (connects to `jvicondo-a7` with an isolated workspace; requires SSH access)
+
+Failed tests save screenshots to `tests/ux/test-results/` for debugging.
+
+### Manual Tests
+
+Some UX scenarios require manual testing because they depend on hardware
+configurations that can't be automated (e.g., multiple monitors with different
+DPI scaling).
+
+**See `tests/ux/MANUAL_TESTS.md`** for the full checklist. Key scenarios:
+
+- **M1–M2:** Cross-monitor drag between monitors with different DPI — verify the
+  window matches the drag outline and doesn't balloon
+- **M3:** Drag outline vs final window position — verify they match
+- **M4:** Maximize on one monitor, drag to another
+- **M5:** Rapid cross-monitor bouncing — verify no crash or size drift
+
+**When to run manual tests:** After any changes to:
+- `window/src/os/windows/window.rs` (window event handling, DPI)
+- `wezterm-gui/src/termwindow/resize.rs` (resize/scaling logic)
+- `wezterm-gui/src/window_state_persistence.rs` (state save/restore)
+
+### Known Issues (tracked in `tests/ux/FINDINGS.md`)
+
+1. **Window position saved as (0,0)** — `save_current_window_state()` in
+   `termwindow/mod.rs:2015-2023` never populates x/y coordinates
+2. **Oversized window after maximize→close→reopen→restore** — saves maximized
+   dimensions instead of normal (restored) dimensions from WINDOWPLACEMENT
+3. **Missing `WM_DPICHANGED` handler** — `window/src/os/windows/window.rs`
+   does not handle `WM_DPICHANGED`, causing window to balloon when dragged
+   between monitors with different DPI instead of using the Windows-suggested rect
+4. **`connect --workspace` crashes SSH mux** — using `--workspace` flag with `connect`
+   subcommand causes the SSH mux connection to drop after ~6-8s with PDU decode EOF.
+   Without `--workspace`, connections are stable. Root cause is in spawn_tab_in_domain_if_mux_is_empty.
+5. **Content stretching during resize** — terminal content is visually stretched
+   during window resize before being redrawn at the correct dimensions. Multiple
+   intermediate redraws create a jarring experience.
 
 ## CI/CD Pipelines
 
