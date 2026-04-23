@@ -74,8 +74,11 @@ impl super::TermWindow {
         // entirely. The surface has been cleared to bg color above, which
         // is sufficient feedback. The full terminal resize happens on mouse
         // release (live_resizing=false) with a single clean redraw.
+        // IMPORTANT: do NOT update self.dimensions here — the NOP check at
+        // the top compares self.dimensions to catch whether a resize is needed.
+        // If we updated it, the final resize on mouse release would NOP and
+        // the terminal would never recalculate, leaving stale content.
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
-            self.dimensions = dimensions;
             log::debug!("live resize: deferred terminal recalc in {:?}", _t.elapsed());
             return;
         }

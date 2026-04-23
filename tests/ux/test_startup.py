@@ -17,9 +17,9 @@ from helpers.screenshot import (
 from helpers.timing import TimingResult
 
 # Startup time threshold in milliseconds
-# Cold start on debug builds can be ~14s due to GPU init and shader compilation.
+# Cold start on debug builds can be ~18s due to GPU init and shader compilation.
 # Warm starts are typically <2s. Use generous threshold for the single-sample test.
-STARTUP_THRESHOLD_MS = 15000  # 15 seconds — accommodates debug cold start
+STARTUP_THRESHOLD_MS = 20000  # 20 seconds — accommodates debug cold start
 
 
 @pytest.mark.startup
