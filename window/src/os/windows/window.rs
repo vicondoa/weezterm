@@ -712,6 +712,24 @@ impl Window {
         apply_theme(hwnd.0);
         enable_blur_behind(hwnd.0);
 
+        // --- weezterm remote features ---
+        // Disable DWM transition animations for this window. Without this,
+        // maximize/restore causes the DWM to animate the old surface content
+        // by stretching it to the new size — a visually jarring effect.
+        // With transitions disabled, the window jumps to the new size instantly
+        // and our clear_and_present fills it with the bg color before the
+        // terminal redraws.
+        unsafe {
+            let mut disable: winapi::shared::minwindef::BOOL = 1;
+            winapi::um::dwmapi::DwmSetWindowAttribute(
+                hwnd.0 as _,
+                3, // DWMWA_TRANSITIONS_FORCEDISABLED
+                &mut disable as *mut _ as *const _,
+                std::mem::size_of_val(&disable) as u32,
+            );
+        }
+        // --- end weezterm remote features ---
+
         // Make window capable of accepting drag and drop
         unsafe {
             DragAcceptFiles(hwnd.0, winapi::shared::minwindef::TRUE);
@@ -1375,44 +1393,64 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
 
     let no_native_title_bar = no_native_title_bar(inner.config.window_decorations);
 
-    if !(wparam == 1 && no_native_title_bar) {
-        return None;
-    }
+    if wparam == 1 && no_native_title_bar {
+        if inner.saved_placement.is_none() {
+            let dpi = inner.get_effective_dpi() as u32;
+            let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
+            let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
+            let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 
-    if inner.saved_placement.is_none() {
-        let dpi = inner.get_effective_dpi() as u32;
-        let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
-        let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
-        let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
 
-        let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
+            let requested_client_rect = &mut params.rgrc[0];
 
-        let requested_client_rect = &mut params.rgrc[0];
+            requested_client_rect.right -= frame_x + padding;
+            requested_client_rect.left += frame_x + padding;
 
-        requested_client_rect.right -= frame_x + padding;
-        requested_client_rect.left += frame_x + padding;
+            let is_maximized = get_window_state(hwnd) == WindowState::MAXIMIZED;
 
-        let is_maximized = get_window_state(hwnd) == WindowState::MAXIMIZED;
-
-        // Handle bugged top window border on Windows 10
-        if *IS_WIN10 {
-            if is_maximized {
-                requested_client_rect.top += frame_y + padding;
-                requested_client_rect.bottom -= frame_y + padding - 2;
+            // Handle bugged top window border on Windows 10
+            if *IS_WIN10 {
+                if is_maximized {
+                    requested_client_rect.top += frame_y + padding;
+                    requested_client_rect.bottom -= frame_y + padding - 2;
+                } else {
+                    requested_client_rect.top += 1;
+                    requested_client_rect.bottom -= frame_y - padding;
+                }
             } else {
-                requested_client_rect.top += 1;
-                requested_client_rect.bottom -= frame_y - padding;
-            }
-        } else {
-            requested_client_rect.bottom -= frame_y + padding;
+                requested_client_rect.bottom -= frame_y + padding;
 
-            if is_maximized {
-                requested_client_rect.top += frame_y + padding;
+                if is_maximized {
+                    requested_client_rect.top += frame_y + padding;
+                }
             }
         }
+
+        return Some(0);
     }
 
-    Some(0)
+    // --- weezterm remote features ---
+    // For native title bar windows: when wparam=TRUE, tell Windows NOT to
+    // preserve (bitblt) the old client area content during resize. Without
+    // this, Windows copies the old framebuffer and stretches it to fill the
+    // new client area, causing visible content distortion.
+    // We let DefWindowProc compute the correct client rect in rgrc[0], then
+    // zero out the source rect (rgrc[1]) so nothing is copied.
+    if wparam == 1 {
+        let result = DefWindowProcW(hwnd, WM_NCCALCSIZE, wparam, lparam);
+        let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
+        // rgrc[1] = source rectangle (old client area to copy FROM)
+        // Set to zero so Windows has nothing to copy
+        params.rgrc[1] = std::mem::zeroed();
+        // rgrc[2] = destination rectangle (where to copy TO)
+        params.rgrc[2] = std::mem::zeroed();
+        // WVR_VALIDRECTS tells Windows to use rgrc[1] and rgrc[2]
+        return Some(result | 0x0400 /* WVR_VALIDRECTS */);
+    }
+    // --- end weezterm remote features ---
+
+    None
 }
 
 unsafe fn wm_nchittest(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
