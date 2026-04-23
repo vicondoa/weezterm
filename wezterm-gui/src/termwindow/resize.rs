@@ -56,35 +56,17 @@ impl super::TermWindow {
             self.load_os_parameters();
         }
 
-        // --- weezterm remote features ---
-        // Resize the WebGPU surface to match the new window dimensions
-        // and immediately clear+present with the scheme background color.
-        // This must happen synchronously before returning from the resize
-        // handler — if we defer, the DWM will stretch the old framebuffer
-        // to fill the new window size, causing visible content distortion.
-        {
-            let bg = self.palette().background.to_linear();
-            if let Some(webgpu) = self.webgpu.as_mut() {
-                webgpu.resize(dimensions);
-                webgpu.clear_and_present_with_color(bg.0 as f64, bg.1 as f64, bg.2 as f64);
-            }
+        if let Some(webgpu) = self.webgpu.as_mut() {
+            webgpu.resize(dimensions);
         }
 
-        // During a live resize drag, defer terminal content recalculation
-        // entirely. The surface has been cleared to bg color above, which
-        // is sufficient feedback. The full terminal resize happens on mouse
-        // release (live_resizing=false) with a single clean redraw.
-        // IMPORTANT: do NOT update self.dimensions here — the NOP check at
-        // the top compares self.dimensions to catch whether a resize is needed.
-        // If we updated it, the final resize on mouse release would NOP and
-        // the terminal would never recalculate, leaving stale content.
+        // For simple, user-interactive resizes where the dpi doesn't change,
+        // skip our scaling recalculation
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
-            log::debug!("live resize: deferred terminal recalc in {:?}", _t.elapsed());
-            return;
+            self.apply_dimensions(&dimensions, None, window);
+        } else {
+            self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
         }
-        // --- end weezterm remote features ---
-
-        self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
         if let Some(modal) = self.get_modal() {
             modal.reconfigure(self);
         }

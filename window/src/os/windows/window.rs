@@ -1431,23 +1431,10 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
     }
 
     // --- weezterm remote features ---
-    // For native title bar windows: when wparam=TRUE, tell Windows NOT to
-    // preserve (bitblt) the old client area content during resize. Without
-    // this, Windows copies the old framebuffer and stretches it to fill the
-    // new client area, causing visible content distortion.
-    // We let DefWindowProc compute the correct client rect in rgrc[0], then
-    // zero out the source rect (rgrc[1]) so nothing is copied.
-    if wparam == 1 {
-        let result = DefWindowProcW(hwnd, WM_NCCALCSIZE, wparam, lparam);
-        let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
-        // rgrc[1] = source rectangle (old client area to copy FROM)
-        // Set to zero so Windows has nothing to copy
-        params.rgrc[1] = std::mem::zeroed();
-        // rgrc[2] = destination rectangle (where to copy TO)
-        params.rgrc[2] = std::mem::zeroed();
-        // WVR_VALIDRECTS tells Windows to use rgrc[1] and rgrc[2]
-        return Some(result | 0x0400 /* WVR_VALIDRECTS */);
-    }
+    // For native title bar windows: when wparam=TRUE, let DefWindowProc
+    // handle the client rect calculation normally. Returning None (defer
+    // to DefWindowProc) is the standard behavior. The stretching prevention
+    // is handled by DWMWA_TRANSITIONS_FORCEDISABLED set at window creation.
     // --- end weezterm remote features ---
 
     None
@@ -1812,17 +1799,6 @@ unsafe fn wm_enter_exit_size_move(
         let mut inner = inner.borrow_mut();
         inner.in_size_move = msg == WM_ENTERSIZEMOVE;
         should_size = !inner.in_size_move;
-        // --- weezterm remote features ---
-        // When exiting size move, clear last_size so the next
-        // check_and_call_resize_if_needed() unconditionally dispatches
-        // a Resized event with live_resizing=false. During the drag,
-        // we deferred terminal recalculation — this ensures the final
-        // resize fires even though the window dimensions haven't changed
-        // since the last drag step.
-        if should_size {
-            inner.last_size.take();
-        }
-        // --- end weezterm remote features ---
     }
 
     if should_size {
@@ -1896,10 +1872,15 @@ unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> 
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    if inner.paint_throttled {
+    // --- weezterm remote features ---
+    // During live resize (in_size_move), skip paint throttling so we repaint
+    // on every resize step. This prevents the DWM from stretching the old
+    // frame to fill the new window size while waiting for the throttle timer.
+    if inner.paint_throttled && !inner.in_size_move {
         inner.invalidated = true;
         return Some(0);
     }
+    // --- end weezterm remote features ---
 
     let mut ps = PAINTSTRUCT {
         fErase: 0,
