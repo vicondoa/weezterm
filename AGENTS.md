@@ -9,6 +9,7 @@ working on this codebase.
 | Task | Command |
 |------|---------|
 | **Pre-commit (run before PR)** | **`make precommit`** |
+| **Cross-build (Windows + Linux)** | **`ci/build-cross.sh`** |
 | Build | `cargo build -p wezterm -p wezterm-gui -p wezterm-mux-server` |
 | Check (fast) | `cargo check` |
 | Check specific crate | `cargo check -p <crate>` |
@@ -131,6 +132,32 @@ cargo check
 cargo nextest run
 cargo nextest run -p wezterm-escape-parser
 ```
+
+### Cross-Build Verification
+
+**Always run `ci/build-cross.sh` to verify both Windows and Linux builds succeed.**
+This script builds Windows binaries natively and Linux binaries via WSL, then
+assembles a ready-to-test package in `target/cross-pkg/`. This catches issues
+that `cargo check` alone misses (e.g., platform-specific compilation, rustc
+ICEs on Linux, and linker errors).
+
+```bash
+# From Git Bash on Windows:
+ci/build-cross.sh              # debug build
+ci/build-cross.sh --release    # release build
+```
+
+Output:
+```
+target/cross-pkg/
+├── windows/          Windows binaries (weezterm.exe, weezterm-gui.exe, …)
+└── linux-x86_64/     Linux binaries  (weezterm, weezterm-mux-server)
+```
+
+**Important**: The Linux/WSL build uses a separate Rust toolchain and can
+surface warnings/errors that don't appear on Windows (e.g., unused code
+warnings that trigger rustc ICEs on certain Linux compiler versions). Always
+verify both platforms compile cleanly.
 
 ## WeezTerm Remote Features
 
