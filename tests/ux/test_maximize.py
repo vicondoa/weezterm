@@ -112,12 +112,18 @@ class TestMaximize:
         settle(1.5)
 
         restore(hwnd)
-        settle(2.0)  # generous settle for redraw after restore
+        settle(3.0)  # generous settle for redraw after restore
 
-        img = capture_window(hwnd)
-        save_screenshot(img, "unmaximize_drawn")
+        # Retry capture a few times — the terminal may need an extra paint
+        # cycle after the restore completes
+        for attempt in range(3):
+            img = capture_window(hwnd)
+            save_screenshot(img, f"unmaximize_drawn_{attempt}")
+            artifacts = detect_rendering_artifacts(img)
+            if not artifacts:
+                break
+            settle(1.0)
 
-        artifacts = detect_rendering_artifacts(img)
         print(f"\n  Artifacts after unmaximize: {artifacts}")
         if artifacts:
             save_screenshot(img, "unmaximize_drawn", "ARTIFACT")

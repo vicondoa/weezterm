@@ -61,19 +61,21 @@ impl super::TermWindow {
         }
 
         // --- weezterm remote features ---
-        // During a live resize drag (user holding mouse button on window edge),
-        // defer terminal content recalculation. We already reconfigured the GPU
-        // surface above (required by the driver), so present a cleared frame to
-        // avoid showing stretched old content. The full terminal resize happens
-        // on WM_EXITSIZEMOVE (live_resizing=false) with a single clean redraw.
+        // After reconfiguring the GPU surface, immediately clear and present
+        // a black frame. This prevents the DWM from stretching the old
+        // framebuffer content to fill the new window size while we
+        // recalculate the terminal layout. Without this, maximize/restore
+        // and any large dimension change shows visibly distorted content.
+        if let Some(webgpu) = self.webgpu.as_ref() {
+            webgpu.clear_and_present();
+        }
+
+        // During a live resize drag, defer terminal content recalculation
+        // entirely. The cleared frame is sufficient feedback. The full
+        // terminal resize happens on mouse release (live_resizing=false).
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
-            if let Some(webgpu) = self.webgpu.as_ref() {
-                webgpu.clear_and_present();
-            }
-            // Update dimensions tracking so the final resize on drag-end
-            // doesn't NOP due to stale self.dimensions.
             self.dimensions = dimensions;
-            log::debug!("live resize: deferred terminal recalc, cleared surface in {:?}", _t.elapsed());
+            log::debug!("live resize: deferred terminal recalc in {:?}", _t.elapsed());
             return;
         }
         // --- end weezterm remote features ---

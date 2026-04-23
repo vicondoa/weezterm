@@ -536,7 +536,15 @@ impl Window {
             // The ID is defined in assets/windows/resource.rc
             hIcon: unsafe { LoadIconW(h_inst, MAKEINTRESOURCEW(0x101)) },
             hCursor: null_mut(),
-            hbrBackground: null_mut(),
+            // --- weezterm remote features ---
+            // Use black background brush to prevent white flash on startup.
+            // The window is painted black until the terminal renderer takes over.
+            hbrBackground: unsafe {
+                winapi::um::wingdi::GetStockObject(
+                    winapi::um::wingdi::BLACK_BRUSH as i32,
+                ) as _
+            },
+            // --- end weezterm remote features ---
             lpszMenuName: null(),
             lpszClassName: class_name.as_ptr(),
         };
@@ -3153,7 +3161,20 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             Some(0)
         }
         // --- end weezterm remote features ---
-        WM_ERASEBKGND => Some(1),
+        // --- weezterm remote features ---
+        // Paint exposed areas black during resize/redraw to prevent
+        // white flashes. The HDC is passed in wparam.
+        WM_ERASEBKGND => {
+            let hdc = wparam as winapi::shared::windef::HDC;
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rc);
+            let brush = winapi::um::wingdi::GetStockObject(
+                winapi::um::wingdi::BLACK_BRUSH as i32,
+            );
+            winapi::um::winuser::FillRect(hdc, &rc, brush as _);
+            Some(1)
+        }
+        // --- end weezterm remote features ---
         WM_CLOSE => {
             if let Some(inner) = rc_from_hwnd(hwnd) {
                 let mut inner = inner.borrow_mut();
