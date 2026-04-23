@@ -1812,6 +1812,17 @@ unsafe fn wm_enter_exit_size_move(
         let mut inner = inner.borrow_mut();
         inner.in_size_move = msg == WM_ENTERSIZEMOVE;
         should_size = !inner.in_size_move;
+        // --- weezterm remote features ---
+        // When exiting size move, clear last_size so the next
+        // check_and_call_resize_if_needed() unconditionally dispatches
+        // a Resized event with live_resizing=false. During the drag,
+        // we deferred terminal recalculation — this ensures the final
+        // resize fires even though the window dimensions haven't changed
+        // since the last drag step.
+        if should_size {
+            inner.last_size.take();
+        }
+        // --- end weezterm remote features ---
     }
 
     if should_size {

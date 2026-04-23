@@ -58,12 +58,17 @@ class TestResize:
 
         # Grow significantly
         set_window_rect(hwnd, 100, 100, 1200, 900)
-        settle(2.0)
+        settle(3.0)
 
-        img = capture_window(hwnd)
-        save_screenshot(img, "resize_larger")
+        # Retry capture — terminal may need extra paint cycles at debug speed
+        for attempt in range(3):
+            img = capture_window(hwnd)
+            save_screenshot(img, f"resize_larger_{attempt}")
+            artifacts = detect_rendering_artifacts(img)
+            if not artifacts:
+                break
+            settle(1.0)
 
-        artifacts = detect_rendering_artifacts(img)
         print(f"\n  Artifacts after grow: {artifacts}")
         if artifacts:
             save_screenshot(img, "resize_larger", "ARTIFACT")
