@@ -57,22 +57,24 @@ impl super::TermWindow {
         }
 
         if let Some(webgpu) = self.webgpu.as_mut() {
-            webgpu.resize(dimensions);
+            // --- weezterm remote features ---
+            // Do NOT resize the WebGPU surface here. The DWM will show the
+            // old framebuffer content at its original size — cropped if the
+            // window shrinks, or with WM_ERASEBKGND background color
+            // filling new areas if the window grows. This avoids the ugly
+            // content stretching that occurs when the surface is reconfigured
+            // before terminal content is ready.
+            // The surface will be resized in do_paint_webgpu() right before
+            // the next paint, which renders new content in one atomic step.
+            let _ = webgpu;
+            // --- end weezterm remote features ---
         }
 
         // --- weezterm remote features ---
-        // After reconfiguring the GPU surface, immediately clear and present
-        // a black frame. This prevents the DWM from stretching the old
-        // framebuffer content to fill the new window size while we
-        // recalculate the terminal layout. Without this, maximize/restore
-        // and any large dimension change shows visibly distorted content.
-        if let Some(webgpu) = self.webgpu.as_ref() {
-            webgpu.clear_and_present();
-        }
-
         // During a live resize drag, defer terminal content recalculation
-        // entirely. The cleared frame is sufficient feedback. The full
-        // terminal resize happens on mouse release (live_resizing=false).
+        // entirely. The old framebuffer stays visible (cropped/padded).
+        // The full terminal resize happens on mouse release
+        // (live_resizing=false) with a single clean redraw.
         if live_resizing && self.dimensions.dpi == dimensions.dpi {
             self.dimensions = dimensions;
             log::debug!("live resize: deferred terminal recalc in {:?}", _t.elapsed());

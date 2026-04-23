@@ -131,6 +131,10 @@ pub(crate) struct WindowInner {
     /// Tracks the friendly name of the monitor the window is currently on,
     /// so we can emit `ScreenChanged` when it moves to a different monitor.
     current_monitor_name: Option<String>,
+    /// Background color brush for WM_ERASEBKGND, matching the terminal's
+    /// color scheme. Updated when the scheme changes. Using the scheme bg
+    /// color instead of black prevents jarring flashes during resize.
+    bg_brush: winapi::shared::windef::HBRUSH,
     // --- end weezterm remote features ---
 }
 
@@ -662,6 +666,25 @@ impl Window {
             invalidated: true,
             // --- weezterm remote features ---
             current_monitor_name: None,
+            bg_brush: {
+                // Initialize with the terminal scheme background color from
+                // config so the very first WM_ERASEBKGND matches the scheme.
+                let brush = if let Some(ref bg) = config.resolved_palette.background {
+                    let (r, g, b, _) = bg.as_rgba_u8();
+                    unsafe {
+                        winapi::um::wingdi::CreateSolidBrush(
+                            winapi::um::wingdi::RGB(r, g, b),
+                        )
+                    }
+                } else {
+                    unsafe {
+                        winapi::um::wingdi::GetStockObject(
+                            winapi::um::wingdi::BLACK_BRUSH as i32,
+                        ) as _
+                    }
+                };
+                brush
+            },
             // --- end weezterm remote features ---
         }));
 
@@ -1077,6 +1100,30 @@ impl WindowOps for Window {
                 Some((win_x, win_y, client_w, client_h))
             }
         }
+    }
+    // --- end weezterm remote features ---
+
+    // --- weezterm remote features ---
+    fn set_window_background_color(&self, r: f32, g: f32, b: f32) {
+        Connection::with_window_inner(self.0, move |inner| {
+            // Delete old brush if it wasn't a stock object
+            let old = inner.bg_brush;
+            let stock_black = unsafe {
+                winapi::um::wingdi::GetStockObject(
+                    winapi::um::wingdi::BLACK_BRUSH as i32,
+                ) as winapi::shared::windef::HBRUSH
+            };
+            if !old.is_null() && old != stock_black {
+                unsafe { winapi::um::wingdi::DeleteObject(old as _) };
+            }
+            let cr = winapi::um::wingdi::RGB(
+                (r * 255.0) as u8,
+                (g * 255.0) as u8,
+                (b * 255.0) as u8,
+            );
+            inner.bg_brush = unsafe { winapi::um::wingdi::CreateSolidBrush(cr) };
+            Ok(())
+        });
     }
     // --- end weezterm remote features ---
 
@@ -3162,16 +3209,22 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
         }
         // --- end weezterm remote features ---
         // --- weezterm remote features ---
-        // Paint exposed areas black during resize/redraw to prevent
-        // white flashes. The HDC is passed in wparam.
+        // Paint exposed areas with the terminal background color during
+        // resize/redraw. This prevents white/black flashes and makes the
+        // resize feel smooth — new areas match the terminal scheme color.
         WM_ERASEBKGND => {
             let hdc = wparam as winapi::shared::windef::HDC;
             let mut rc: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut rc);
-            let brush = winapi::um::wingdi::GetStockObject(
-                winapi::um::wingdi::BLACK_BRUSH as i32,
-            );
-            winapi::um::winuser::FillRect(hdc, &rc, brush as _);
+            let brush = if let Some(inner) = rc_from_hwnd(hwnd) {
+                let inner = inner.borrow();
+                inner.bg_brush
+            } else {
+                winapi::um::wingdi::GetStockObject(
+                    winapi::um::wingdi::BLACK_BRUSH as i32,
+                ) as _
+            };
+            winapi::um::winuser::FillRect(hdc, &rc, brush);
             Some(1)
         }
         // --- end weezterm remote features ---

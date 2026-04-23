@@ -352,6 +352,12 @@ pub trait WindowOps {
     fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
         None
     }
+
+    /// Set the background color used by the OS for painting exposed
+    /// window areas during resize (before the GPU renderer repaints).
+    /// Components are sRGB 0.0-1.0 range. On Windows this creates an
+    /// HBRUSH; on other platforms this may be a no-op.
+    fn set_window_background_color(&self, _r: f32, _g: f32, _b: f32) {}
     // --- end weezterm remote features ---
 
     /// Configure the Window so that the desktop environment

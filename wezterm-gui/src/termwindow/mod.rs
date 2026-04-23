@@ -937,6 +937,15 @@ impl TermWindow {
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
             }
             myself.load_os_parameters();
+            // --- weezterm remote features ---
+            // Set the OS window background color to match the terminal scheme
+            // BEFORE showing the window. This ensures the first WM_ERASEBKGND
+            // paints the scheme color, not black/white.
+            {
+                let bg = myself.palette().background;
+                window.set_window_background_color(bg.0, bg.1, bg.2);
+            }
+            // --- end weezterm remote features ---
             window.show();
             // --- weezterm remote features ---
             // Restore maximized/fullscreen state from saved window state.
@@ -1985,6 +1994,11 @@ impl TermWindow {
             self.apply_scale_change(&dimensions, self.fonts.get_font_scale());
             self.apply_dimensions(&dimensions, None, &window);
             window.config_did_change(&config);
+            // --- weezterm remote features ---
+            // Update OS background color to match the (possibly new) color scheme
+            let bg = self.palette().background;
+            window.set_window_background_color(bg.0, bg.1, bg.2);
+            // --- end weezterm remote features ---
             window.invalidate();
             log::debug!("config_was_reloaded: scale+dimensions applied");
         }
