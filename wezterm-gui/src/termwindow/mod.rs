@@ -833,8 +833,52 @@ impl TermWindow {
                 .unwrap_or_else(|| mux.active_workspace());
             if let Some(saved) = crate::window_state_persistence::load_window_state(&workspace) {
                 // Use the saved monitor name to place window on the right monitor.
-                // Coordinates are relative to the monitor origin.
-                if let Some(ref monitor) = saved.monitor {
+                // If the name is stale (e.g. RDP changed it), fall back to the
+                // saved grid position to find the right monitor.
+                let resolved_monitor = {
+                    use ::window::ConnectionOps;
+                    let screens = ::window::Connection::get().and_then(|conn| conn.screens().ok());
+
+                    if let Some(ref screens) = screens {
+                        // First try: exact name match
+                        if let Some(ref name) = saved.monitor {
+                            if screens.by_name.contains_key(name) {
+                                Some(name.clone())
+                            } else if let Some(ref pos) = saved.monitor_position {
+                                // Name not found — fall back to position
+                                let pos_map =
+                                    ::window::screen::compute_monitor_positions(&screens.by_name);
+                                let found = pos_map.iter().find(|(_, p)| *p == pos);
+                                if let Some((monitor_name, _)) = found {
+                                    log::info!(
+                                        "Monitor {:?} not found, falling back to \
+                                         position {:?} -> {:?}",
+                                        name,
+                                        pos,
+                                        monitor_name,
+                                    );
+                                    Some(monitor_name.clone())
+                                } else {
+                                    log::warn!(
+                                        "Monitor {:?} not found and position {:?} \
+                                         unresolved, using primary",
+                                        name,
+                                        pos,
+                                    );
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        saved.monitor.clone()
+                    }
+                };
+
+                if let Some(ref monitor) = resolved_monitor {
                     log::info!(
                         "Restoring window to monitor {:?} (workspace {:?})",
                         monitor,
@@ -842,8 +886,14 @@ impl TermWindow {
                     );
                     origin = GeometryOrigin::Named(monitor.clone());
                     if saved.x != 0 || saved.y != 0 {
-                        x.replace(Dimension::Pixels(saved.x as f32));
-                        y.replace(Dimension::Pixels(saved.y as f32));
+                        // Only use saved x/y if the monitor name matched exactly.
+                        // If we fell back to position, the old coordinates are
+                        // from a different monitor layout and would be wrong.
+                        if saved.monitor.as_ref() == Some(monitor) {
+                            x.replace(Dimension::Pixels(saved.x as f32));
+                            y.replace(Dimension::Pixels(saved.y as f32));
+                        }
+                        // else: let OS center on the matched monitor
                     }
                     // else leave x/y as None so OS centers on the monitor
                 } else {
@@ -2049,6 +2099,19 @@ impl TermWindow {
             }
         };
 
+        // Compute current monitor position for fallback on restore
+        let monitor_position: Option<String> = {
+            use ::window::ConnectionOps;
+            self.current_screen_name.as_ref().and_then(|name| {
+                ::window::Connection::get()
+                    .and_then(|conn| conn.screens().ok())
+                    .and_then(|screens| {
+                        let pos_map = ::window::screen::compute_monitor_positions(&screens.by_name);
+                        pos_map.get(name).cloned()
+                    })
+            })
+        };
+
         let state = crate::window_state_persistence::SavedWindowState {
             x,
             y,
@@ -2057,6 +2120,7 @@ impl TermWindow {
             maximized: self.window_state.contains(WindowState::MAXIMIZED),
             fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
             monitor: self.current_screen_name.clone(),
+            monitor_position,
         };
 
         crate::window_state_persistence::save_window_state(&workspace, state);

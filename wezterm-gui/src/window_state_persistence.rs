@@ -29,6 +29,10 @@ pub struct SavedWindowState {
     /// Name of the monitor the window was on
     #[serde(default)]
     pub monitor: Option<String>,
+    /// Grid position of the monitor (e.g. "top-left"), for fallback
+    /// when monitor name changes across RDP sessions.
+    #[serde(default)]
+    pub monitor_position: Option<String>,
 }
 
 /// Returns the path to the window state file.
