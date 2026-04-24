@@ -141,7 +141,9 @@ pub(crate) fn parse_docker_ps_output(output: &str) -> Vec<DockerPsEntry> {
 /// Parse the JSON output of `docker inspect <ids...>`.
 ///
 /// Output is a JSON array of inspect results.
-pub(crate) fn parse_docker_inspect_output(output: &str) -> anyhow::Result<Vec<DockerInspectResult>> {
+pub(crate) fn parse_docker_inspect_output(
+    output: &str,
+) -> anyhow::Result<Vec<DockerInspectResult>> {
     serde_json::from_str(output).context("Failed to parse docker inspect output")
 }
 
@@ -182,7 +184,10 @@ pub(crate) fn inspect_to_container_info(inspect: &DockerInspectResult) -> Option
 
 /// Extract workspace folder from devcontainer metadata or fallback to
 /// the container's working directory.
-fn extract_workspace_folder(metadata_json: Option<&str>, working_dir: Option<&str>) -> Option<String> {
+fn extract_workspace_folder(
+    metadata_json: Option<&str>,
+    working_dir: Option<&str>,
+) -> Option<String> {
     if let Some(json) = metadata_json {
         // devcontainer.metadata is a JSON array of metadata entries.
         // The last entry with a remoteWorkspaceFolder wins.
@@ -224,10 +229,7 @@ pub fn docker_ps_args(docker_command: &str) -> Vec<String> {
 
 /// Build the `docker inspect` command arguments.
 pub fn docker_inspect_args(docker_command: &str, container_ids: &[String]) -> Vec<String> {
-    let mut args = vec![
-        docker_command.to_string(),
-        "inspect".to_string(),
-    ];
+    let mut args = vec![docker_command.to_string(), "inspect".to_string()];
     args.extend(container_ids.iter().cloned());
     args
 }
@@ -435,10 +437,7 @@ mod test {
     #[test]
     fn test_docker_exec_args_minimal() {
         let args = docker_exec_args("docker", "abc123", None, None, "/bin/bash");
-        assert_eq!(
-            args,
-            vec!["docker", "exec", "-it", "abc123", "/bin/bash"]
-        );
+        assert_eq!(args, vec!["docker", "exec", "-it", "abc123", "/bin/bash"]);
     }
 
     #[test]
@@ -468,11 +467,24 @@ mod test {
 
     #[test]
     fn test_docker_exec_args_workdir_only() {
-        let args =
-            docker_exec_args("docker", "abc123", Some("/workspaces/proj"), None, "/bin/bash");
+        let args = docker_exec_args(
+            "docker",
+            "abc123",
+            Some("/workspaces/proj"),
+            None,
+            "/bin/bash",
+        );
         assert_eq!(
             args,
-            vec!["docker", "exec", "-it", "-w", "/workspaces/proj", "abc123", "/bin/bash"]
+            vec![
+                "docker",
+                "exec",
+                "-it",
+                "-w",
+                "/workspaces/proj",
+                "abc123",
+                "/bin/bash"
+            ]
         );
     }
 }

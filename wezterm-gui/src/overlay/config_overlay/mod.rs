@@ -19,8 +19,7 @@ pub mod theme;
 
 pub use data::{FieldDef, FieldKind, Section, SshDomainConfig};
 // --- weezterm remote features ---
-pub use data::MonitorOverrideEntry;
-pub use data::DevContainerOverlayConfig;
+pub use data::{DevContainerOverlayConfig, MonitorOverrideEntry};
 // --- end weezterm remote features ---
 
 /// Result returned by the config overlay to the caller.
@@ -1198,13 +1197,11 @@ pub fn run_config_overlay(
         {
             continue;
         }
-        state
-            .devcontainer_entries
-            .push(data::DevContainerEntry {
-                config: saved_dc,
-                source: data::DomainSource::Overlay,
-                expanded: false,
-            });
+        state.devcontainer_entries.push(data::DevContainerEntry {
+            config: saved_dc,
+            source: data::DomainSource::Overlay,
+            expanded: false,
+        });
     }
     // --- end weezterm remote features ---
     let theme = theme::Theme::from_palette(&palette);

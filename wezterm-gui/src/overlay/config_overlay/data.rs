@@ -1128,8 +1128,7 @@ pub struct DevContainerEntry {
 
 /// Field definitions for devcontainer-specific settings (NOT the SSH sub-fields).
 /// SSH fields are provided by `domain_field_defs()` and rendered as a nested group.
-pub fn devcontainer_own_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)>
-{
+pub fn devcontainer_own_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)> {
     use FieldKind::*;
     vec![
         (
@@ -1217,8 +1216,7 @@ pub fn set_devcontainer_field(config: &mut DevContainerOverlayConfig, field: &st
 
 /// Returns ALL field definitions for a devcontainer domain: own fields + SSH fields.
 /// Used by `visible_settings()` to build the flattened child row list.
-pub fn devcontainer_all_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)>
-{
+pub fn devcontainer_all_field_defs() -> Vec<(&'static str, &'static str, FieldKind, &'static str)> {
     let mut fields = devcontainer_own_field_defs();
     // Append the full SSH domain fields — same defs, no duplication
     fields.extend(domain_field_defs());

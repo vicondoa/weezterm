@@ -96,7 +96,9 @@ impl super::TermWindow {
         let _t = std::time::Instant::now();
         log::debug!(
             "apply_scale_change: dims={:?} font_scale={} dpi={}",
-            dimensions, font_scale, dimensions.dpi
+            dimensions,
+            font_scale,
+            dimensions.dpi
         );
         let config = &self.config;
         let font_size = config.font_size * font_scale;
@@ -392,7 +394,9 @@ impl super::TermWindow {
         let _t = std::time::Instant::now();
         log::debug!(
             "scaling_changed: dims={:?} font_scale={} dpi={}",
-            dimensions, font_scale, dimensions.dpi
+            dimensions,
+            font_scale,
+            dimensions.dpi
         );
         fn dpi_adjusted(n: usize, dpi: usize) -> f32 {
             n as f32 / dpi as f32

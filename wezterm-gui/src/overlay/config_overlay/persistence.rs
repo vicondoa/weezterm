@@ -7,8 +7,7 @@
 
 use super::data::SshDomainConfig;
 // --- weezterm remote features ---
-use super::data::MonitorOverrideEntry;
-use super::data::DevContainerOverlayConfig;
+use super::data::{DevContainerOverlayConfig, MonitorOverrideEntry};
 // --- end weezterm remote features ---
 use std::collections::HashMap;
 use wezterm_dynamic::Value;
@@ -81,12 +80,11 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
             } else {
                 vec![]
             };
-            let devcontainer_domains =
-                if let Some(d) = obj.get("devcontainer_domains") {
-                    parse_devcontainer_domains(d)
-                } else {
-                    vec![]
-                };
+            let devcontainer_domains = if let Some(d) = obj.get("devcontainer_domains") {
+                parse_devcontainer_domains(d)
+            } else {
+                vec![]
+            };
             // --- end weezterm remote features ---
             Ok(OverlayData {
                 proposals,

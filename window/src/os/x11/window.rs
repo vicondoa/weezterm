@@ -2255,12 +2255,7 @@ impl WindowOps for XWindow {
             src_y: 0,
         });
         match conn.conn().wait_for_reply(cookie) {
-            Ok(reply) => Some((
-                reply.dst_x() as isize,
-                reply.dst_y() as isize,
-                w,
-                h,
-            )),
+            Ok(reply) => Some((reply.dst_x() as isize, reply.dst_y() as isize, w, h)),
             Err(_) => {
                 // If translate fails, return dimensions without position
                 Some((0, 0, w, h))

@@ -507,8 +507,14 @@ impl Window {
         log::trace!(
             "placement_rect_to_client: frame=({},{},{},{}) \
              client_pos=({},{}) client_size={}x{}",
-            frame_left, frame_top, frame_right, frame_bottom,
-            client_x, client_y, client_w, client_h,
+            frame_left,
+            frame_top,
+            frame_right,
+            frame_bottom,
+            client_x,
+            client_y,
+            client_w,
+            client_h,
         );
 
         if client_w == 0 || client_h == 0 {
@@ -544,9 +550,7 @@ impl Window {
             // Use black background brush to prevent white flash on startup.
             // The window is painted black until the terminal renderer takes over.
             hbrBackground: unsafe {
-                winapi::um::wingdi::GetStockObject(
-                    winapi::um::wingdi::BLACK_BRUSH as i32,
-                ) as _
+                winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32) as _
             },
             // --- end weezterm remote features ---
             lpszMenuName: null(),
@@ -672,15 +676,12 @@ impl Window {
                 let brush = if let Some(ref bg) = config.resolved_palette.background {
                     let (r, g, b, _) = bg.as_rgba_u8();
                     unsafe {
-                        winapi::um::wingdi::CreateSolidBrush(
-                            winapi::um::wingdi::RGB(r, g, b),
-                        )
+                        winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(r, g, b))
                     }
                 } else {
                     unsafe {
-                        winapi::um::wingdi::GetStockObject(
-                            winapi::um::wingdi::BLACK_BRUSH as i32,
-                        ) as _
+                        winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32)
+                            as _
                     }
                 };
                 brush
@@ -1079,7 +1080,12 @@ impl WindowOps for Window {
             log::trace!(
                 "get_window_placement: maximized/fullscreen, \
                  rc=({},{})..({},{}) dpi={} style={:#x}",
-                rc.left, rc.top, rc.right, rc.bottom, dpi, style,
+                rc.left,
+                rc.top,
+                rc.right,
+                rc.bottom,
+                dpi,
+                style,
             );
             self.placement_rect_to_client(rc, style, dpi)
         } else {
@@ -1108,7 +1114,10 @@ impl WindowOps for Window {
 
                 log::trace!(
                     "get_window_placement: normal, win_pos=({},{}) client={}x{}",
-                    win_x, win_y, client_w, client_h,
+                    win_x,
+                    win_y,
+                    client_w,
+                    client_h,
                 );
 
                 if client_w == 0 || client_h == 0 {
@@ -1127,18 +1136,14 @@ impl WindowOps for Window {
             // Delete old brush if it wasn't a stock object
             let old = inner.bg_brush;
             let stock_black = unsafe {
-                winapi::um::wingdi::GetStockObject(
-                    winapi::um::wingdi::BLACK_BRUSH as i32,
-                ) as winapi::shared::windef::HBRUSH
+                winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32)
+                    as winapi::shared::windef::HBRUSH
             };
             if !old.is_null() && old != stock_black {
                 unsafe { winapi::um::wingdi::DeleteObject(old as _) };
             }
-            let cr = winapi::um::wingdi::RGB(
-                (r * 255.0) as u8,
-                (g * 255.0) as u8,
-                (b * 255.0) as u8,
-            );
+            let cr =
+                winapi::um::wingdi::RGB((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
             inner.bg_brush = unsafe { winapi::um::wingdi::CreateSolidBrush(cr) };
             Ok(())
         });

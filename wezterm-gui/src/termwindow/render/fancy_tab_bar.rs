@@ -152,12 +152,7 @@ impl crate::TermWindow {
             .resolved_palette
             .tab_bar
             .clone()
-            .or_else(|| {
-                self.config
-                    .colors
-                    .as_ref()
-                    .and_then(|c| c.tab_bar.clone())
-            })
+            .or_else(|| self.config.colors.as_ref().and_then(|c| c.tab_bar.clone()))
             .unwrap_or_else(|| derive_tab_bar_colors_from_palette(palette));
         // --- end weezterm remote features ---
 
@@ -167,7 +162,10 @@ impl crate::TermWindow {
         // --- weezterm remote features ---
         // Derive titlebar background/foreground from palette when window_frame
         // uses its hardcoded defaults, so the tab bar matches the color scheme.
-        let frame_bg = self.config.resolved_palette.background
+        let frame_bg = self
+            .config
+            .resolved_palette
+            .background
             .map(|c| {
                 let (r, g, b, _a) = c.to_srgb_u8();
                 // Slightly darken bg for bar distinction
@@ -182,7 +180,10 @@ impl crate::TermWindow {
             } else {
                 self.config.window_frame.inactive_titlebar_bg
             });
-        let frame_fg = self.config.resolved_palette.foreground
+        let frame_fg = self
+            .config
+            .resolved_palette
+            .foreground
             .map(|c| {
                 let (r, g, b, _a) = c.to_srgb_u8();
                 config::RgbaColor::from((r, g, b))
@@ -336,13 +337,11 @@ impl crate::TermWindow {
                         bottom: Dimension::Pixels(0.),
                     })
                     .colors(ElementColors {
-                        border: BorderColor::new(
-                            active_tab.bg_color.to_linear(),
-                        ),
+                        border: BorderColor::new(active_tab.bg_color.to_linear()),
                         bg: active_tab.bg_color.to_linear().into(),
                         text: active_tab.fg_color.to_linear().into(),
                     }),
-                    // --- end weezterm remote features ---
+                // --- end weezterm remote features ---
                 TabBarItem::Tab { .. } => element
                     .vertical_align(VerticalAlign::Bottom)
                     .item_type(UIItemType::TabBar(item.item.clone()))
@@ -369,9 +368,7 @@ impl crate::TermWindow {
                     .colors({
                         let inactive_tab = colors.inactive_tab();
                         ElementColors {
-                            border: BorderColor::new(
-                                inactive_tab.fg_color.to_linear(),
-                            ),
+                            border: BorderColor::new(inactive_tab.fg_color.to_linear()),
                             bg: inactive_tab.bg_color.to_linear().into(),
                             text: inactive_tab.fg_color.to_linear().into(),
                         }
@@ -379,14 +376,12 @@ impl crate::TermWindow {
                     .hover_colors({
                         let inactive_tab_hover = colors.inactive_tab_hover();
                         Some(ElementColors {
-                            border: BorderColor::new(
-                                inactive_tab_hover.fg_color.to_linear(),
-                            ),
+                            border: BorderColor::new(inactive_tab_hover.fg_color.to_linear()),
                             bg: inactive_tab_hover.bg_color.to_linear().into(),
                             text: inactive_tab_hover.fg_color.to_linear().into(),
                         })
                     }),
-                    // --- end weezterm remote features ---
+                // --- end weezterm remote features ---
                 TabBarItem::WindowButton(button) => window_button_element(
                     button,
                     self.window_state.contains(window::WindowState::MAXIMIZED),
@@ -541,7 +536,7 @@ impl crate::TermWindow {
                 bg: frame_bg.to_linear().into(),
                 text: frame_fg.to_linear().into(),
             });
-            // --- end weezterm remote features ---
+        // --- end weezterm remote features ---
 
         let border = self.get_os_border();
 

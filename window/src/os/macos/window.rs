@@ -891,8 +891,7 @@ impl WindowOps for Window {
                         let screens = NSScreen::screens(nil);
                         let primary = screens.objectAtIndex(0);
                         let frame = NSScreen::frame(primary);
-                        let backing_frame =
-                            NSScreen::convertRectToBacking_(primary, frame);
+                        let backing_frame = NSScreen::convertRectToBacking_(primary, frame);
                         let scale = backing_frame.size.height / frame.size.height;
 
                         return Some((
@@ -919,8 +918,7 @@ impl WindowOps for Window {
             let screens = NSScreen::screens(nil);
             let primary = screens.objectAtIndex(0);
             let screen_frame = NSScreen::frame(primary);
-            let backing_frame =
-                NSScreen::convertRectToBacking_(primary, screen_frame);
+            let backing_frame = NSScreen::convertRectToBacking_(primary, screen_frame);
             let scale = backing_frame.size.height / screen_frame.size.height;
 
             Some((

@@ -61,7 +61,11 @@ impl ContainerManagerState {
 
     /// Set the primary container. Returns the container info if found.
     fn set_primary(&mut self, container_id: &str) -> Option<&DevContainerInfo> {
-        if self.containers.iter().any(|c| c.container_id == container_id) {
+        if self
+            .containers
+            .iter()
+            .any(|c| c.container_id == container_id)
+        {
             self.primary_container_id = Some(container_id.to_string());
             self.primary_container()
         } else {
@@ -79,8 +83,7 @@ impl ContainerManagerState {
         if let Some(ref default) = config.default_container {
             if let Some(c) = self.containers.iter().find(|c| {
                 c.status.is_running()
-                    && (c.container_id.starts_with(default)
-                        || c.container_name == *default)
+                    && (c.container_id.starts_with(default) || c.container_name == *default)
             }) {
                 self.primary_container_id = Some(c.container_id.clone());
                 return;
@@ -143,11 +146,7 @@ impl DevContainerDomain {
             cmd.arg(workdir);
         }
         cmd.arg(&container.container_id);
-        let shell = self
-            .config
-            .default_shell
-            .as_deref()
-            .unwrap_or("/bin/bash");
+        let shell = self.config.default_shell.as_deref().unwrap_or("/bin/bash");
         cmd.arg(shell);
         cmd
     }
@@ -194,15 +193,13 @@ impl Domain for DevContainerDomain {
         let cmd = if let Some(cmd) = command {
             cmd
         } else {
-            let container = self
-                .primary_container()
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "No primary devcontainer selected for domain '{}'. \
+            let container = self.primary_container().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "No primary devcontainer selected for domain '{}'. \
                          Use the DevContainer Manager (Ctrl+Shift+D) to select one.",
-                        self.name
-                    )
-                })?;
+                    self.name
+                )
+            })?;
 
             if !container.status.is_running() {
                 bail!(

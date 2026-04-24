@@ -16,17 +16,29 @@ use termwiz::terminal::Terminal;
 pub enum DevContainerAction {
     Close,
     /// Connect to a container (open new tab)
-    Connect { container_id: String },
+    Connect {
+        container_id: String,
+    },
     /// Set a container as the primary for new tabs
-    SetPrimary { container_id: String },
+    SetPrimary {
+        container_id: String,
+    },
     /// Start a stopped container
-    StartContainer { container_id: String },
+    StartContainer {
+        container_id: String,
+    },
     /// Stop a running container
-    StopContainer { container_id: String },
+    StopContainer {
+        container_id: String,
+    },
     /// Delete a container
-    DeleteContainer { container_id: String },
+    DeleteContainer {
+        container_id: String,
+    },
     /// Create a new container from a workspace folder
-    CreateContainer { workspace_folder: String },
+    CreateContainer {
+        workspace_folder: String,
+    },
 }
 
 /// Run the devcontainer manager overlay.
@@ -149,12 +161,8 @@ pub fn run_devcontainer_overlay(
                     }) => {
                         if state.is_create_row() {
                             // Enter create mode
-                            state.create_input = Some(
-                                state
-                                    .default_workspace_folder
-                                    .clone()
-                                    .unwrap_or_default(),
-                            );
+                            state.create_input =
+                                Some(state.default_workspace_folder.clone().unwrap_or_default());
                         } else if let Some(entry) = state.selected_entry() {
                             if state.expanded.as_deref() == Some(&entry.container_id) {
                                 state.expanded = None;
@@ -244,12 +252,8 @@ pub fn run_devcontainer_overlay(
                         modifiers: Modifiers::NONE,
                         ..
                     }) => {
-                        state.create_input = Some(
-                            state
-                                .default_workspace_folder
-                                .clone()
-                                .unwrap_or_default(),
-                        );
+                        state.create_input =
+                            Some(state.default_workspace_folder.clone().unwrap_or_default());
                     }
 
                     InputEvent::Key(KeyEvent {
@@ -368,9 +372,10 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
 
         if !running.is_empty() {
             push_bold_white(&mut changes);
-            changes.push(Change::Text(
-                format!(" RUNNING ({})\r\n\r\n", running.len()),
-            ));
+            changes.push(Change::Text(format!(
+                " RUNNING ({})\r\n\r\n",
+                running.len()
+            )));
             for entry in &running {
                 render_container_row(&mut changes, state, entry, row_idx);
                 if state.expanded.as_deref() == Some(&entry.container_id) {
@@ -383,9 +388,10 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
 
         if !stopped.is_empty() {
             push_bold_white(&mut changes);
-            changes.push(Change::Text(
-                format!(" STOPPED ({})\r\n\r\n", stopped.len()),
-            ));
+            changes.push(Change::Text(format!(
+                " STOPPED ({})\r\n\r\n",
+                stopped.len()
+            )));
             for entry in &stopped {
                 render_container_row(&mut changes, state, entry, row_idx);
                 if state.expanded.as_deref() == Some(&entry.container_id) {
@@ -414,18 +420,12 @@ fn render_overlay(term: &mut impl Terminal, state: &OverlayState) -> anyhow::Res
         // Inline create input
         if let Some(ref input_text) = state.create_input {
             push_grey(&mut changes);
-            changes.push(Change::Text(
-                "   \u{2502}\r\n".into(),
-            ));
-            changes.push(Change::Text(
-                "   \u{2502}  Workspace folder: ".into(),
-            ));
+            changes.push(Change::Text("   \u{2502}\r\n".into()));
+            changes.push(Change::Text("   \u{2502}  Workspace folder: ".into()));
             push_white(&mut changes);
             changes.push(Change::Text(format!("{}\u{258F}\r\n", input_text)));
             push_grey(&mut changes);
-            changes.push(Change::Text(
-                "   \u{2502}\r\n".into(),
-            ));
+            changes.push(Change::Text("   \u{2502}\r\n".into()));
         }
     }
 

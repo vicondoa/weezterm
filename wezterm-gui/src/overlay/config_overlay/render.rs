@@ -551,20 +551,14 @@ fn render_details(frame: &mut Frame, state: &OverlayState, theme: &Theme, area: 
                         theme.detail_title,
                     )),
                     Line::from(Span::styled(
-                        format!(
-                            " Host: {}  Source: {}",
-                            row.current_value, source_str
-                        ),
+                        format!(" Host: {}  Source: {}", row.current_value, source_str),
                         theme.detail,
                     )),
                     Line::from(Span::styled(" Enter to expand/collapse", theme.text_dim)),
                 ]
             } else if row.field_name == super::ADD_DEVCONTAINER_FIELD_NAME {
                 vec![
-                    Line::from(Span::styled(
-                        " Add DevContainer Domain",
-                        theme.detail_title,
-                    )),
+                    Line::from(Span::styled(" Add DevContainer Domain", theme.detail_title)),
                     Line::from(Span::styled(
                         " Press Enter to create a new devcontainer domain",
                         theme.detail,

@@ -2044,9 +2044,7 @@ impl TermWindow {
         let (x, y, width, height) = match window.get_window_placement() {
             Some(placement) => placement,
             None => {
-                log::warn!(
-                    "Skipping window state save: placement unavailable"
-                );
+                log::warn!("Skipping window state save: placement unavailable");
                 return;
             }
         };
@@ -2769,7 +2767,13 @@ impl TermWindow {
         // Helper to find any devcontainer domain when the active pane isn't in one
         fn find_any_dc(
             mux: &Arc<Mux>,
-        ) -> (Vec<DevContainerInfo>, String, String, Option<String>, Option<String>) {
+        ) -> (
+            Vec<DevContainerInfo>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) {
             use mux::domain::Domain as DomainTrait;
             for domain in mux.iter_domains() {
                 if let Some(dc) = domain.downcast_ref::<DevContainerDomain>() {
@@ -2786,7 +2790,13 @@ impl TermWindow {
                     );
                 }
             }
-            (vec![], "devcontainer".to_string(), "localhost".to_string(), None, None)
+            (
+                vec![],
+                "devcontainer".to_string(),
+                "localhost".to_string(),
+                None,
+                None,
+            )
         }
 
         let (entries, domain_name, host_label, primary_id, default_workspace) =
