@@ -124,38 +124,15 @@ pub struct Mux {
 
 const BUFSIZE: usize = 1024 * 1024;
 
-// --- weezterm remote features ---
-/// Minimum interval between PaneOutput notifications sent to subscribers.
-/// During heavy output, the terminal model is updated on every batch, but
-/// triggering a full render/serialize cycle more than ~60 times/sec is
-/// wasteful. This throttles only the notification, not the data processing.
-const MIN_PANE_OUTPUT_NOTIFY_INTERVAL: Duration = Duration::from_millis(16);
-// --- end weezterm remote features ---
-
 /// This function applies parsed actions to the pane and notifies any
 /// mux subscribers about the output event
-fn send_actions_to_mux(
-    pane: &Weak<dyn Pane>,
-    dead: &Arc<AtomicBool>,
-    actions: Vec<Action>,
-    // --- weezterm remote features ---
-    last_notify: &mut Instant,
-    // --- end weezterm remote features ---
-) {
+fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: Vec<Action>) {
     let start = Instant::now();
     match pane.upgrade() {
         Some(pane) => {
             pane.perform_actions(actions);
             histogram!("send_actions_to_mux.perform_actions.latency").record(start.elapsed());
-            // --- weezterm remote features ---
-            // Only send PaneOutput notification if enough time has passed
-            // since the last one. This reduces the number of render/serialize
-            // cycles the server performs during heavy output.
-            if last_notify.elapsed() >= MIN_PANE_OUTPUT_NOTIFY_INTERVAL {
-                Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
-                *last_notify = Instant::now();
-            }
-            // --- end weezterm remote features ---
+            Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
         }
         None => {
             // Something else removed the pane from
@@ -175,9 +152,6 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     let mut action_size = 0;
     let mut delay = Duration::from_millis(configuration().mux_output_parser_coalesce_delay_ms);
     let mut deadline = None;
-    // --- weezterm remote features ---
-    let mut last_notify = Instant::now();
-    // --- end weezterm remote features ---
 
     loop {
         match rx.read(&mut buf) {
@@ -200,7 +174,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
 
                             // Flush prior actions
                             if !actions.is_empty() {
-                                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions), &mut last_notify);
+                                send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
                                 action_size = 0;
                             }
                         }
@@ -219,7 +193,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                     action.append_to(&mut actions);
 
                     if flush && !actions.is_empty() {
-                        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions), &mut last_notify);
+                        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
                         action_size = 0;
                     }
                 });
@@ -254,7 +228,7 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
                         }
                     }
 
-                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions), &mut last_notify);
+                    send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
                     deadline = None;
                     action_size = 0;
                 }
@@ -271,15 +245,8 @@ fn parse_buffered_data(pane: Weak<dyn Pane>, dead: &Arc<AtomicBool>, mut rx: Fil
     // for very short lived commands so that we don't forget to
     // display what they displayed.
     if !actions.is_empty() {
-        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions), &mut last_notify);
+        send_actions_to_mux(&pane, &dead, std::mem::take(&mut actions));
     }
-    // --- weezterm remote features ---
-    // Ensure a final notification is sent so the client knows about
-    // the last batch of output, even if we throttled notifications above.
-    if let Some(pane) = pane.upgrade() {
-        Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
-    }
-    // --- end weezterm remote features ---
 }
 
 fn set_socket_buffer(fd: &mut FileDescriptor, option: i32, size: usize) -> anyhow::Result<()> {
