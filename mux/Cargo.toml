@@ -37,6 +37,7 @@ promise.workspace = true
 rangeset.workspace = true
 regex.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
+serde_json.workspace = true
 serial2.workspace = true
 shell-words.workspace = true
 smol.workspace = true

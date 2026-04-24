@@ -558,4 +558,53 @@ impl WebGpuState {
             self.surface.configure(&self.device, &config);
         }
     }
+
+    // --- weezterm remote features ---
+    /// Immediately clear the surface and present. Used to paint the scheme
+    /// background color before the first real terminal paint, and to
+    /// eliminate white flash from newly-created WebGPU surfaces.
+    pub fn clear_and_present_with_color(&self, r: f64, g: f64, b: f64) {
+        let dims = self.dimensions.borrow();
+        if dims.pixel_width == 0 || dims.pixel_height == 0 {
+            return;
+        }
+        drop(dims);
+
+        let output = match self.surface.get_current_texture() {
+            Ok(output) => output,
+            Err(_) => return,
+        };
+        let view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("clear_and_present"),
+            });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("clear_pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1.0 }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+        output.present();
+    }
+
+    /// Convenience: clear to black.
+    pub fn clear_and_present(&self) {
+        self.clear_and_present_with_color(0.0, 0.0, 0.0);
+    }
+    // --- end weezterm remote features ---
 }

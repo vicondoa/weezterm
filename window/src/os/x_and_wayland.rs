@@ -408,4 +408,14 @@ impl WindowOps for Window {
             Self::Wayland(w) => w.set_clipboard(clipboard, text),
         }
     }
+
+    // --- weezterm remote features ---
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        match self {
+            Self::X11(x) => x.get_window_placement(),
+            #[cfg(feature = "wayland")]
+            Self::Wayland(_w) => None, // Wayland: position is compositor-managed
+        }
+    }
+    // --- end weezterm remote features ---
 }

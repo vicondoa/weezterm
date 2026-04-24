@@ -28,6 +28,7 @@ impl super::TermWindow {
         live_resizing: bool,
     ) {
         // --- weezterm remote features ---
+        let _t = std::time::Instant::now();
         log::debug!(
             "resize event, live={} current cells: {:?}, current dims: {:?}, new dims: {:?} window_state:{:?}",
             live_resizing,
@@ -70,6 +71,7 @@ impl super::TermWindow {
             modal.reconfigure(self);
         }
         self.emit_window_event("window-resized", None);
+        log::debug!("resize event completed in {:?}", _t.elapsed());
     }
 
     pub fn apply_pending_scale_changes(&mut self) {
@@ -91,6 +93,13 @@ impl super::TermWindow {
     }
 
     pub fn apply_scale_change(&mut self, dimensions: &Dimensions, font_scale: f64) {
+        let _t = std::time::Instant::now();
+        log::debug!(
+            "apply_scale_change: dims={:?} font_scale={} dpi={}",
+            dimensions,
+            font_scale,
+            dimensions.dpi
+        );
         let config = &self.config;
         let font_size = config.font_size * font_scale;
         let theoretical_height = font_size * dimensions.dpi as f64 / 72.0;
@@ -128,6 +137,7 @@ impl super::TermWindow {
         }
         self.invalidate_fancy_tab_bar();
         self.invalidate_modal();
+        log::debug!("apply_scale_change completed in {:?}", _t.elapsed());
     }
 
     pub fn apply_dimensions(
@@ -136,6 +146,7 @@ impl super::TermWindow {
         mut scale_changed_cells: Option<RowsAndCols>,
         window: &Window,
     ) {
+        let _t = std::time::Instant::now();
         log::trace!(
             "apply_dimensions {:?} scale_changed_cells {:?}. window_state {:?}",
             dimensions,
@@ -380,6 +391,13 @@ impl super::TermWindow {
 
     #[allow(clippy::float_cmp)]
     pub fn scaling_changed(&mut self, dimensions: Dimensions, font_scale: f64, window: &Window) {
+        let _t = std::time::Instant::now();
+        log::debug!(
+            "scaling_changed: dims={:?} font_scale={} dpi={}",
+            dimensions,
+            font_scale,
+            dimensions.dpi
+        );
         fn dpi_adjusted(n: usize, dpi: usize) -> f32 {
             n as f32 / dpi as f32
         }
@@ -453,6 +471,7 @@ impl super::TermWindow {
             scale_changed_cells
         );
         self.apply_dimensions(&dimensions, scale_changed_cells, window);
+        log::debug!("scaling_changed completed in {:?}", _t.elapsed());
     }
 
     /// Used for applying font size changes only; this takes into account

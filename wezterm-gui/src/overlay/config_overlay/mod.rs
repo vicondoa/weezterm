@@ -19,7 +19,7 @@ pub mod theme;
 
 pub use data::{FieldDef, FieldKind, Section, SshDomainConfig};
 // --- weezterm remote features ---
-pub use data::MonitorOverrideEntry;
+pub use data::{DevContainerOverlayConfig, MonitorOverrideEntry};
 // --- end weezterm remote features ---
 
 /// Result returned by the config overlay to the caller.
@@ -33,6 +33,7 @@ pub enum ConfigOverlayAction {
         ssh_domains: Vec<SshDomainConfig>,
         // --- weezterm remote features ---
         monitor_overrides: Vec<MonitorOverrideEntry>,
+        devcontainer_domains: Vec<data::DevContainerOverlayConfig>,
         // --- end weezterm remote features ---
     },
     /// User chose to preview proposals (apply as window overrides).
@@ -78,6 +79,10 @@ pub(crate) struct SettingRow {
     pub monitor_header: Option<MonitorHeaderInfo>,
     /// If this is a monitor child field, holds the monitor index.
     pub monitor_child: Option<usize>,
+    /// If this is a devcontainer group header, holds the devcontainer index.
+    pub devcontainer_header: Option<DevContainerHeaderInfo>,
+    /// If this is a devcontainer child field, holds the devcontainer index.
+    pub devcontainer_child: Option<usize>,
     // --- end weezterm remote features ---
 }
 
@@ -97,12 +102,25 @@ pub(crate) struct MonitorHeaderInfo {
     pub is_current: bool,
     pub expanded: bool,
 }
+
+/// Info for a devcontainer group header row.
+#[derive(Debug, Clone)]
+pub(crate) struct DevContainerHeaderInfo {
+    pub domain_index: usize,
+    pub source: data::DomainSource,
+    pub expanded: bool,
+}
 // --- end weezterm remote features ---
 
 /// Sentinel row type for "Add SSH Domain..." action.
 const ADD_DOMAIN_FIELD_NAME: &str = "__add_ssh_domain__";
 /// Sentinel row type for "Delete Domain" action.
 const DELETE_DOMAIN_FIELD_NAME: &str = "__delete_domain__";
+
+// --- weezterm remote features ---
+const ADD_DEVCONTAINER_FIELD_NAME: &str = "__add_devcontainer__";
+const DELETE_DEVCONTAINER_FIELD_NAME: &str = "__delete_devcontainer__";
+// --- end weezterm remote features ---
 
 /// Internal state for the overlay.
 struct OverlayState {
@@ -148,6 +166,12 @@ struct OverlayState {
     /// Suppress the first mouse click to avoid passthrough from the overlay
     /// that opened us (e.g. command palette).
     ignore_first_mouse: bool,
+    /// DevContainer domain entries.
+    devcontainer_entries: Vec<data::DevContainerEntry>,
+    /// DevContainer being added inline (None = not in add mode).
+    adding_devcontainer: Option<data::DevContainerOverlayConfig>,
+    /// Whether devcontainer_entries has been modified.
+    devcontainers_dirty: bool,
     // --- end weezterm remote features ---
 }
 
@@ -272,6 +296,9 @@ impl OverlayState {
             monitors_dirty: false,
             monitor_scheme_picker: None,
             ignore_first_mouse: true,
+            devcontainer_entries: data::devcontainers_from_config(),
+            adding_devcontainer: None,
+            devcontainers_dirty: false,
             // --- end weezterm remote features ---
         }
     }
@@ -337,6 +364,8 @@ impl OverlayState {
                     domain_child: None,
                     monitor_header: None,
                     monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
                 }
             })
             .collect();
@@ -380,6 +409,8 @@ impl OverlayState {
                     domain_child: None,
                     monitor_header: None,
                     monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
                 });
 
                 // If expanded, show child fields
@@ -402,6 +433,8 @@ impl OverlayState {
                             domain_child: Some(idx),
                             monitor_header: None,
                             monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: None,
                         });
                     }
 
@@ -418,6 +451,8 @@ impl OverlayState {
                             domain_child: Some(idx),
                             monitor_header: None,
                             monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: None,
                         });
                     }
                 }
@@ -436,8 +471,119 @@ impl OverlayState {
                     domain_child: None,
                     monitor_header: None,
                     monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
                 });
             }
+            // --- weezterm remote features ---
+            // DevContainer domain entries in the same Domains section
+            let dc_fields = data::devcontainer_all_field_defs();
+            let filter_matches_dc = |entry: &data::DevContainerEntry| -> bool {
+                if filter_lower.is_empty() {
+                    return true;
+                }
+                entry.config.name.to_lowercase().contains(&filter_lower)
+                    || entry
+                        .config
+                        .ssh
+                        .remote_address
+                        .to_lowercase()
+                        .contains(&filter_lower)
+            };
+
+            for (idx, entry) in self.devcontainer_entries.iter().enumerate() {
+                if !filter_matches_dc(entry) {
+                    continue;
+                }
+
+                let value_summary = if entry.config.ssh.remote_address.is_empty() {
+                    "local".to_string()
+                } else {
+                    entry.config.ssh.remote_address.clone()
+                };
+
+                rows.push(SettingRow {
+                    field_name: format!("__devcontainer_header_{}__", idx),
+                    display_name: entry.config.name.clone(),
+                    current_value: value_summary,
+                    proposed_value: None,
+                    status: match entry.source {
+                        data::DomainSource::Lua => FieldStatus::FixedByLua,
+                        data::DomainSource::Overlay => FieldStatus::Editable,
+                    },
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
+                    devcontainer_header: Some(DevContainerHeaderInfo {
+                        domain_index: idx,
+                        source: entry.source,
+                        expanded: entry.expanded,
+                    }),
+                    devcontainer_child: None,
+                });
+
+                if entry.expanded {
+                    for (field_key, field_display, field_kind, _doc) in &dc_fields {
+                        let value = data::devcontainer_field_value(&entry.config, field_key);
+                        let is_editable = entry.source == data::DomainSource::Overlay;
+                        rows.push(SettingRow {
+                            field_name: format!("__devcontainer_{}_{}__", idx, field_key),
+                            display_name: format!("  {}", field_display),
+                            current_value: value,
+                            proposed_value: None,
+                            status: if is_editable {
+                                FieldStatus::Editable
+                            } else {
+                                FieldStatus::FixedByLua
+                            },
+                            kind: field_kind.clone(),
+                            domain_header: None,
+                            domain_child: None,
+                            monitor_header: None,
+                            monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: Some(idx),
+                        });
+                    }
+
+                    if entry.source == data::DomainSource::Overlay {
+                        rows.push(SettingRow {
+                            field_name: format!("{}_{}", DELETE_DEVCONTAINER_FIELD_NAME, idx),
+                            display_name: "  Delete Domain".to_string(),
+                            current_value: String::new(),
+                            proposed_value: None,
+                            status: FieldStatus::Editable,
+                            kind: FieldKind::Text,
+                            domain_header: None,
+                            domain_child: None,
+                            monitor_header: None,
+                            monitor_child: None,
+                            devcontainer_header: None,
+                            devcontainer_child: Some(idx),
+                        });
+                    }
+                }
+            }
+
+            if filter_lower.is_empty() || "add devcontainer domain".contains(&filter_lower) {
+                rows.push(SettingRow {
+                    field_name: ADD_DEVCONTAINER_FIELD_NAME.to_string(),
+                    display_name: "Add DevContainer Domain...".to_string(),
+                    current_value: String::new(),
+                    proposed_value: None,
+                    status: FieldStatus::Editable,
+                    kind: FieldKind::Text,
+                    domain_header: None,
+                    domain_child: None,
+                    monitor_header: None,
+                    monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
+                });
+            }
+            // --- end weezterm remote features ---
         }
 
         // --- weezterm remote features ---
@@ -476,6 +622,8 @@ impl OverlayState {
                         expanded: entry.expanded,
                     }),
                     monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
                 });
 
                 // If expanded, show child fields
@@ -497,6 +645,8 @@ impl OverlayState {
                         domain_child: None,
                         monitor_header: None,
                         monitor_child: Some(idx),
+                        devcontainer_header: None,
+                        devcontainer_child: None,
                     });
                 }
             }
@@ -513,6 +663,8 @@ impl OverlayState {
                     domain_child: None,
                     monitor_header: None,
                     monitor_child: None,
+                    devcontainer_header: None,
+                    devcontainer_child: None,
                 });
             }
         }
@@ -828,6 +980,130 @@ impl OverlayState {
         });
         self.selected_monitor = monitor_idx;
     }
+
+    /// Handle Enter on a devcontainer-related row.
+    fn handle_devcontainer_enter(&mut self, row: &SettingRow) {
+        // DevContainer header: toggle expand/collapse
+        if let Some(ref header) = row.devcontainer_header {
+            self.devcontainer_entries[header.domain_index].expanded =
+                !self.devcontainer_entries[header.domain_index].expanded;
+            return;
+        }
+
+        // "Add DevContainer Domain..." action
+        if row.field_name == ADD_DEVCONTAINER_FIELD_NAME {
+            self.adding_devcontainer = Some(data::DevContainerOverlayConfig::default());
+            self.inline_edit = Some(InlineEdit::new(
+                "__new_devcontainer_name__".to_string(),
+                String::new(),
+                FieldKind::Text,
+            ));
+            return;
+        }
+
+        // "Delete Domain" action
+        if row.field_name.starts_with(DELETE_DEVCONTAINER_FIELD_NAME) {
+            if let Some(dc_idx) = row.devcontainer_child {
+                if dc_idx < self.devcontainer_entries.len()
+                    && self.devcontainer_entries[dc_idx].source == data::DomainSource::Overlay
+                {
+                    self.devcontainer_entries.remove(dc_idx);
+                    self.devcontainers_dirty = true;
+                    self.dirty = true;
+                }
+            }
+            return;
+        }
+
+        // DevContainer child field (editable): open editor
+        if let Some(dc_idx) = row.devcontainer_child {
+            if dc_idx < self.devcontainer_entries.len()
+                && self.devcontainer_entries[dc_idx].source == data::DomainSource::Overlay
+            {
+                if let Some(field_key) = extract_devcontainer_field_key(&row.field_name) {
+                    match &row.kind {
+                        FieldKind::Bool => {
+                            self.toggle_devcontainer_bool(dc_idx, &field_key);
+                        }
+                        FieldKind::Enum(variants) => {
+                            self.enum_picker = Some(EnumPicker {
+                                field_name: row.field_name.clone(),
+                                variants: variants.clone(),
+                                selected: variants
+                                    .iter()
+                                    .position(|(v, _)| v == &row.current_value)
+                                    .unwrap_or(0),
+                            });
+                        }
+                        FieldKind::Float | FieldKind::Integer | FieldKind::Text => {
+                            self.inline_edit = Some(InlineEdit::new(
+                                row.field_name.clone(),
+                                row.current_value.clone(),
+                                row.kind.clone(),
+                            ));
+                        }
+                        FieldKind::ColorScheme => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fn toggle_devcontainer_bool(&mut self, dc_idx: usize, field_key: &str) {
+        if let Some(entry) = self.devcontainer_entries.get_mut(dc_idx) {
+            let current = data::devcontainer_field_value(&entry.config, field_key);
+            let new_val = if current == "On" { "Off" } else { "On" };
+            data::set_devcontainer_field(&mut entry.config, field_key, new_val);
+            self.devcontainers_dirty = true;
+            self.dirty = true;
+        }
+    }
+
+    fn apply_devcontainer_field_edit(&mut self, field_name: &str, value: &str) {
+        if let Some((dc_idx, field_key)) = parse_devcontainer_field_name(field_name) {
+            if let Some(entry) = self.devcontainer_entries.get_mut(dc_idx) {
+                if entry.source == data::DomainSource::Overlay {
+                    data::set_devcontainer_field(&mut entry.config, &field_key, value);
+                    self.devcontainers_dirty = true;
+                    self.dirty = true;
+                }
+            }
+        }
+    }
+
+    /// Finalize adding a new devcontainer domain.
+    fn finalize_add_devcontainer(&mut self, name: String) {
+        if name.is_empty() {
+            self.adding_devcontainer = None;
+            return;
+        }
+        if self
+            .devcontainer_entries
+            .iter()
+            .any(|e| e.config.name == name)
+        {
+            self.adding_devcontainer = None;
+            return;
+        }
+        let mut config = self.adding_devcontainer.take().unwrap_or_default();
+        config.name = name;
+        self.devcontainer_entries.push(data::DevContainerEntry {
+            config,
+            source: data::DomainSource::Overlay,
+            expanded: true,
+        });
+        self.devcontainers_dirty = true;
+        self.dirty = true;
+    }
+
+    /// Get overlay-managed devcontainer domains for saving.
+    fn overlay_devcontainers(&self) -> Vec<data::DevContainerOverlayConfig> {
+        self.devcontainer_entries
+            .iter()
+            .filter(|e| e.source == data::DomainSource::Overlay)
+            .map(|e| e.config.clone())
+            .collect()
+    }
     // --- end weezterm remote features ---
 }
 
@@ -860,6 +1136,35 @@ fn parse_domain_field_name(field_name: &str) -> Option<(usize, String)> {
     None
 }
 
+// --- weezterm remote features ---
+/// Extract the field key from a devcontainer child field name like `__devcontainer_2_ssh_host__`.
+fn extract_devcontainer_field_key(field_name: &str) -> Option<String> {
+    let trimmed = field_name
+        .trim_start_matches("__devcontainer_")
+        .trim_end_matches("__");
+    if let Some(pos) = trimmed.find('_') {
+        Some(trimmed[pos + 1..].to_string())
+    } else {
+        None
+    }
+}
+
+/// Parse a devcontainer field name into (devcontainer_index, field_key).
+fn parse_devcontainer_field_name(field_name: &str) -> Option<(usize, String)> {
+    let trimmed = field_name
+        .trim_start_matches("__devcontainer_")
+        .trim_end_matches("__");
+    if let Some(pos) = trimmed.find('_') {
+        let idx_str = &trimmed[..pos];
+        let field_key = &trimmed[pos + 1..];
+        if let Ok(idx) = idx_str.parse::<usize>() {
+            return Some((idx, field_key.to_string()));
+        }
+    }
+    None
+}
+// --- end weezterm remote features ---
+
 /// Main entry point for the config overlay.
 ///
 /// Called from `start_overlay()` in a background thread.
@@ -871,6 +1176,7 @@ pub fn run_config_overlay(
     saved_domains: Vec<SshDomainConfig>,
     // --- weezterm remote features ---
     saved_monitors: Vec<MonitorOverrideEntry>,
+    saved_devcontainers: Vec<data::DevContainerOverlayConfig>,
     // --- end weezterm remote features ---
     palette: config::Palette,
 ) -> anyhow::Result<ConfigOverlayAction> {
@@ -882,6 +1188,21 @@ pub fn run_config_overlay(
     );
     // --- weezterm remote features ---
     state.monitor_entries = saved_monitors;
+    // Merge saved overlay devcontainers
+    for saved_dc in saved_devcontainers {
+        if state
+            .devcontainer_entries
+            .iter()
+            .any(|e| e.config.name == saved_dc.name)
+        {
+            continue;
+        }
+        state.devcontainer_entries.push(data::DevContainerEntry {
+            config: saved_dc,
+            source: data::DomainSource::Overlay,
+            expanded: false,
+        });
+    }
     // --- end weezterm remote features ---
     let theme = theme::Theme::from_palette(&palette);
 
@@ -942,6 +1263,20 @@ pub fn run_config_overlay(
                                 state.apply_domain_field_edit(&field_name, &buffer);
                                 continue;
                             }
+
+                            // --- weezterm remote features ---
+                            // Handle new devcontainer name entry
+                            if field_name == "__new_devcontainer_name__" {
+                                state.finalize_add_devcontainer(buffer);
+                                continue;
+                            }
+
+                            // Handle devcontainer child field edits
+                            if field_name.starts_with("__devcontainer_") {
+                                state.apply_devcontainer_field_edit(&field_name, &buffer);
+                                continue;
+                            }
+                            // --- end weezterm remote features ---
 
                             let value = match kind {
                                 FieldKind::Float => {
@@ -1006,6 +1341,10 @@ pub fn run_config_overlay(
                                 .unwrap_or(false);
                             if field_name.starts_with("__domain_") {
                                 state.apply_domain_field_edit(&field_name, &variant);
+                            // --- weezterm remote features ---
+                            } else if field_name.starts_with("__devcontainer_") {
+                                state.apply_devcontainer_field_edit(&field_name, &variant);
+                            // --- end weezterm remote features ---
                             } else if is_bool_field {
                                 state.apply_edit_for_field(
                                     &field_name,
@@ -1055,6 +1394,10 @@ pub fn run_config_overlay(
                                 .unwrap_or(false);
                             if field_name.starts_with("__domain_") {
                                 state.apply_domain_field_edit(&field_name, &variant);
+                            // --- weezterm remote features ---
+                            } else if field_name.starts_with("__devcontainer_") {
+                                state.apply_devcontainer_field_edit(&field_name, &variant);
+                            // --- end weezterm remote features ---
                             } else if is_bool_field {
                                 state.apply_edit_for_field(
                                     &field_name,
@@ -1421,6 +1764,13 @@ pub fn run_config_overlay(
                                     || row.monitor_child.is_some()
                                 {
                                     state.handle_monitor_enter(&row);
+                                // DevContainer-related rows
+                                } else if row.devcontainer_header.is_some()
+                                    || row.devcontainer_child.is_some()
+                                    || row.field_name == ADD_DEVCONTAINER_FIELD_NAME
+                                    || row.field_name.starts_with(DELETE_DEVCONTAINER_FIELD_NAME)
+                                {
+                                    state.handle_devcontainer_enter(&row);
                                 // --- end weezterm remote features ---
                                 } else if !OverlayState::is_row_editable(&row) {
                                     // FixedByLua: don't allow edits
@@ -1497,6 +1847,12 @@ pub fn run_config_overlay(
                                     || row.monitor_child.is_some()
                                 {
                                     state.handle_monitor_enter(&row);
+                                } else if row.devcontainer_header.is_some()
+                                    || row.devcontainer_child.is_some()
+                                    || row.field_name == ADD_DEVCONTAINER_FIELD_NAME
+                                    || row.field_name.starts_with(DELETE_DEVCONTAINER_FIELD_NAME)
+                                {
+                                    state.handle_devcontainer_enter(&row);
                                 // --- end weezterm remote features ---
                                 } else if OverlayState::is_row_editable(&row) {
                                     match &row.kind {
@@ -1575,6 +1931,7 @@ pub fn run_config_overlay(
                                 ssh_domains: state.overlay_domains(),
                                 // --- weezterm remote features ---
                                 monitor_overrides: state.monitor_entries.clone(),
+                                devcontainer_domains: state.overlay_devcontainers(),
                                 // --- end weezterm remote features ---
                             });
                         }
@@ -1656,6 +2013,14 @@ pub fn run_config_overlay(
                                                     || sr.monitor_child.is_some()
                                                 {
                                                     state.handle_monitor_enter(&sr);
+                                                } else if sr.devcontainer_header.is_some()
+                                                    || sr.devcontainer_child.is_some()
+                                                    || sr.field_name == ADD_DEVCONTAINER_FIELD_NAME
+                                                    || sr
+                                                        .field_name
+                                                        .starts_with(DELETE_DEVCONTAINER_FIELD_NAME)
+                                                {
+                                                    state.handle_devcontainer_enter(&sr);
                                                 // --- end weezterm remote features ---
                                                 } else if OverlayState::is_row_editable(&sr) {
                                                     match &sr.kind {
@@ -1804,6 +2169,8 @@ mod test {
             domain_child: None,
             monitor_header: None,
             monitor_child: None,
+            devcontainer_header: None,
+            devcontainer_child: None,
         };
         assert!(row.domain_header.is_some());
         assert!(row.domain_child.is_none());
@@ -1819,6 +2186,7 @@ mod test {
                 ..Default::default()
             }],
             monitor_overrides: vec![],
+            devcontainer_domains: vec![],
         };
         match action {
             ConfigOverlayAction::Save {

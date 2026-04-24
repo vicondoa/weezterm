@@ -935,8 +935,24 @@ impl TermWindow {
             if let Some(webgpu) = webgpu {
                 myself.webgpu.replace(Rc::clone(&webgpu));
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
+                // --- weezterm remote features ---
+                // Immediately clear the newly-created WebGPU surface to the
+                // scheme background color. Without this, the surface's initial
+                // white backbuffer is visible between show() and first paint.
+                let bg = myself.palette().background.to_linear();
+                webgpu.clear_and_present_with_color(bg.0 as f64, bg.1 as f64, bg.2 as f64);
+                // --- end weezterm remote features ---
             }
             myself.load_os_parameters();
+            // --- weezterm remote features ---
+            // Set the OS window background color to match the terminal scheme
+            // BEFORE showing the window. This ensures the first WM_ERASEBKGND
+            // paints the scheme color, not black/white.
+            {
+                let bg = myself.palette().background;
+                window.set_window_background_color(bg.0, bg.1, bg.2);
+            }
+            // --- end weezterm remote features ---
             window.show();
             // --- weezterm remote features ---
             // Restore maximized/fullscreen state from saved window state.
@@ -1013,8 +1029,9 @@ impl TermWindow {
         match event {
             WindowEvent::Destroyed => {
                 // --- weezterm remote features ---
-                // Save window state before destruction for future restore.
-                self.save_current_window_state();
+                // Note: window state was already saved during CloseRequested.
+                // We don't save again here because the window may be partially
+                // destroyed and Win32 APIs might return stale data.
                 // --- end weezterm remote features ---
                 // Ensure that we cancel any overlays we had running, so
                 // that the mux can empty out, otherwise the mux keeps
@@ -1026,7 +1043,7 @@ impl TermWindow {
             }
             WindowEvent::CloseRequested => {
                 // --- weezterm remote features ---
-                self.save_current_window_state();
+                self.save_current_window_state(window);
                 // --- end weezterm remote features ---
                 self.close_requested(window);
                 Ok(true)
@@ -1177,7 +1194,7 @@ impl TermWindow {
                 self.handle_screen_changed(screen_name);
                 // Save state when moving between monitors so the monitor
                 // name is persisted even if the process exits ungracefully.
-                self.save_current_window_state();
+                self.save_current_window_state(window);
                 Ok(true)
             } // --- end weezterm remote features ---
         }
@@ -1868,15 +1885,20 @@ impl TermWindow {
 impl TermWindow {
     fn palette(&mut self) -> &ColorPalette {
         if self.palette.is_none() {
+            // --- weezterm remote features ---
+            // Build palette from self.config (which includes overrides like
+            // monitor_overrides color_scheme) rather than the global config.
             self.palette
-                .replace(config::TermConfig::new().color_palette());
+                .replace(config::TermConfig::with_config(self.config.clone()).color_palette());
+            // --- end weezterm remote features ---
         }
         self.palette.as_ref().unwrap()
     }
 
     pub fn config_was_reloaded(&mut self) {
+        let _t = std::time::Instant::now();
         log::debug!(
-            "config was reloaded, overrides: {:?}",
+            "config_was_reloaded: overrides: {:?}",
             self.config_overrides
         );
         self.key_table_state.clear_stack();
@@ -1947,9 +1969,11 @@ impl TermWindow {
         self.render_state.as_mut().map(|rs| rs.config_changed());
         let dimensions = self.dimensions;
 
+        log::debug!("config_was_reloaded: loading fonts...");
         if let Err(err) = self.fonts.config_changed(&config) {
             log::error!("Failed to load font configuration: {:#}", err);
         }
+        log::debug!("config_was_reloaded: fonts loaded");
 
         if let Some(window) = mux.get_window(self.mux_window_id) {
             let term_config: Arc<dyn TerminalConfiguration> =
@@ -1972,11 +1996,18 @@ impl TermWindow {
         }
 
         if let Some(window) = self.window.as_ref().map(|w| w.clone()) {
+            log::debug!("config_was_reloaded: applying scale+dimensions...");
             self.load_os_parameters();
             self.apply_scale_change(&dimensions, self.fonts.get_font_scale());
             self.apply_dimensions(&dimensions, None, &window);
             window.config_did_change(&config);
+            // --- weezterm remote features ---
+            // Update OS background color to match the (possibly new) color scheme
+            let bg = self.palette().background;
+            window.set_window_background_color(bg.0, bg.1, bg.2);
+            // --- end weezterm remote features ---
             window.invalidate();
+            log::debug!("config_was_reloaded: scale+dimensions applied");
         }
 
         // Do this after we've potentially adjusted scaling based on config/padding
@@ -1990,23 +2021,39 @@ impl TermWindow {
 
         self.invalidate_modal();
         self.emit_window_event("window-config-reloaded", None);
+        log::debug!("config_was_reloaded completed in {:?}", _t.elapsed());
     }
 
     // --- weezterm remote features ---
     /// Save the current window state (position, size, maximized, monitor)
     /// to disk for future restore on reconnect/restart.
-    fn save_current_window_state(&self) {
+    fn save_current_window_state(&self, window: &Window) {
         let mux = Mux::get();
         let workspace = mux
             .get_window(self.mux_window_id)
             .map(|w| w.get_workspace().to_string())
             .unwrap_or_else(|| mux.active_workspace());
 
+        // Use get_window_placement() to get the NORMAL (restored) position
+        // and client dimensions. This correctly handles:
+        // - Normal state: returns current position and size
+        // - Maximized: returns the pre-maximize normal rect
+        // - Fullscreen: returns the pre-fullscreen normal rect
+        // If placement is unavailable, skip saving to avoid overwriting
+        // good state with default/zero values.
+        let (x, y, width, height) = match window.get_window_placement() {
+            Some(placement) => placement,
+            None => {
+                log::warn!("Skipping window state save: placement unavailable");
+                return;
+            }
+        };
+
         let state = crate::window_state_persistence::SavedWindowState {
-            x: 0, // Will be overridden below if we can get position
-            y: 0,
-            width: self.dimensions.pixel_width,
-            height: self.dimensions.pixel_height,
+            x,
+            y,
+            width,
+            height,
             maximized: self.window_state.contains(WindowState::MAXIMIZED),
             fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
             monitor: self.current_screen_name.clone(),
@@ -2079,7 +2126,32 @@ impl TermWindow {
         let new_overrides = wezterm_dynamic::Value::Object(overrides_obj);
         if new_overrides != self.config_overrides {
             self.config_overrides = new_overrides;
-            self.config_was_reloaded();
+            // Lightweight color-only reload: update config + palette + tab bar
+            // but do NOT call config_was_reloaded() which does
+            // apply_scale_change/apply_dimensions — those can shift window
+            // geometry, triggering another ScreenChanged and causing an
+            // infinite bounce loop when the window is on a monitor boundary.
+            let _t = std::time::Instant::now();
+            match config::overridden_config(&self.config_overrides) {
+                Ok(config) => {
+                    self.config = config;
+                    self.palette.take();
+                    self.fancy_tab_bar.take();
+                    self.invalidate_fancy_tab_bar();
+                    self.shape_generation += 1;
+                    self.invalidate_modal();
+                    if let Some(window) = self.window.as_ref() {
+                        window.invalidate();
+                    }
+                    log::debug!(
+                        "monitor override color-only reload completed in {:?}",
+                        _t.elapsed()
+                    );
+                }
+                Err(err) => {
+                    log::error!("Failed to apply monitor override: {:#}", err);
+                }
+            }
         }
     }
     // --- end weezterm remote features ---
@@ -2675,6 +2747,95 @@ impl TermWindow {
         promise::spawn::spawn(future).detach();
     }
 
+    fn show_devcontainer_overlay(&mut self) {
+        use mux::devcontainer::DevContainerDomain;
+        use mux::devcontainer_discover::DevContainerInfo;
+        use mux::domain::Domain;
+
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+
+        let pane = match tab.get_active_pane() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let domain_id = pane.domain_id();
+
+        // Helper to find any devcontainer domain when the active pane isn't in one
+        fn find_any_dc(
+            mux: &Arc<Mux>,
+        ) -> (
+            Vec<DevContainerInfo>,
+            String,
+            String,
+            Option<String>,
+            Option<String>,
+        ) {
+            use mux::domain::Domain as DomainTrait;
+            for domain in mux.iter_domains() {
+                if let Some(dc) = domain.downcast_ref::<DevContainerDomain>() {
+                    return (
+                        dc.containers(),
+                        DomainTrait::domain_name(dc).to_string(),
+                        dc.config()
+                            .ssh
+                            .as_ref()
+                            .map(|s| s.remote_address.clone())
+                            .unwrap_or_else(|| "localhost".to_string()),
+                        dc.primary_container().map(|c| c.container_id),
+                        dc.config().default_workspace_folder.clone(),
+                    );
+                }
+            }
+            (
+                vec![],
+                "devcontainer".to_string(),
+                "localhost".to_string(),
+                None,
+                None,
+            )
+        }
+
+        let (entries, domain_name, host_label, primary_id, default_workspace) =
+            if let Some(domain) = mux.get_domain(domain_id) {
+                if let Some(dc_domain) = domain.downcast_ref::<DevContainerDomain>() {
+                    (
+                        dc_domain.containers(),
+                        Domain::domain_name(dc_domain).to_string(),
+                        dc_domain
+                            .config()
+                            .ssh
+                            .as_ref()
+                            .map(|s| s.remote_address.clone())
+                            .unwrap_or_else(|| "localhost".to_string()),
+                        dc_domain.primary_container().map(|c| c.container_id),
+                        dc_domain.config().default_workspace_folder.clone(),
+                    )
+                } else {
+                    find_any_dc(&mux)
+                }
+            } else {
+                find_any_dc(&mux)
+            };
+
+        let tab_id = tab.tab_id();
+        let (overlay, future) = start_overlay(self, &tab, move |_tab_id, term| {
+            crate::overlay::devcontainer::run_devcontainer_overlay(
+                term,
+                entries,
+                domain_name,
+                host_label,
+                primary_id,
+                default_workspace,
+            )
+        });
+        self.assign_overlay(tab_id, overlay);
+        promise::spawn::spawn(future).detach();
+    }
+
     // --- weezterm remote features ---
     fn show_config_overlay(&mut self) {
         use crate::overlay::config_overlay;
@@ -2732,6 +2893,7 @@ impl TermWindow {
                 overlay_data.ssh_domains,
                 // --- weezterm remote features ---
                 monitor_entries,
+                overlay_data.devcontainer_domains,
                 // --- end weezterm remote features ---
                 palette,
             )
@@ -2746,6 +2908,7 @@ impl TermWindow {
                     ssh_domains,
                     // --- weezterm remote features ---
                     monitor_overrides,
+                    devcontainer_domains,
                     // --- end weezterm remote features ---
                 }) => {
                     log::info!(
@@ -2753,12 +2916,13 @@ impl TermWindow {
                         proposals.len(),
                         ssh_domains.len()
                     );
-                    // Persist proposals + domains + monitor overrides to disk
+                    // Persist proposals + domains + monitor overrides + devcontainers to disk
                     if let Err(e) = config_overlay::persistence::save_overlay_data(
                         &proposals,
                         &ssh_domains,
                         // --- weezterm remote features ---
                         &monitor_overrides,
+                        &devcontainer_domains,
                         // --- end weezterm remote features ---
                     ) {
                         log::error!("Failed to save config overlay data: {:#}", e);
@@ -3638,6 +3802,9 @@ impl TermWindow {
             }
             ShowConfigOverlay => {
                 self.show_config_overlay();
+            }
+            ShowDevContainerManager => {
+                self.show_devcontainer_overlay();
             }
             PromptInputLine(args) => self.show_prompt_input_line(args),
             InputSelector(args) => self.show_input_selector(args),

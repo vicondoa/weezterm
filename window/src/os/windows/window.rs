@@ -131,6 +131,10 @@ pub(crate) struct WindowInner {
     /// Tracks the friendly name of the monitor the window is currently on,
     /// so we can emit `ScreenChanged` when it moves to a different monitor.
     current_monitor_name: Option<String>,
+    /// Background color brush for WM_ERASEBKGND, matching the terminal's
+    /// color scheme. Updated when the scheme changes. Using the scheme bg
+    /// color instead of black prevents jarring flashes during resize.
+    bg_brush: winapi::shared::windef::HBRUSH,
     // --- end weezterm remote features ---
 }
 
@@ -464,6 +468,64 @@ fn get_primary_monitor_dpi() -> u32 {
 }
 
 impl Window {
+    // --- weezterm remote features ---
+    /// Convert a WINDOWPLACEMENT rcNormalPosition (window rect in screen coords)
+    /// to client (inner) dimensions: (x, y, client_width, client_height).
+    fn placement_rect_to_client(
+        &self,
+        rc: &RECT,
+        style: u32,
+        dpi: u32,
+    ) -> Option<(isize, isize, usize, usize)> {
+        // rcNormalPosition is the WINDOW rect (includes title bar, borders).
+        // Compute the frame added by AdjustWindowRectExForDpi for a 0x0 client.
+        let mut frame = RECT {
+            left: 0,
+            top: 0,
+            right: 0,
+            bottom: 0,
+        };
+        unsafe { AdjustWindowRectExForDpi(&mut frame, style, 0, 0, dpi) };
+        // frame.left is negative, frame.top is negative for the title bar
+        let frame_left = frame.left; // negative
+        let frame_top = frame.top; // negative
+        let frame_right = frame.right; // positive
+        let frame_bottom = frame.bottom; // positive
+
+        // Client origin = window origin + |frame_left|, + |frame_top|
+        let client_x = (rc.left - frame_left) as isize;
+        let client_y = (rc.top - frame_top) as isize;
+
+        // Client size = window size - frame size
+        let window_w = (rc.right - rc.left) as isize;
+        let window_h = (rc.bottom - rc.top) as isize;
+        let frame_w = (frame_right - frame_left) as isize;
+        let frame_h = (frame_bottom - frame_top) as isize;
+        let client_w = (window_w - frame_w).max(0) as usize;
+        let client_h = (window_h - frame_h).max(0) as usize;
+
+        log::trace!(
+            "placement_rect_to_client: frame=({},{},{},{}) \
+             client_pos=({},{}) client_size={}x{}",
+            frame_left,
+            frame_top,
+            frame_right,
+            frame_bottom,
+            client_x,
+            client_y,
+            client_w,
+            client_h,
+        );
+
+        if client_w == 0 || client_h == 0 {
+            log::warn!("placement_rect_to_client: zero client dimensions");
+            return None;
+        }
+
+        Some((client_x, client_y, client_w, client_h))
+    }
+    // --- end weezterm remote features ---
+
     fn create_window(
         config: ConfigHandle,
         class_name: &str,
@@ -484,7 +546,13 @@ impl Window {
             // The ID is defined in assets/windows/resource.rc
             hIcon: unsafe { LoadIconW(h_inst, MAKEINTRESOURCEW(0x101)) },
             hCursor: null_mut(),
-            hbrBackground: null_mut(),
+            // --- weezterm remote features ---
+            // Use black background brush to prevent white flash on startup.
+            // The window is painted black until the terminal renderer takes over.
+            hbrBackground: unsafe {
+                winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32) as _
+            },
+            // --- end weezterm remote features ---
             lpszMenuName: null(),
             lpszClassName: class_name.as_ptr(),
         };
@@ -602,6 +670,22 @@ impl Window {
             invalidated: true,
             // --- weezterm remote features ---
             current_monitor_name: None,
+            bg_brush: {
+                // Initialize with the terminal scheme background color from
+                // config so the very first WM_ERASEBKGND matches the scheme.
+                let brush = if let Some(ref bg) = config.resolved_palette.background {
+                    let (r, g, b, _) = bg.as_rgba_u8();
+                    unsafe {
+                        winapi::um::wingdi::CreateSolidBrush(winapi::um::wingdi::RGB(r, g, b))
+                    }
+                } else {
+                    unsafe {
+                        winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32)
+                            as _
+                    }
+                };
+                brush
+            },
             // --- end weezterm remote features ---
         }));
 
@@ -628,6 +712,24 @@ impl Window {
 
         apply_theme(hwnd.0);
         enable_blur_behind(hwnd.0);
+
+        // --- weezterm remote features ---
+        // Disable DWM transition animations for this window. Without this,
+        // maximize/restore causes the DWM to animate the old surface content
+        // by stretching it to the new size — a visually jarring effect.
+        // With transitions disabled, the window jumps to the new size instantly
+        // and our clear_and_present fills it with the bg color before the
+        // terminal redraws.
+        unsafe {
+            let mut disable: winapi::shared::minwindef::BOOL = 1;
+            winapi::um::dwmapi::DwmSetWindowAttribute(
+                hwnd.0 as _,
+                3, // DWMWA_TRANSITIONS_FORCEDISABLED
+                &mut disable as *mut _ as *const _,
+                std::mem::size_of_val(&disable) as u32,
+            );
+        }
+        // --- end weezterm remote features ---
 
         // Make window capable of accepting drag and drop
         unsafe {
@@ -948,6 +1050,106 @@ impl WindowOps for Window {
         });
     }
 
+    // --- weezterm remote features ---
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        let hwnd = self.0 .0;
+        if hwnd.is_null() {
+            log::debug!("get_window_placement: HWND is null");
+            return None;
+        }
+
+        // Determine current window state
+        let window_state = get_window_state(hwnd);
+
+        if window_state.contains(WindowState::MAXIMIZED)
+            || window_state.contains(WindowState::FULL_SCREEN)
+        {
+            // When maximized or fullscreen, use GetWindowPlacement.rcNormalPosition
+            // for the pre-maximize/pre-fullscreen rect.
+            let mut placement = unsafe { std::mem::zeroed::<WINDOWPLACEMENT>() };
+            placement.length = std::mem::size_of::<WINDOWPLACEMENT>() as _;
+            if unsafe { GetWindowPlacement(hwnd, &mut placement) }
+                != winapi::shared::minwindef::TRUE
+            {
+                log::warn!("get_window_placement: GetWindowPlacement failed");
+                return None;
+            }
+            let rc = &placement.rcNormalPosition;
+            let dpi = unsafe { GetDpiForWindow(hwnd) };
+            let style = unsafe { GetWindowLongW(hwnd, GWL_STYLE) as u32 };
+            log::trace!(
+                "get_window_placement: maximized/fullscreen, \
+                 rc=({},{})..({},{}) dpi={} style={:#x}",
+                rc.left,
+                rc.top,
+                rc.right,
+                rc.bottom,
+                dpi,
+                style,
+            );
+            self.placement_rect_to_client(rc, style, dpi)
+        } else {
+            // Normal state: use GetWindowRect for actual window position
+            // and GetClientRect for client dimensions.
+            unsafe {
+                let mut window_rect: RECT = std::mem::zeroed();
+                if GetWindowRect(hwnd, &mut window_rect) == 0 {
+                    log::warn!("get_window_placement: GetWindowRect failed");
+                    return None;
+                }
+
+                let mut client_rect: RECT = std::mem::zeroed();
+                if GetClientRect(hwnd, &mut client_rect) == 0 {
+                    log::warn!("get_window_placement: GetClientRect failed");
+                    return None;
+                }
+
+                let client_w = (client_rect.right - client_rect.left) as usize;
+                let client_h = (client_rect.bottom - client_rect.top) as usize;
+
+                // Use the window rect origin (not client origin) because the
+                // restore code interprets saved x/y as window position.
+                let win_x = window_rect.left as isize;
+                let win_y = window_rect.top as isize;
+
+                log::trace!(
+                    "get_window_placement: normal, win_pos=({},{}) client={}x{}",
+                    win_x,
+                    win_y,
+                    client_w,
+                    client_h,
+                );
+
+                if client_w == 0 || client_h == 0 {
+                    return None;
+                }
+
+                Some((win_x, win_y, client_w, client_h))
+            }
+        }
+    }
+    // --- end weezterm remote features ---
+
+    // --- weezterm remote features ---
+    fn set_window_background_color(&self, r: f32, g: f32, b: f32) {
+        Connection::with_window_inner(self.0, move |inner| {
+            // Delete old brush if it wasn't a stock object
+            let old = inner.bg_brush;
+            let stock_black = unsafe {
+                winapi::um::wingdi::GetStockObject(winapi::um::wingdi::BLACK_BRUSH as i32)
+                    as winapi::shared::windef::HBRUSH
+            };
+            if !old.is_null() && old != stock_black {
+                unsafe { winapi::um::wingdi::DeleteObject(old as _) };
+            }
+            let cr =
+                winapi::um::wingdi::RGB((r * 255.0) as u8, (g * 255.0) as u8, (b * 255.0) as u8);
+            inner.bg_brush = unsafe { winapi::um::wingdi::CreateSolidBrush(cr) };
+            Ok(())
+        });
+    }
+    // --- end weezterm remote features ---
+
     fn set_text_cursor_position(&self, cursor: Rect) {
         Connection::with_window_inner(self.0, move |inner| {
             inner.set_text_cursor_position(cursor);
@@ -1196,44 +1398,51 @@ unsafe fn wm_nccalcsize(hwnd: HWND, _msg: UINT, wparam: WPARAM, lparam: LPARAM) 
 
     let no_native_title_bar = no_native_title_bar(inner.config.window_decorations);
 
-    if !(wparam == 1 && no_native_title_bar) {
-        return None;
-    }
+    if wparam == 1 && no_native_title_bar {
+        if inner.saved_placement.is_none() {
+            let dpi = inner.get_effective_dpi() as u32;
+            let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
+            let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
+            let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
 
-    if inner.saved_placement.is_none() {
-        let dpi = inner.get_effective_dpi() as u32;
-        let frame_x = GetSystemMetricsForDpi(SM_CXFRAME, dpi);
-        let frame_y = GetSystemMetricsForDpi(SM_CYFRAME, dpi);
-        let padding = GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+            let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
 
-        let params = (lparam as *mut NCCALCSIZE_PARAMS).as_mut().unwrap();
+            let requested_client_rect = &mut params.rgrc[0];
 
-        let requested_client_rect = &mut params.rgrc[0];
+            requested_client_rect.right -= frame_x + padding;
+            requested_client_rect.left += frame_x + padding;
 
-        requested_client_rect.right -= frame_x + padding;
-        requested_client_rect.left += frame_x + padding;
+            let is_maximized = get_window_state(hwnd) == WindowState::MAXIMIZED;
 
-        let is_maximized = get_window_state(hwnd) == WindowState::MAXIMIZED;
-
-        // Handle bugged top window border on Windows 10
-        if *IS_WIN10 {
-            if is_maximized {
-                requested_client_rect.top += frame_y + padding;
-                requested_client_rect.bottom -= frame_y + padding - 2;
+            // Handle bugged top window border on Windows 10
+            if *IS_WIN10 {
+                if is_maximized {
+                    requested_client_rect.top += frame_y + padding;
+                    requested_client_rect.bottom -= frame_y + padding - 2;
+                } else {
+                    requested_client_rect.top += 1;
+                    requested_client_rect.bottom -= frame_y - padding;
+                }
             } else {
-                requested_client_rect.top += 1;
-                requested_client_rect.bottom -= frame_y - padding;
-            }
-        } else {
-            requested_client_rect.bottom -= frame_y + padding;
+                requested_client_rect.bottom -= frame_y + padding;
 
-            if is_maximized {
-                requested_client_rect.top += frame_y + padding;
+                if is_maximized {
+                    requested_client_rect.top += frame_y + padding;
+                }
             }
         }
+
+        return Some(0);
     }
 
-    Some(0)
+    // --- weezterm remote features ---
+    // For native title bar windows: when wparam=TRUE, let DefWindowProc
+    // handle the client rect calculation normally. Returning None (defer
+    // to DefWindowProc) is the standard behavior. The stretching prevention
+    // is handled by DWMWA_TRANSITIONS_FORCEDISABLED set at window creation.
+    // --- end weezterm remote features ---
+
+    None
 }
 
 unsafe fn wm_nchittest(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> Option<LRESULT> {
@@ -1668,10 +1877,15 @@ unsafe fn wm_paint(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> 
     let inner = rc_from_hwnd(hwnd)?;
     let mut inner = inner.borrow_mut();
 
-    if inner.paint_throttled {
+    // --- weezterm remote features ---
+    // During live resize (in_size_move), skip paint throttling so we repaint
+    // on every resize step. This prevents the DWM from stretching the old
+    // frame to fill the new window size while waiting for the throttle timer.
+    if inner.paint_throttled && !inner.in_size_move {
         inner.invalidated = true;
         return Some(0);
     }
+    // --- end weezterm remote features ---
 
     let mut ps = PAINTSTRUCT {
         fErase: 0,
@@ -2998,7 +3212,57 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             mouse_button(hwnd, msg, wparam, lparam)
         }
         WM_DROPFILES => drop_files(hwnd, msg, wparam, lparam),
-        WM_ERASEBKGND => Some(1),
+        // --- weezterm remote features ---
+        // Handle DPI changes when the window moves between monitors with
+        // different DPI settings. The suggested rect in lParam is Windows'
+        // pre-calculated correct geometry for the new DPI.
+        0x02E0 /* WM_DPICHANGED */ => {
+            let suggested = unsafe { &*(lparam as *const RECT) };
+            log::debug!(
+                "WM_DPICHANGED: new DPI={}, suggested rect=({},{})..({},{})",
+                winapi::shared::minwindef::LOWORD(wparam as u32),
+                suggested.left,
+                suggested.top,
+                suggested.right,
+                suggested.bottom,
+            );
+            unsafe {
+                SetWindowPos(
+                    hwnd,
+                    std::ptr::null_mut(),
+                    suggested.left,
+                    suggested.top,
+                    rect_width(suggested),
+                    rect_height(suggested),
+                    SWP_NOZORDER | SWP_NOACTIVATE,
+                );
+            }
+            // WM_WINDOWPOSCHANGED will fire naturally from SetWindowPos,
+            // propagating the resize and new DPI to the terminal via
+            // check_and_call_resize_if_needed() → scaling_changed().
+            Some(0)
+        }
+        // --- end weezterm remote features ---
+        // --- weezterm remote features ---
+        // Paint exposed areas with the terminal background color during
+        // resize/redraw. This prevents white/black flashes and makes the
+        // resize feel smooth — new areas match the terminal scheme color.
+        WM_ERASEBKGND => {
+            let hdc = wparam as winapi::shared::windef::HDC;
+            let mut rc: RECT = std::mem::zeroed();
+            GetClientRect(hwnd, &mut rc);
+            let brush = if let Some(inner) = rc_from_hwnd(hwnd) {
+                let inner = inner.borrow();
+                inner.bg_brush
+            } else {
+                winapi::um::wingdi::GetStockObject(
+                    winapi::um::wingdi::BLACK_BRUSH as i32,
+                ) as _
+            };
+            winapi::um::winuser::FillRect(hdc, &rc, brush);
+            Some(1)
+        }
+        // --- end weezterm remote features ---
         WM_CLOSE => {
             if let Some(inner) = rc_from_hwnd(hwnd) {
                 let mut inner = inner.borrow_mut();

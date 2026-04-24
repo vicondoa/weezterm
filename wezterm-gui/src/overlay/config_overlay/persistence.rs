@@ -7,7 +7,7 @@
 
 use super::data::SshDomainConfig;
 // --- weezterm remote features ---
-use super::data::MonitorOverrideEntry;
+use super::data::{DevContainerOverlayConfig, MonitorOverrideEntry};
 // --- end weezterm remote features ---
 use std::collections::HashMap;
 use wezterm_dynamic::Value;
@@ -20,6 +20,7 @@ pub struct OverlayData {
     pub ssh_domains: Vec<SshDomainConfig>,
     // --- weezterm remote features ---
     pub monitor_overrides: Vec<MonitorOverrideEntry>,
+    pub devcontainer_domains: Vec<DevContainerOverlayConfig>,
     // --- end weezterm remote features ---
 }
 
@@ -30,6 +31,7 @@ impl Default for OverlayData {
             ssh_domains: vec![],
             // --- weezterm remote features ---
             monitor_overrides: vec![],
+            devcontainer_domains: vec![],
             // --- end weezterm remote features ---
         }
     }
@@ -78,12 +80,18 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
             } else {
                 vec![]
             };
+            let devcontainer_domains = if let Some(d) = obj.get("devcontainer_domains") {
+                parse_devcontainer_domains(d)
+            } else {
+                vec![]
+            };
             // --- end weezterm remote features ---
             Ok(OverlayData {
                 proposals,
                 ssh_domains,
                 // --- weezterm remote features ---
                 monitor_overrides,
+                devcontainer_domains,
                 // --- end weezterm remote features ---
             })
         }
@@ -93,12 +101,14 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
                 proposals: parse_proposals(&json),
                 ssh_domains: vec![],
                 monitor_overrides: vec![],
+                devcontainer_domains: vec![],
             })
         }
         _ => Ok(OverlayData {
             proposals: HashMap::new(),
             ssh_domains: vec![],
             monitor_overrides: vec![],
+            devcontainer_domains: vec![],
         }),
     }
 }
@@ -108,11 +118,14 @@ pub fn load_proposals() -> anyhow::Result<HashMap<String, Value>> {
     Ok(load_overlay_data()?.proposals)
 }
 
-/// Save overlay data (proposals + domains + monitor overrides) to disk as JSON.
+/// Save overlay data (proposals + domains + monitor overrides + devcontainers) to disk as JSON.
 pub fn save_overlay_data(
     proposals: &HashMap<String, Value>,
     ssh_domains: &[SshDomainConfig],
     monitor_overrides: &[MonitorOverrideEntry],
+    // --- weezterm remote features ---
+    devcontainer_domains: &[DevContainerOverlayConfig],
+    // --- end weezterm remote features ---
 ) -> anyhow::Result<()> {
     let path = match overlay_file_path() {
         Some(p) => p,
@@ -153,6 +166,16 @@ pub fn save_overlay_data(
         "monitor_overrides".to_string(),
         serde_json::Value::Array(monitors_arr),
     );
+
+    // Serialize devcontainer domains
+    let dc_arr: Vec<serde_json::Value> = devcontainer_domains
+        .iter()
+        .map(devcontainer_to_json)
+        .collect();
+    root.insert(
+        "devcontainer_domains".to_string(),
+        serde_json::Value::Array(dc_arr),
+    );
     // --- end weezterm remote features ---
 
     let json_str = serde_json::to_string_pretty(&serde_json::Value::Object(root))?;
@@ -169,11 +192,13 @@ pub fn save_proposals(proposals: &HashMap<String, Value>) -> anyhow::Result<()> 
         proposals: HashMap::new(),
         ssh_domains: vec![],
         monitor_overrides: vec![],
+        devcontainer_domains: vec![],
     });
     save_overlay_data(
         proposals,
         &existing.ssh_domains,
         &existing.monitor_overrides,
+        &existing.devcontainer_domains,
     )
 }
 
@@ -320,6 +345,189 @@ fn monitor_override_to_json(entry: &MonitorOverrideEntry) -> serde_json::Value {
             serde_json::Value::String(scheme.clone()),
         );
     }
+    serde_json::Value::Object(obj)
+}
+
+fn parse_devcontainer_domains(val: &serde_json::Value) -> Vec<DevContainerOverlayConfig> {
+    let mut domains = vec![];
+    if let serde_json::Value::Array(arr) = val {
+        for item in arr {
+            if let serde_json::Value::Object(obj) = item {
+                // Parse embedded SSH config
+                let ssh = if let Some(serde_json::Value::Object(ssh_obj)) = obj.get("ssh") {
+                    SshDomainConfig {
+                        name: ssh_obj
+                            .get("name")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        remote_address: ssh_obj
+                            .get("remote_address")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        username: ssh_obj
+                            .get("username")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        multiplexing: ssh_obj
+                            .get("multiplexing")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("None")
+                            .to_string(),
+                        ssh_backend: ssh_obj
+                            .get("ssh_backend")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("LibSsh")
+                            .to_string(),
+                        no_agent_auth: ssh_obj
+                            .get("no_agent_auth")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                        connect_automatically: ssh_obj
+                            .get("connect_automatically")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false),
+                    }
+                } else {
+                    // Backwards compat: read flat ssh_host/ssh_username
+                    SshDomainConfig {
+                        remote_address: obj
+                            .get("ssh_host")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        username: obj
+                            .get("ssh_username")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string(),
+                        ..SshDomainConfig::default()
+                    }
+                };
+                domains.push(DevContainerOverlayConfig {
+                    name: obj
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    ssh,
+                    default_workspace_folder: obj
+                        .get("default_workspace_folder")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    default_container: obj
+                        .get("default_container")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    docker_command: obj
+                        .get("docker_command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("docker")
+                        .to_string(),
+                    devcontainer_command: obj
+                        .get("devcontainer_command")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("devcontainer")
+                        .to_string(),
+                    default_shell: obj
+                        .get("default_shell")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    override_user: obj
+                        .get("override_user")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    poll_interval_secs: obj
+                        .get("poll_interval_secs")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("10")
+                        .to_string(),
+                    auto_discover: obj
+                        .get("auto_discover")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(true),
+                });
+            }
+        }
+    }
+    domains
+}
+
+fn devcontainer_to_json(dc: &DevContainerOverlayConfig) -> serde_json::Value {
+    let mut obj = serde_json::Map::new();
+    obj.insert(
+        "name".to_string(),
+        serde_json::Value::String(dc.name.clone()),
+    );
+    // Embed the full SSH config as a nested object
+    let mut ssh_obj = serde_json::Map::new();
+    ssh_obj.insert(
+        "name".to_string(),
+        serde_json::Value::String(dc.ssh.name.clone()),
+    );
+    ssh_obj.insert(
+        "remote_address".to_string(),
+        serde_json::Value::String(dc.ssh.remote_address.clone()),
+    );
+    ssh_obj.insert(
+        "username".to_string(),
+        serde_json::Value::String(dc.ssh.username.clone()),
+    );
+    ssh_obj.insert(
+        "multiplexing".to_string(),
+        serde_json::Value::String(dc.ssh.multiplexing.clone()),
+    );
+    ssh_obj.insert(
+        "ssh_backend".to_string(),
+        serde_json::Value::String(dc.ssh.ssh_backend.clone()),
+    );
+    ssh_obj.insert(
+        "no_agent_auth".to_string(),
+        serde_json::Value::Bool(dc.ssh.no_agent_auth),
+    );
+    ssh_obj.insert(
+        "connect_automatically".to_string(),
+        serde_json::Value::Bool(dc.ssh.connect_automatically),
+    );
+    obj.insert("ssh".to_string(), serde_json::Value::Object(ssh_obj));
+    obj.insert(
+        "default_workspace_folder".to_string(),
+        serde_json::Value::String(dc.default_workspace_folder.clone()),
+    );
+    obj.insert(
+        "default_container".to_string(),
+        serde_json::Value::String(dc.default_container.clone()),
+    );
+    obj.insert(
+        "docker_command".to_string(),
+        serde_json::Value::String(dc.docker_command.clone()),
+    );
+    obj.insert(
+        "devcontainer_command".to_string(),
+        serde_json::Value::String(dc.devcontainer_command.clone()),
+    );
+    obj.insert(
+        "default_shell".to_string(),
+        serde_json::Value::String(dc.default_shell.clone()),
+    );
+    obj.insert(
+        "override_user".to_string(),
+        serde_json::Value::String(dc.override_user.clone()),
+    );
+    obj.insert(
+        "poll_interval_secs".to_string(),
+        serde_json::Value::String(dc.poll_interval_secs.clone()),
+    );
+    obj.insert(
+        "auto_discover".to_string(),
+        serde_json::Value::Bool(dc.auto_discover),
+    );
     serde_json::Value::Object(obj)
 }
 // --- end weezterm remote features ---

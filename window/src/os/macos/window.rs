@@ -870,6 +870,67 @@ impl WindowOps for Window {
         });
     }
 
+    // --- weezterm remote features ---
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        unsafe {
+            // Check for simple fullscreen: if the view has a saved fullscreen
+            // rect, use that (it's the pre-fullscreen frame).
+            if let Some(handle) = Connection::get()?.window_by_id(self.id) {
+                let inner = handle.borrow();
+                if let Some(window_view) = WindowView::get_this(&**inner.view) {
+                    let view_inner = window_view.inner.borrow();
+                    if let Some(saved_rect) = view_inner.fullscreen {
+                        // In simple fullscreen mode: use pre-fullscreen frame
+                        let content =
+                            NSWindow::contentRectForFrameRect_(self.ns_window, saved_rect);
+                        let origin = cartesian_to_screen_point(NSPoint::new(
+                            content.origin.x,
+                            content.origin.y + content.size.height,
+                        ));
+
+                        let screens = NSScreen::screens(nil);
+                        let primary = screens.objectAtIndex(0);
+                        let frame = NSScreen::frame(primary);
+                        let backing_frame = NSScreen::convertRectToBacking_(primary, frame);
+                        let scale = backing_frame.size.height / frame.size.height;
+
+                        return Some((
+                            origin.x,
+                            origin.y,
+                            (content.size.width * scale) as usize,
+                            (content.size.height * scale) as usize,
+                        ));
+                    }
+                }
+            }
+
+            // Not in simple fullscreen: use current frame.
+            // For zoomed (maximized) windows, macOS tracks the pre-zoom
+            // "user rect" internally, so saving zoomed dims is acceptable —
+            // NSWindow::zoom_ will restore to the user rect automatically.
+            let frame = NSWindow::frame(self.ns_window);
+            let content = NSWindow::contentRectForFrameRect_(self.ns_window, frame);
+            let origin = cartesian_to_screen_point(NSPoint::new(
+                content.origin.x,
+                content.origin.y + content.size.height,
+            ));
+
+            let screens = NSScreen::screens(nil);
+            let primary = screens.objectAtIndex(0);
+            let screen_frame = NSScreen::frame(primary);
+            let backing_frame = NSScreen::convertRectToBacking_(primary, screen_frame);
+            let scale = backing_frame.size.height / screen_frame.size.height;
+
+            Some((
+                origin.x,
+                origin.y,
+                (content.size.width * scale) as usize,
+                (content.size.height * scale) as usize,
+            ))
+        }
+    }
+    // --- end weezterm remote features ---
+
     fn get_os_parameters(
         &self,
         config: &ConfigHandle,

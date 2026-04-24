@@ -3584,6 +3584,7 @@ dependencies = [
  "rangeset",
  "regex",
  "serde",
+ "serde_json",
  "serial2",
  "shell-words",
  "smol",

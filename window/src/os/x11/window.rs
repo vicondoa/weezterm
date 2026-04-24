@@ -2234,6 +2234,35 @@ impl WindowOps for XWindow {
             Ok(())
         });
     }
+
+    // --- weezterm remote features ---
+    fn get_window_placement(&self) -> Option<(isize, isize, usize, usize)> {
+        let conn = Connection::get()?.x11();
+        let handle = conn.window_by_id(self.0)?;
+        let inner = handle.lock().ok()?;
+
+        let w = inner.width as usize;
+        let h = inner.height as usize;
+        if w == 0 || h == 0 {
+            return None;
+        }
+
+        // Translate the window origin to root (screen) coordinates
+        let cookie = conn.conn().send_request(&xcb::x::TranslateCoordinates {
+            src_window: inner.window_id,
+            dst_window: conn.root,
+            src_x: 0,
+            src_y: 0,
+        });
+        match conn.conn().wait_for_reply(cookie) {
+            Ok(reply) => Some((reply.dst_x() as isize, reply.dst_y() as isize, w, h)),
+            Err(_) => {
+                // If translate fails, return dimensions without position
+                Some((0, 0, w, h))
+            }
+        }
+    }
+    // --- end weezterm remote features ---
 }
 
 fn parse_texturi_list(url_list: &[u8]) -> Vec<PathBuf> {
