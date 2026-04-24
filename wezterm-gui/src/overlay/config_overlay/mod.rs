@@ -592,6 +592,12 @@ impl OverlayState {
             for (idx, entry) in self.monitor_entries.iter().enumerate() {
                 if !filter_lower.is_empty()
                     && !entry.monitor_name.to_lowercase().contains(&filter_lower)
+                    && !entry
+                        .position
+                        .as_deref()
+                        .unwrap_or("")
+                        .to_lowercase()
+                        .contains(&filter_lower)
                 {
                     continue;
                 }
@@ -602,10 +608,14 @@ impl OverlayState {
                     .unwrap_or("(default)")
                     .to_string();
 
-                // Monitor group header row
+                // Monitor group header row — include position if known
+                let display = match &entry.position {
+                    Some(pos) => format!("{} ({})", entry.monitor_name, pos),
+                    None => entry.monitor_name.clone(),
+                };
                 rows.push(SettingRow {
                     field_name: format!("__monitor_header_{}__", idx),
-                    display_name: entry.monitor_name.clone(),
+                    display_name: display,
                     current_value: scheme_summary,
                     proposed_value: None,
                     status: if entry.color_scheme.is_some() {
@@ -628,6 +638,28 @@ impl OverlayState {
 
                 // If expanded, show child fields
                 if entry.expanded {
+                    // "Match By" toggle: name vs position
+                    let match_label = match entry.match_by {
+                        data::MonitorMatchBy::Position => {
+                            format!("position ({})", entry.position.as_deref().unwrap_or("?"))
+                        }
+                        data::MonitorMatchBy::Name => "name".to_string(),
+                    };
+                    rows.push(SettingRow {
+                        field_name: format!("__monitor_{}_match_by__", idx),
+                        display_name: "  Match By".to_string(),
+                        current_value: match_label,
+                        proposed_value: None,
+                        status: FieldStatus::Editable,
+                        kind: FieldKind::Text,
+                        domain_header: None,
+                        domain_child: None,
+                        monitor_header: None,
+                        monitor_child: Some(idx),
+                        devcontainer_header: None,
+                        devcontainer_child: None,
+                    });
+
                     let scheme_display = entry
                         .color_scheme
                         .as_deref()
@@ -948,9 +980,25 @@ impl OverlayState {
             return;
         }
 
-        // Monitor child field: open color scheme picker
+        // Monitor child field
         if let Some(monitor_idx) = row.monitor_child {
             if monitor_idx < self.monitor_entries.len() {
+                // "Match By" row: toggle between Name and Position
+                if row.field_name.ends_with("_match_by__") {
+                    let entry = &mut self.monitor_entries[monitor_idx];
+                    entry.match_by = match entry.match_by {
+                        data::MonitorMatchBy::Name => {
+                            if entry.position.is_some() {
+                                data::MonitorMatchBy::Position
+                            } else {
+                                data::MonitorMatchBy::Name // can't switch if no position
+                            }
+                        }
+                        data::MonitorMatchBy::Position => data::MonitorMatchBy::Name,
+                    };
+                    return;
+                }
+                // "Color Scheme" row: open picker
                 self.open_monitor_scheme_picker(monitor_idx);
             }
         }

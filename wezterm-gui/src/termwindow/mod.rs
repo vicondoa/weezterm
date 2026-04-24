@@ -2074,14 +2074,44 @@ impl TermWindow {
     }
 
     /// Applies or removes monitor-specific config overrides
-    /// based on the current monitor name.
+    /// based on the current monitor name and/or position.
     fn apply_monitor_overrides(&mut self, screen_name: &str) {
-        // Find a matching monitor override in the config
+        // Compute position labels for all connected monitors
+        let position_map: std::collections::HashMap<String, String> = {
+            use ::window::ConnectionOps;
+            ::window::Connection::get()
+                .and_then(|conn| conn.screens().ok())
+                .map(|screens| ::window::screen::compute_monitor_positions(&screens.by_name))
+                .unwrap_or_default()
+        };
+
+        let current_position = position_map.get(screen_name).cloned();
+        log::info!(
+            "Monitor position: {:?} -> {:?}",
+            screen_name,
+            current_position
+        );
+
+        // Find a matching monitor override in the config.
+        // Match by name, position, or both (AND when both are set).
         let matching_scheme = self
             .config
             .monitor_overrides
             .iter()
-            .find(|mo| mo.monitor == screen_name)
+            .find(|mo| {
+                let name_ok = match &mo.monitor {
+                    Some(name) => name == screen_name,
+                    None => true, // no name constraint
+                };
+                let pos_ok = match (&mo.position, &current_position) {
+                    (Some(pos), Some(cur)) => pos == cur,
+                    (Some(_), None) => false, // position required but unknown
+                    (None, _) => true,        // no position constraint
+                };
+                // At least one selector must be present
+                let has_selector = mo.monitor.is_some() || mo.position.is_some();
+                has_selector && name_ok && pos_ok
+            })
             .and_then(|mo| mo.color_scheme.clone());
 
         // Check if anything actually changed

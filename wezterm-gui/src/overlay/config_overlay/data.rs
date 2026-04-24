@@ -989,11 +989,25 @@ pub fn to_config_ssh_domain(dom: &SshDomainConfig) -> config::SshDomain {
 }
 
 // --- weezterm remote features ---
+
+/// How the monitor override should be matched in config.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MonitorMatchBy {
+    /// Match by monitor name (device-specific, may change across RDP).
+    Name,
+    /// Match by grid position (stable across RDP sessions).
+    Position,
+}
+
 /// A monitor override entry for the config overlay.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MonitorOverrideEntry {
     /// The monitor name (from ScreenInfo).
     pub monitor_name: String,
+    /// The computed grid position (e.g. "top-left").
+    pub position: Option<String>,
+    /// How this override should be matched in config.
+    pub match_by: MonitorMatchBy,
     /// The assigned color scheme, or None for "use default".
     pub color_scheme: Option<String>,
     /// Whether this monitor is the one the current window is on.
@@ -1024,17 +1038,49 @@ pub fn monitors_from_config_with_screens(
 ) -> Vec<MonitorOverrideEntry> {
     let config = config::configuration();
 
+    // Compute position labels for all connected monitors
+    let position_map = window::screen::compute_monitor_positions(screen_info);
+
     let mut entries: Vec<MonitorOverrideEntry> = Vec::new();
     for (name, info) in screen_info {
-        let color_scheme = config
-            .monitor_overrides
-            .iter()
-            .find(|mo| &mo.monitor == name)
-            .and_then(|mo| mo.color_scheme.clone());
+        let position = position_map.get(name).cloned();
+
+        // Find matching override: match by name or position
+        let matching_override = config.monitor_overrides.iter().find(|mo| {
+            let name_ok = match &mo.monitor {
+                Some(m) => m == name,
+                None => true,
+            };
+            let pos_ok = match (&mo.position, &position) {
+                (Some(p), Some(cur)) => p == cur,
+                (Some(_), None) => false,
+                (None, _) => true,
+            };
+            let has_selector = mo.monitor.is_some() || mo.position.is_some();
+            has_selector && name_ok && pos_ok
+        });
+
+        let color_scheme = matching_override.and_then(|mo| mo.color_scheme.clone());
+
+        // Determine match_by from the existing config override, or default
+        // to Position when available (more stable across RDP sessions).
+        let match_by = match matching_override {
+            Some(mo) if mo.position.is_some() => MonitorMatchBy::Position,
+            Some(mo) if mo.monitor.is_some() => MonitorMatchBy::Name,
+            _ => {
+                if position.is_some() {
+                    MonitorMatchBy::Position
+                } else {
+                    MonitorMatchBy::Name
+                }
+            }
+        };
 
         let rect = info.rect;
         entries.push(MonitorOverrideEntry {
             monitor_name: name.clone(),
+            position,
+            match_by,
             color_scheme,
             is_current: current_screen == Some(name.as_str()),
             expanded: false,
@@ -1048,15 +1094,25 @@ pub fn monitors_from_config_with_screens(
     }
 
     // Also include any configured monitors that aren't currently connected
+    // (only name-based overrides, since position can't be resolved)
     for mo in &config.monitor_overrides {
-        if !entries.iter().any(|e| e.monitor_name == mo.monitor) {
-            entries.push(MonitorOverrideEntry {
-                monitor_name: mo.monitor.clone(),
-                color_scheme: mo.color_scheme.clone(),
-                is_current: false,
-                expanded: false,
-                screen_rect: None,
-            });
+        if let Some(ref monitor_name) = mo.monitor {
+            if !entries.iter().any(|e| &e.monitor_name == monitor_name) {
+                let match_by = if mo.position.is_some() {
+                    MonitorMatchBy::Position
+                } else {
+                    MonitorMatchBy::Name
+                };
+                entries.push(MonitorOverrideEntry {
+                    monitor_name: monitor_name.clone(),
+                    position: mo.position.clone(),
+                    match_by,
+                    color_scheme: mo.color_scheme.clone(),
+                    is_current: false,
+                    expanded: false,
+                    screen_rect: None,
+                });
+            }
         }
     }
 
@@ -1066,15 +1122,24 @@ pub fn monitors_from_config_with_screens(
 
 /// Convert MonitorOverrideEntry list to config::MonitorOverride list
 /// (only entries with at least one override set).
+/// Respects `match_by` to emit either name-based or position-based config.
 pub fn to_config_monitor_overrides(
     entries: &[MonitorOverrideEntry],
 ) -> Vec<config::MonitorOverride> {
     entries
         .iter()
         .filter(|e| e.color_scheme.is_some())
-        .map(|e| config::MonitorOverride {
-            monitor: e.monitor_name.clone(),
-            color_scheme: e.color_scheme.clone(),
+        .map(|e| match e.match_by {
+            MonitorMatchBy::Position => config::MonitorOverride {
+                monitor: None,
+                position: e.position.clone(),
+                color_scheme: e.color_scheme.clone(),
+            },
+            MonitorMatchBy::Name => config::MonitorOverride {
+                monitor: Some(e.monitor_name.clone()),
+                position: None,
+                color_scheme: e.color_scheme.clone(),
+            },
         })
         .collect()
 }
