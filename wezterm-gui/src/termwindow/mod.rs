@@ -886,10 +886,13 @@ impl TermWindow {
                     );
                     origin = GeometryOrigin::Named(monitor.clone());
                     if saved.x != 0 || saved.y != 0 {
-                        // Only use saved x/y if the monitor name matched exactly.
-                        // If we fell back to position, the old coordinates are
-                        // from a different monitor layout and would be wrong.
-                        if saved.monitor.as_ref() == Some(monitor) {
+                        // Only use saved x/y if the monitor name matched
+                        // exactly. If we fell back to position, the old
+                        // coordinates are from a different monitor layout.
+                        // Also validate coords are reasonable (within
+                        // monitor bounds) — stale coords from old sessions
+                        // can be wildly off.
+                        if saved.monitor.as_ref() == Some(monitor) && saved.x >= 0 && saved.y >= 0 {
                             x.replace(Dimension::Pixels(saved.x as f32));
                             y.replace(Dimension::Pixels(saved.y as f32));
                         }
@@ -897,9 +900,8 @@ impl TermWindow {
                     }
                     // else leave x/y as None so OS centers on the monitor
                 } else {
-                    origin = GeometryOrigin::ScreenCoordinateSystem;
-                    x.replace(Dimension::Pixels(saved.x as f32));
-                    y.replace(Dimension::Pixels(saved.y as f32));
+                    // No monitor resolved — use primary, centered
+                    origin = GeometryOrigin::MainScreen;
                 }
                 // Override dimensions from saved state (unless maximized — use
                 // saved normal size so maximize can expand from it)
@@ -2091,11 +2093,27 @@ impl TermWindow {
         // - Fullscreen: returns the pre-fullscreen normal rect
         // If placement is unavailable, skip saving to avoid overwriting
         // good state with default/zero values.
-        let (x, y, width, height) = match window.get_window_placement() {
+        let (abs_x, abs_y, width, height) = match window.get_window_placement() {
             Some(placement) => placement,
             None => {
                 log::warn!("Skipping window state save: placement unavailable");
                 return;
+            }
+        };
+
+        // Convert absolute screen coordinates to relative-to-monitor-origin.
+        // On restore, these relative coords are added back to the monitor's
+        // origin, so we must subtract the current monitor's origin here.
+        let (x, y) = {
+            use ::window::ConnectionOps;
+            if let Some(ref screen_name) = self.current_screen_name {
+                ::window::Connection::get()
+                    .and_then(|conn| conn.screens().ok())
+                    .and_then(|screens| screens.by_name.get(screen_name).cloned())
+                    .map(|info| (abs_x - info.rect.origin.x, abs_y - info.rect.origin.y))
+                    .unwrap_or((abs_x, abs_y))
+            } else {
+                (abs_x, abs_y)
             }
         };
 
