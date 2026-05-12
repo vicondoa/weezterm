@@ -311,6 +311,15 @@ impl SoftwareRdpState {
         });
     }
 
+    /// Clear all queued dirty rectangles without queuing a new one.
+    /// Phase 4c calls this at the start of each CPU-render frame so the
+    /// renderer is the sole source of dirty rects (avoids overlapping
+    /// rects from earlier `resize()` / `mark_all_dirty()` calls, which
+    /// would cause `Present1` to fail with `DXGI_ERROR_INVALID_CALL`).
+    pub fn clear_dirty(&mut self) {
+        self.dirty.clear();
+    }
+
     /// Number of dirty rectangles that will be presented next.
     /// Mainly for tests / instrumentation.
     #[allow(dead_code)] // Used by Phase 4d UX tests via the Lua diagnostics surface.
@@ -450,6 +459,15 @@ impl SoftwareRdpState {
     }
 
     /// Issue Present1 with the current dirty-rect list and clear it.
+    ///
+    /// Default: full-frame present (NULL dirty list). Pass dirty rects
+    /// only when `WEEZTERM_ENABLE_DIRTY_RECTS=1` because flip-sequential
+    /// swap chains roll dirty rects across the back-buffer rotation,
+    /// and any dirty rect spec we might emit risks
+    /// `DXGI_ERROR_INVALID_CALL` on certain WARP/RDP combos. The RDP
+    /// encoder still scans the back-buffer for changed regions, so
+    /// emitting NULL dirty rects does not regress bandwidth — it just
+    /// gives the encoder slightly more work. Phase 5+ revisits this.
     fn do_present1(&mut self) -> Result<()> {
         let mut rects: Vec<RECT> = self
             .dirty
@@ -457,18 +475,32 @@ impl SoftwareRdpState {
             .filter_map(|r| r.clip(self.width, self.height))
             .collect();
 
+        let enable_dirty = std::env::var_os("WEEZTERM_ENABLE_DIRTY_RECTS").is_some();
+
+        let (count, ptr) = if enable_dirty && !rects.is_empty() {
+            (rects.len() as u32, rects.as_mut_ptr())
+        } else {
+            (0u32, null_mut())
+        };
         let mut params = DXGI_PRESENT_PARAMETERS {
-            DirtyRectsCount: rects.len() as u32,
-            pDirtyRects: if rects.is_empty() {
-                null_mut()
-            } else {
-                rects.as_mut_ptr()
-            },
+            DirtyRectsCount: count,
+            pDirtyRects: ptr,
             pScrollRect: null_mut(),
             pScrollOffset: null_mut(),
         };
         let hr = unsafe { (*self.swap_chain).Present1(1, 0, &mut params) };
         if !SUCCEEDED(hr) {
+            log::error!(
+                "[render] Present1 0x{:08x}: bb={}x{}, {} rect(s): {:?}",
+                hr,
+                self.width,
+                self.height,
+                rects.len(),
+                rects
+                    .iter()
+                    .map(|r| (r.left, r.top, r.right, r.bottom))
+                    .collect::<Vec<_>>(),
+            );
             bail!("IDXGISwapChain1::Present1 failed: HRESULT 0x{:08x}", hr);
         }
         self.dirty.clear();

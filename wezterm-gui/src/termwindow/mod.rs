@@ -90,6 +90,8 @@ pub mod webgpu;
 pub mod backend;
 #[cfg(windows)]
 pub mod software_rdp;
+#[cfg(windows)]
+pub mod software_rdp_render;
 // --- end weezterm remote features ---
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
@@ -476,6 +478,10 @@ pub struct TermWindow {
     /// field). See `crate::termwindow::backend::RenderBackend` and
     /// `docs/windows-rendering-design.md` Phase 4.
     backend: RenderBackend,
+    /// Mode C CPU rasteriser. Allocated alongside `backend ==
+    /// RenderBackend::SoftwareRdp(_)`; `None` for all other backends.
+    #[cfg(windows)]
+    cpu_renderer: Option<software_rdp_render::CpuRenderer>,
     // --- end weezterm remote features ---
     config_subscription: Option<config::ConfigSubscription>,
 
@@ -717,6 +723,8 @@ impl TermWindow {
             gl: None,
             // --- weezterm remote features ---
             backend: RenderBackend::None,
+            #[cfg(windows)]
+            cpu_renderer: None,
             // --- end weezterm remote features ---
             window: None,
             window_background,
@@ -1058,6 +1066,9 @@ impl TermWindow {
                                     myself.backend = RenderBackend::SoftwareRdp(Rc::new(
                                         std::cell::RefCell::new(state),
                                     ));
+                                    myself.cpu_renderer = Some(
+                                        crate::termwindow::software_rdp_render::CpuRenderer::new(),
+                                    );
                                 }
                                 Err(err) => {
                                     log::error!(
@@ -1415,10 +1426,30 @@ impl TermWindow {
         false
     }
 
-    /// Phase 4b: paint via the SoftwareRdp WARP swap chain. The CPU draw
-    /// path is added in phase 4c — for now we present a solid clear
-    /// colour matching the current palette background so the window
-    /// shows something instead of staying transparent.
+    /// Phase 4c fallback: fill the entire scratch buffer with the
+    /// palette background colour. Used during startup before a pane is
+    /// available, or if the CpuRenderer somehow wasn't initialised.
+    #[cfg(windows)]
+    fn fill_solid_software_rdp(
+        state: &mut crate::termwindow::software_rdp::SoftwareRdpState,
+        rgba: (u8, u8, u8, u8),
+    ) {
+        let (pixels, stride) = state.pixels_mut();
+        let h = pixels.len() / stride as usize;
+        for y in 0..h {
+            let row = &mut pixels[y * stride as usize..(y + 1) * stride as usize];
+            for px in row.chunks_exact_mut(4) {
+                px[0] = rgba.2;
+                px[1] = rgba.1;
+                px[2] = rgba.0;
+                px[3] = 0xff;
+            }
+        }
+    }
+
+    /// Phase 4c: paint via the SoftwareRdp WARP swap chain using the
+    /// CPU rasteriser. Falls back to a solid background fill if no
+    /// active pane is available (e.g. during startup).
     #[cfg(windows)]
     fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
         let state_rc = match self.backend.software_rdp() {
@@ -1428,33 +1459,44 @@ impl TermWindow {
         let mut state = state_rc.borrow_mut();
 
         // Resize swap chain to current client rect if the window grew /
-        // shrunk since the last paint.
+        // shrunk since the last paint. After a successful resize we mark
+        // the renderer dirty so the next frame is a full repaint.
         let target_w = self.dimensions.pixel_width as u32;
         let target_h = self.dimensions.pixel_height as u32;
-        if state.width() != target_w.max(1) || state.height() != target_h.max(1) {
+        let resized = state.width() != target_w.max(1) || state.height() != target_h.max(1);
+        if resized {
             state
                 .resize(target_w, target_h)
                 .context("resize SoftwareRdp swap chain")?;
-        }
-
-        // Phase 4b stub: fill with a neutral dark colour so the user can
-        // see the swap chain is presenting. Phase 4c replaces this with
-        // the real terminal contents.
-        let palette = self.palette();
-        let bg = palette.background.as_rgba_u8();
-        let (pixels, stride) = state.pixels_mut();
-        let h = (pixels.len() / stride as usize) as u32;
-        for y in 0..h {
-            let row = &mut pixels[(y * stride) as usize..(y * stride + stride) as usize];
-            for px in row.chunks_exact_mut(4) {
-                // BGRA8
-                px[0] = bg.2; // B
-                px[1] = bg.1; // G
-                px[2] = bg.0; // R
-                px[3] = 0xff;
+            if let Some(cpu) = self.cpu_renderer.as_mut() {
+                cpu.invalidate_all();
             }
         }
-        state.mark_all_dirty();
+
+        let palette = self.palette().clone();
+        let metrics = self.render_metrics;
+        let fonts = Rc::clone(&self.fonts);
+
+        match self.get_active_pane_or_overlay() {
+            Some(pane) => {
+                if let Some(cpu) = self.cpu_renderer.as_mut() {
+                    cpu.render(&mut state, &pane, &fonts, &metrics, &palette)?;
+                } else {
+                    // CpuRenderer wasn't initialised (shouldn't happen
+                    // when SoftwareRdp backend is active, but be safe).
+                    let bg = palette.background.as_rgba_u8();
+                    Self::fill_solid_software_rdp(&mut state, bg);
+                    state.mark_all_dirty();
+                }
+            }
+            None => {
+                // Pre-spawn or shutdown: just clear to bg.
+                let bg = palette.background.as_rgba_u8();
+                Self::fill_solid_software_rdp(&mut state, bg);
+                state.mark_all_dirty();
+            }
+        }
+
         state.present().context("SoftwareRdp present")?;
         Ok(true)
     }

@@ -71,6 +71,10 @@ impl super::TermWindow {
             ) {
                 log::error!("[render] SoftwareRdp resize failed: {err:#}");
             }
+            drop(s);
+            if let Some(cpu) = self.cpu_renderer.as_mut() {
+                cpu.invalidate_all();
+            }
         }
         // --- end weezterm remote features ---
 
