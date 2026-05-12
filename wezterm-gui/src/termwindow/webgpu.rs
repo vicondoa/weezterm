@@ -193,19 +193,19 @@ fn compute_compatibility_list(
     backends: wgpu::Backends,
     surface: &wgpu::Surface,
 ) -> Vec<String> {
-    instance
-        .enumerate_adapters(backends)
-        .into_iter()
-        .map(|a| {
+    smol::block_on(async {
+        let mut out = Vec::new();
+        for a in instance.enumerate_adapters(backends).await {
             let info = adapter_info_to_gpu_info(a.get_info());
             let compatible = a.is_surface_supported(&surface);
-            format!(
+            out.push(format!(
                 "{}, compatible={}",
                 info.to_string(),
                 if compatible { "yes" } else { "NO" }
-            )
-        })
-        .collect()
+            ));
+        }
+        out
+    })
 }
 
 impl WebGpuState {
@@ -235,7 +235,7 @@ impl WebGpuState {
         let mut adapter: Option<wgpu::Adapter> = None;
 
         if let Some(preference) = &config.webgpu_preferred_adapter {
-            for a in instance.enumerate_adapters(backends) {
+            for a in instance.enumerate_adapters(backends).await {
                 if !a.is_surface_supported(&surface) {
                     let info = adapter_info_to_gpu_info(a.get_info());
                     log::warn!("{} is not compatible with surface", info.to_string());
@@ -332,6 +332,7 @@ impl WebGpuState {
                 .using_resolution(adapter.limits()),
                 label: None,
                 memory_hints: Default::default(),
+                experimental_features: Default::default(),
                 trace: wgpu::Trace::Off,
             })
             .await?;
@@ -406,7 +407,7 @@ impl WebGpuState {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Nearest,
             min_filter: wgpu::FilterMode::Nearest,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::MipmapFilterMode::Nearest,
             ..Default::default()
         });
         let texture_linear_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
@@ -415,7 +416,7 @@ impl WebGpuState {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
 
@@ -450,7 +451,7 @@ impl WebGpuState {
                     &texture_bind_group_layout,
                     &texture_bind_group_layout,
                 ],
-                push_constant_ranges: &[],
+                immediate_size: 0,
             });
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -488,7 +489,7 @@ impl WebGpuState {
                 mask: !0,
                 alpha_to_coverage_enabled: false,
             },
-            multiview: None,
+            multiview_mask: None,
             cache: None,
         });
 
