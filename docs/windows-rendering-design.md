@@ -35,6 +35,48 @@ window/UI framework. Migration is rejected with reasons (§9).
 
 ---
 
+## 0a. Prerequisites — what was already done
+
+Before this design was written, two reconciliation commits landed that this
+plan assumes as the new baseline. **Do not undo them.** If a future agent
+proposes "re-adding the pre-show clear" or "rebuilding window state
+persistence", point them here first.
+
+### `bab4b82ad` — removed pre-show clear hack and clear-color override
+
+* `clear_and_present_with_color()` and `clear_and_present()` are **GONE**
+  from `wezterm-gui/src/termwindow/webgpu.rs`. Do not re-add. The
+  `WM_ERASEBKGND` `bg_brush` handler (§4, kept-handlers callout) covers
+  startup flash on Windows; Modes A and C in this design make the
+  GPU-side pre-show clear actively harmful (extra wasted present,
+  conflicts with `PreMultiplied` alpha on the DComp visual).
+* The clear-color override in `wezterm-gui/src/termwindow/render/draw.rs`
+  has been reverted to upstream's transparent `(0,0,0,0)` clear (both
+  webgpu and glium paths). This is **required** for
+  `CompositeAlphaMode::PreMultiplied` (Mode A) to composite correctly
+  with Mica/Acrylic backdrops; an opaque theme-bg clear under a
+  premultiplied surface produces the wrong visual.
+
+### `b203f9536` — clean rebuild of window state persistence
+
+* `wezterm-gui/src/window_state_persistence.rs` is the **single canonical
+  implementation** (~730 lines including tests/comments). It uses
+  `WorkspaceCoords` / `ScreenCoords` newtypes that make the
+  absolute-vs-monitor-relative coord-space bug class impossible to
+  re-introduce.
+* Schema bumped 1 → 2 with a safe migration path (v1 files migrate to
+  "center on primary"). Five sequential fix commits collapsed into one.
+* `save_current_window_state()` in `wezterm-gui/src/termwindow/mod.rs`
+  was collapsed (-124 / +86). `WindowOps::get_window_placement` Win32
+  impl in `window/src/os/windows/window.rs` was tightened (+11 / -2).
+* New tests in `tests/ux/test_dimensions.py` cover monitor disconnect,
+  off-screen rect, schema-v1 migration, and DPI rescale.
+* This is the persistence layer the rendering work builds on. Mode A's
+  DComp swap-chain lifecycle depends on stable, correct save/restore so
+  windows reopen at the right size and DPI **before the first present**.
+
+---
+
 ## 1. The actual problems (verified)
 
 These are the symptoms — every one of them is documented in
@@ -267,6 +309,54 @@ under DComp):
 * `DWMWA_TRANSITIONS_FORCEDISABLED` → keep (already ✅)
 * `DWMWA_SYSTEMBACKDROP_TYPE` (Mica/Acrylic) → keep, but only when
   `alpha_mode = PreMultiplied` is in effect (NEW: gate it)
+
+**Win32 handlers — KEPT, do not modify or remove (required by all three modes):**
+
+These handlers were already in the fork before this design was written and
+remain correct. If you see code suggesting they should be removed or
+duplicated, push back and link this section.
+
+* `WM_DPICHANGED` — `window/src/os/windows/window.rs:3219` — applies the
+  Windows-suggested RECT via `SetWindowPos` (with `SWP_NOZORDER |
+  SWP_NOACTIVATE`). Standard Win32 per-monitor DPI v2 pattern. Required
+  for cross-monitor DPI changes; without it the window "balloons" on
+  drag.
+* `WM_ERASEBKGND` — `window/src/os/windows/window.rs:3250` — fills the
+  client rect with the per-window `bg_brush` (created from the terminal
+  scheme's resolved background palette entry, updated on config reload
+  at `window.rs:1137-1147`). Returns `1`. Eliminates white/black flash
+  during the gap between erase and the GPU's first present. Mirrors
+  Microsoft Terminal's pattern. The `try_borrow()` fallback to
+  `BLACK_BRUSH` is intentional — see comment at line 3255.
+* `bg_brush` machinery — initialised at `window.rs:673-685`, updated on
+  config reload at `window.rs:1137-1147`. Tied 1:1 to the
+  `WM_ERASEBKGND` handler above; do not separate them.
+* `BLACK_BRUSH` window-class fallback — set as the class
+  `hbrBackground` in `register_class` at `window.rs:553`. Tiny safety
+  net before `bg_brush` is wired. Keep.
+* `DWMWA_TRANSITIONS_FORCEDISABLED` — `window/src/os/windows/window.rs`
+  ~lines 723-731 (attribute id `3` at line 727). Disables the DWM
+  maximize/restore stretch animation that otherwise shows a scaled
+  previous frame for ~150 ms. Cross-referenced from the resize comment
+  at line 1442.
+* `paint_throttled` bypass during `in_size_move` — flag flipped in
+  `wm_enter_exit_size_move` at `window.rs:1796-1813` on
+  `WM_ENTERSIZEMOVE`/`WM_EXITSIZEMOVE`; consumed by `wm_paint`
+  (`window.rs:1876-1927`, check at line 1884) which skips its async
+  throttle when the flag is set. Required for smooth live resize — every
+  drag step repaints immediately instead of stretching the previous
+  frame for one throttle interval.
+* `GetClientRect`-driven `surface.configure()` —
+  `wezterm-gui/src/termwindow/webgpu.rs:540` reads the actual client
+  rect on resize and reconfigures the surface (line 558) to those
+  dimensions. Required to avoid wgpu's DXGI dimension-mismatch panic
+  when the window resize and the surface reconfigure race.
+
+**REMOVED (do not re-add):** `clear_and_present_with_color()` /
+`clear_and_present()` and the pre-show call site in
+`wezterm-gui/src/termwindow/mod.rs`. These were band-aids superseded by
+Mode A's DComp path and Mode C's WARP path; they are actively harmful
+under `PreMultiplied` alpha. See commit `bab4b82ad` and §0a above.
 
 ### Mode B — `WgpuClassic` (legacy fallback)
 
