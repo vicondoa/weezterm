@@ -482,6 +482,22 @@ impl WebGpuState {
         };
         surface.configure(&device, &config);
 
+        // --- weezterm remote features ---
+        // Phase 2c diagnostic line. Format mirrors the `[render] mode=...`
+        // startup line and is grepped by `tests/ux/test_transparency.py`.
+        // The fields are stable; do not rename without updating the test.
+        log::info!(
+            "[render] surface mode={} alpha_mode={:?} translucent={} \
+             frame_latency={} present_mode={:?} format={:?}",
+            mode.as_str(),
+            config.alpha_mode,
+            translucent,
+            config.desired_maximum_frame_latency,
+            config.present_mode,
+            config.format,
+        );
+        // --- end weezterm remote features ---
+
         let shader = device.create_shader_module(wgpu::include_wgsl!("../shader.wgsl"));
 
         let shader_uniform_bind_group_layout =
