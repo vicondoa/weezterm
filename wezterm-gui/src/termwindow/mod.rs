@@ -934,6 +934,16 @@ impl TermWindow {
 
         let gl = match config.front_end {
             FrontEndSelection::WebGpu => None,
+            // --- weezterm remote features ---
+            FrontEndSelection::WebGpuHwnd => None,
+            FrontEndSelection::Auto => match ::window::render_mode::resolve() {
+                ::window::render_mode::RenderMode::WgpuDComp
+                | ::window::render_mode::RenderMode::WgpuClassic => None,
+                ::window::render_mode::RenderMode::SoftwareRdp => {
+                    Some(window.enable_opengl().await?)
+                }
+            },
+            // --- end weezterm remote features ---
             _ => Some(window.enable_opengl().await?),
         };
 
@@ -943,6 +953,18 @@ impl TermWindow {
                 FrontEndSelection::WebGpu => Some(Rc::new(
                     WebGpuState::new(&window, dimensions, &config).await?,
                 )),
+                // --- weezterm remote features ---
+                FrontEndSelection::WebGpuHwnd => Some(Rc::new(
+                    WebGpuState::new(&window, dimensions, &config).await?,
+                )),
+                FrontEndSelection::Auto => match ::window::render_mode::resolve() {
+                    ::window::render_mode::RenderMode::WgpuDComp
+                    | ::window::render_mode::RenderMode::WgpuClassic => Some(Rc::new(
+                        WebGpuState::new(&window, dimensions, &config).await?,
+                    )),
+                    ::window::render_mode::RenderMode::SoftwareRdp => None,
+                },
+                // --- end weezterm remote features ---
                 _ => None,
             };
             myself.config_subscription.replace(config_subscription);

@@ -7,6 +7,10 @@ pub enum FrontEndSelection {
     OpenGL,
     WebGpu,
     Software,
+    // --- weezterm remote features ---
+    Auto,
+    // --- weezterm remote features ---
+    WebGpuHwnd,
 }
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>

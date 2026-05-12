@@ -586,14 +586,12 @@ pub fn try_new() -> Result<Rc<GuiFrontEnd>, Error> {
 }
 
 // --- weezterm remote features ---
-/// Phase 0 startup diagnostics: log a single-line summary of the rendering
-/// environment (placeholder mode, RDP-session bool, GPU adapter list,
+/// Phase 1 startup diagnostics: log a single-line summary of the rendering
+/// environment (resolved render mode, RDP-session bool, GPU adapter list,
 /// Windows build number) plus any `WEEZTERM_RENDER_MODE` override.
 ///
-/// The literal `mode=auto-pending` is a deliberate placeholder; phase 1
-/// replaces it with the resolved mode once `RenderMode::auto_select()`
-/// lands. Future agents must keep the prefix `[render] mode=` stable so
-/// log scrapers and tests don't break.
+/// The `[render] mode=` prefix is stable contract for log scrapers and
+/// the `tests/ux/test_render_mode.py` suite — do not change it.
 fn log_render_diagnostics() {
     let adapters = ::window::diagnostics::enumerate_dxgi_adapters();
     let gpu_descriptions: Vec<String> = adapters.iter().map(|a| a.description.clone()).collect();
@@ -604,11 +602,13 @@ fn log_render_diagnostics() {
     #[cfg(not(windows))]
     let rdp = false;
 
+    let resolved = ::window::render_mode::resolve();
     log::info!(
-        "[render] mode=auto-pending rdp={} gpus=[{}] win_build={}",
+        "[render] mode={} rdp={} gpus=[{}] win_build={}",
+        resolved.as_str(),
         rdp,
         gpu_descriptions.join(", "),
-        win_build
+        win_build,
     );
 
     if let Some(override_value) = ::window::diagnostics::render_mode_override() {

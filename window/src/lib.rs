@@ -18,6 +18,7 @@ mod spawn;
 
 // --- weezterm remote features ---
 pub mod diagnostics;
+pub mod render_mode;
 // --- end weezterm remote features ---
 
 pub use raw_window_handle;
