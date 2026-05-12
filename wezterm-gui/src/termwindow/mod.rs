@@ -988,16 +988,44 @@ impl TermWindow {
             let mut myself = tw.borrow_mut();
             let webgpu = match effective_front_end {
                 FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
+                    // --- weezterm remote features ---
+                    // Explicit `WebGpu` choice means "use wgpu; pick the
+                    // best flavour for this environment". On Win10+ with
+                    // a real GPU we land on Mode A (DComp). In RDP or on
+                    // WARP-only machines DComp swapchain creation fails
+                    // (DXGI_ERROR_INVALID_CALL), so fall back to Mode B
+                    // (Classic HWND swapchain) which works there.
+                    // Explicit Mode A is still selectable via
+                    // `WEEZTERM_RENDER_MODE=wgpu_dcomp` or
+                    // `front_end = "WebGpuHwnd"` for the opposite.
+                    WebGpuState::new(
+                        &window,
+                        dimensions,
+                        &config,
+                        match ::window::render_mode::RenderMode::auto_select() {
+                            ::window::render_mode::RenderMode::WgpuDComp => {
+                                ::window::render_mode::RenderMode::WgpuDComp
+                            }
+                            _ => ::window::render_mode::RenderMode::WgpuClassic,
+                        },
+                    )
+                    .await?,
+                    // --- end weezterm remote features ---
                 )),
                 // --- weezterm remote features ---
                 FrontEndSelection::WebGpuHwnd => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
+                    WebGpuState::new(
+                        &window,
+                        dimensions,
+                        &config,
+                        ::window::render_mode::RenderMode::WgpuClassic,
+                    )
+                    .await?,
                 )),
                 FrontEndSelection::Auto => match ::window::render_mode::resolve() {
-                    ::window::render_mode::RenderMode::WgpuDComp
-                    | ::window::render_mode::RenderMode::WgpuClassic => Some(Rc::new(
-                        WebGpuState::new(&window, dimensions, &config).await?,
+                    mode @ (::window::render_mode::RenderMode::WgpuDComp
+                    | ::window::render_mode::RenderMode::WgpuClassic) => Some(Rc::new(
+                        WebGpuState::new(&window, dimensions, &config, mode).await?,
                     )),
                     ::window::render_mode::RenderMode::SoftwareRdp => None,
                 },

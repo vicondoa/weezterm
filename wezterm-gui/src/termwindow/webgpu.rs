@@ -35,6 +35,13 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+    // --- weezterm remote features ---
+    /// Render mode this surface was configured for. Mode A
+    /// (`WgpuDComp`) uses DComp + waitable + frame-latency=1; Mode B
+    /// (`WgpuClassic`) preserves the historical HWND swapchain
+    /// behaviour. See `docs/windows-rendering-design.md` §4.
+    pub mode: ::window::render_mode::RenderMode,
+    // --- end weezterm remote features ---
 }
 
 pub struct RawHandlePair {
@@ -213,21 +220,57 @@ impl WebGpuState {
         window: &Window,
         dimensions: Dimensions,
         config: &ConfigHandle,
+        // --- weezterm remote features ---
+        mode: ::window::render_mode::RenderMode,
+        // --- end weezterm remote features ---
     ) -> anyhow::Result<Self> {
         let handle = RawHandlePair::new(window);
-        Self::new_impl(handle, dimensions, config).await
+        Self::new_impl(handle, dimensions, config, mode).await
     }
 
     pub async fn new_impl(
         handle: RawHandlePair,
         dimensions: Dimensions,
         config: &ConfigHandle,
+        // --- weezterm remote features ---
+        mode: ::window::render_mode::RenderMode,
+        // --- end weezterm remote features ---
     ) -> anyhow::Result<Self> {
         let backends = wgpu::Backends::all();
+        // --- weezterm remote features ---
+        // Phase 2b: explicitly configure the DX12 backend options based
+        // on the chosen render mode. Mode A (DComp) uses
+        // DxgiFromVisual + waitable so we get transparent composition
+        // and Present-pacing without GetMessage waits. Mode B
+        // (Classic) preserves the historical HWND-direct swapchain
+        // behaviour from pre-wgpu-28: HWND swapchain, no waitable
+        // (Wait was added as a default in v28; we opt out to avoid
+        // behaviour drift). On non-Windows platforms the dx12 options
+        // are inert. See docs/windows-rendering-design.md §4.
+        let backend_options = wgpu::BackendOptions {
+            dx12: wgpu::Dx12BackendOptions {
+                presentation_system: match mode {
+                    ::window::render_mode::RenderMode::WgpuDComp => {
+                        wgpu::Dx12SwapchainKind::DxgiFromVisual
+                    }
+                    _ => wgpu::Dx12SwapchainKind::DxgiFromHwnd,
+                },
+                latency_waitable_object: match mode {
+                    ::window::render_mode::RenderMode::WgpuDComp => {
+                        wgpu::Dx12UseFrameLatencyWaitableObject::Wait
+                    }
+                    _ => wgpu::Dx12UseFrameLatencyWaitableObject::None,
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
+            backend_options,
             ..Default::default()
         });
+        // --- end weezterm remote features ---
         let surface = unsafe {
             instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&handle)?)?
         };
@@ -380,7 +423,16 @@ impl WebGpuState {
                 wgpu::CompositeAlphaMode::Auto
             },
             view_formats,
-            desired_maximum_frame_latency: 2,
+            // --- weezterm remote features ---
+            // Phase 2b: Mode A uses frame-latency=1 (paired with the
+            // waitable handle) to get latest-image pacing without
+            // queueing extra frames. Mode B preserves the
+            // historical value of 2.
+            desired_maximum_frame_latency: match mode {
+                ::window::render_mode::RenderMode::WgpuDComp => 1,
+                _ => 2,
+            },
+            // --- end weezterm remote features ---
         };
         surface.configure(&device, &config);
 
@@ -507,6 +559,9 @@ impl WebGpuState {
             texture_bind_group_layout,
             texture_nearest_sampler,
             texture_linear_sampler,
+            // --- weezterm remote features ---
+            mode,
+            // --- end weezterm remote features ---
         })
     }
 
