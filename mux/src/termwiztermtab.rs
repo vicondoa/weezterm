@@ -306,6 +306,10 @@ impl Pane for TermWizTerminalPane {
             }
         }
     }
+
+    fn notify_color_scheme_changed(&self) {
+        self.terminal.lock().notify_color_scheme_change();
+    }
 }
 
 pub struct TermWizTerminal {

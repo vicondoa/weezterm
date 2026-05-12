@@ -716,6 +716,8 @@ impl<'a> Performer<'a> {
                 self.suppress_initial_title_change = false;
                 self.accumulating_title.take();
                 self.progress = Progress::default();
+                self.color_scheme_reporting = false;
+                self.last_reported_color_scheme = None;
 
                 self.screen.full_reset();
                 self.screen.activate_alt_screen(seqno);

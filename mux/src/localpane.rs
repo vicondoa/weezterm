@@ -487,6 +487,10 @@ impl Pane for LocalPane {
         }
     }
 
+    fn notify_color_scheme_changed(&self) {
+        self.terminal.lock().notify_color_scheme_change();
+    }
+
     fn focus_changed(&self, focused: bool) {
         self.terminal.lock().focus_changed(focused);
     }

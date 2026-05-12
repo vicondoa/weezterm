@@ -60,13 +60,21 @@ impl super::TermWindow {
             webgpu.resize(dimensions);
         }
 
-        // For simple, user-interactive resizes where the dpi doesn't change,
-        // skip our scaling recalculation
-        if live_resizing && self.dimensions.dpi == dimensions.dpi {
+        // --- weezterm remote features ---
+        // For any resize where the DPI hasn't changed, use the simple
+        // apply_dimensions path.  Previously this was gated on
+        // live_resizing (only true during WM_ENTERSIZEMOVE drag), which
+        // meant programmatic resizes — including Windows Snap — would go
+        // through scaling_changed().  That path can misinterpret the
+        // resize as needing to preserve rows/cols and call set_inner_size,
+        // fighting the snap position and producing wrong terminal
+        // dimensions for SSH mux panes.
+        if self.dimensions.dpi == dimensions.dpi {
             self.apply_dimensions(&dimensions, None, window);
         } else {
             self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
         }
+        // --- end weezterm remote features ---
         if let Some(modal) = self.get_modal() {
             modal.reconfigure(self);
         }
