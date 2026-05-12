@@ -26,6 +26,15 @@ working on remote machines feel native. When you connect to a remote host via
 8. **Run shells inside Docker devcontainers** — auto-discover containers,
    manage them from a TUI overlay (`Ctrl+Shift+D`), and connect via
    `docker exec` with optional SSH tunneling.
+<!-- --- weezterm remote features --- -->
+9. **Render correctly inside RDP sessions** — when WeezTerm detects that the
+   only available GPU adapters are software/virtual ones (RDP, Hyper-V Basic
+   Render Driver, etc.) it switches to a CPU-side **SoftwareRdp** backend
+   (WARP D3D11 + DXGI flip-sequential swap chain) instead of falling back to
+   wgpu's CPU path. This produces a stable, flicker-free picture over the
+   RDP wire.
+<!-- --- end weezterm remote features --- -->
+
 
 These extensions are inspired by
 [VS Code Remote - SSH](https://code.visualstudio.com/docs/remote/ssh) and aim
@@ -762,6 +771,107 @@ config.devcontainer_domains = {
 | `Ctrl+Shift+G` | Open Port Manager overlay |
 | `Ctrl+Shift+,` | Open Config Overlay |
 | `Ctrl+Shift+D` | Open DevContainer Manager overlay |
+
+---
+
+<!-- --- weezterm remote features --- -->
+## RDP / Virtual-GPU Rendering (Mode C)
+
+WeezTerm includes a CPU-side **SoftwareRdp** rendering backend specifically
+for environments where no real GPU is available — typically Remote Desktop
+sessions, Hyper-V VMs without GPU partitioning, and headless build agents.
+
+### Why it exists
+
+WezTerm upstream has three backend choices:
+
+- **OpenGL** — fastest, but RDP exposes no working OpenGL ICD; falls back to
+  GDI software rendering with severe artefacts.
+- **WebGpu** — modern wgpu-based renderer; on RDP it can negotiate a Vulkan
+  device through `Microsoft Basic Render Driver`, but the resulting picture
+  is slow and prone to torn frames.
+- **Software** — wgpu's pure-CPU path; slow, and still requires a wgpu
+  adapter to be present.
+
+WeezTerm's **SoftwareRdp** (Mode C) is a fourth option that bypasses wgpu
+entirely. It uses Direct3D 11 with the WARP software adapter and an
+`IDXGISwapChain2` configured for `FLIP_SEQUENTIAL` + `SCALING_NONE`. The
+back buffer is mapped, painted by a freetype-based rasteriser, then
+presented with `Present1`. This is the same scheme the Windows terminal
+uses for its CPU rendering path and is well-tuned for RDP's framing
+codec.
+
+### Automatic selection
+
+The active renderer is chosen by `front_end = "Auto"`, which is the default
+on Windows in WeezTerm. Auto resolves at startup:
+
+1. If `WEEZTERM_RENDER_MODE` env var is set, honour it (`opengl`,
+   `webgpu`, `software`, `software_rdp`, or `auto`).
+2. Else if running inside an RDP session OR all detected GPU adapters are
+   "virtual" (WARP, Microsoft Basic Render Driver, Hyper-V Video, etc.),
+   pick **SoftwareRdp**.
+3. Otherwise pick **WebGpu** (default for real-GPU Windows hosts).
+
+The decision is logged once at startup:
+
+```
+[render] mode=software_rdp rdp=true gpus=[Microsoft Basic Render Driver, …] win_build=26200
+```
+
+### Manual override
+
+To force a specific backend regardless of detection:
+
+```powershell
+# PowerShell
+$env:WEEZTERM_RENDER_MODE = 'software_rdp'   # force Mode C
+$env:WEEZTERM_RENDER_MODE = 'webgpu'         # force wgpu
+$env:WEEZTERM_RENDER_MODE = 'opengl'         # force OpenGL
+Remove-Item Env:WEEZTERM_RENDER_MODE         # back to Auto
+```
+
+Or in the Lua config:
+
+```lua
+config.front_end = 'SoftwareRdp'
+-- or
+config.front_end = 'WebGpu'
+config.front_end = 'OpenGL'
+config.front_end = 'Auto'   -- default on Windows
+```
+
+### Limitations
+
+Mode C is a minimal renderer focused on stability. The following features
+are NOT yet implemented and may render differently or not at all when the
+SoftwareRdp backend is active:
+
+- Tab bar (intentionally not painted in MVP)
+- Scrollbar
+- Modal overlays (charselect, palette, paneselect, launcher)
+- Background images / parallax
+- Ligature shaping (basic glyph shaping only)
+
+For these features, force a different backend:
+
+```lua
+config.front_end = 'WebGpu'   -- if you have a real GPU
+```
+
+### Troubleshooting Mode C
+
+- **`[render] mode=opengl` despite running in RDP** — the env var
+  `WEEZTERM_RENDER_MODE=opengl` is set somewhere in your shell init. Unset it.
+- **Repeated `Present1 failed: HRESULT 0x887a0001` lines** — this is
+  `DXGI_ERROR_INVALID_CALL`. By default WeezTerm passes NULL `pDirtyRects`
+  so this should never appear. If you set `WEEZTERM_ENABLE_DIRTY_RECTS=1`
+  to experiment with dirty-rect optimisation, expect this on flip-sequential
+  swap chains; unset the env var.
+- **Blank window** — capture stderr (`weezterm-gui 2> log.txt`) and look
+  for `[render] mode=…` and `SoftwareRdp WARP swap chain initialised`
+  lines.
+<!-- --- end weezterm remote features --- -->
 
 ---
 

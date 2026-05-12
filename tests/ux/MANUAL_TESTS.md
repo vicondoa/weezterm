@@ -118,3 +118,68 @@ automated.
 
 See the UX findings report for root cause analysis and fix recommendations.
 The manual tests above (M1–M5) are designed to verify this behavior.
+
+---
+
+<!-- --- weezterm remote features --- -->
+## Test M6: SoftwareRdp (Mode C) — Cold Start in RDP Session
+
+**Setup:** Connect to the host via Remote Desktop. Confirm there is no
+locally-attached GPU (the only adapters reported by `Get-PnpDevice -Class
+Display` should be `Microsoft Basic Render Driver` / WARP / virtual GPUs).
+
+**Steps:**
+1. Make sure no `WEEZTERM_RENDER_MODE` env var is set:
+   `Remove-Item Env:WEEZTERM_RENDER_MODE -ErrorAction SilentlyContinue`
+2. Launch: `.\target\debug\weezterm-gui.exe`
+3. Wait 3 seconds for the window to become visible
+4. Type a few commands (`dir`, `cd`, `cls`)
+5. Resize the window by dragging the bottom-right corner
+6. Maximise and restore once
+
+**Expected:**
+- Stderr contains `[render] mode=software_rdp rdp=true` (Auto resolved correctly)
+- Stderr does NOT contain `[render] WEEZTERM_RENDER_MODE override` (no env var)
+- Stderr contains `SoftwareRdp WARP swap chain initialised (WxH)`
+- Stderr does NOT contain any `Present1 failed: HRESULT 0x887a0001`
+- Cursor blinks
+- Text appears in the correct font/colour as you type
+- Window resize redraws cleanly (no torn frames, no permanent artefacts)
+- No crash
+
+**Record:**
+- [ ] mode=software_rdp logged: YES / NO
+- [ ] No Present1 errors: YES / NO
+- [ ] Text input visible: YES / NO
+- [ ] Resize clean: YES / NO
+- [ ] Maximise/restore clean: YES / NO
+
+---
+
+## Test M7: SoftwareRdp (Mode C) — Force-Override Smoke Test
+
+**Setup:** Same machine as M6, but explicitly force the SoftwareRdp backend
+even on hosts where Auto would not pick it.
+
+**Steps:**
+1. `$env:WEEZTERM_RENDER_MODE = 'software_rdp'`
+2. Launch: `.\target\debug\weezterm-gui.exe`
+3. Run `python tests\ux\test_software_rdp.py` (or
+   `python -m pytest tests/ux/test_software_rdp.py -v -s`)
+4. Verify all 3 automated tests pass
+5. Manually exercise the window for 30 seconds: typed input, scrolling,
+   resize, maximise/restore
+
+**Expected:**
+- All 3 automated tests pass
+- Stderr contains `[render] WEEZTERM_RENDER_MODE override = software_rdp`
+- Stderr contains `[render] mode=software_rdp`
+- No `Present1 failed` lines, no panics
+- Window remains responsive throughout
+
+**Record:**
+- [ ] Automated tests passed (3/3): ___/3
+- [ ] Override log line present: YES / NO
+- [ ] Smooth interactive use for 30s: YES / NO
+<!-- --- end weezterm remote features --- -->
+

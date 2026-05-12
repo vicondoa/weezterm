@@ -1,17 +1,34 @@
 use luahelper::impl_lua_conversion_dynamic;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+// --- weezterm remote features ---
+// Phase 4d: default to `Auto` on Windows. The platform-conditional
+// default lets WeezTerm pick `SoftwareRdp` automatically on RDP boxes
+// where neither real OpenGL nor a usable wgpu adapter is available.
+// On non-Windows targets we keep the upstream default (`OpenGL`) so a
+// merge from upstream/main does not change behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
 pub enum FrontEndSelection {
-    #[default]
     OpenGL,
     WebGpu,
     Software,
-    // --- weezterm remote features ---
     Auto,
-    // --- weezterm remote features ---
     WebGpuHwnd,
 }
+
+impl Default for FrontEndSelection {
+    fn default() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::Auto
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self::OpenGL
+        }
+    }
+}
+// --- end weezterm remote features ---
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]
