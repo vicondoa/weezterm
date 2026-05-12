@@ -215,6 +215,28 @@ fn compute_compatibility_list(
     })
 }
 
+// --- weezterm remote features ---
+/// Returns `true` when the user's config asks the window to be
+/// translucent — either via `window_background_opacity < 1.0` or via
+/// `win32_system_backdrop` requesting Mica/Acrylic/Tabbed. `Auto` and
+/// `Disable` do not by themselves indicate translucency; opacity is
+/// the dominant signal in that case.
+///
+/// This is consulted at surface configuration time to decide whether
+/// Mode A should request a `PreMultiplied` alpha mode (transparent
+/// composition) or `Opaque` (zero-alpha-cost composition).
+fn window_uses_translucency(config: &ConfigHandle) -> bool {
+    use config::SystemBackdrop;
+    if config.window_background_opacity < 1.0 {
+        return true;
+    }
+    matches!(
+        config.win32_system_backdrop,
+        SystemBackdrop::Acrylic | SystemBackdrop::Mica | SystemBackdrop::Tabbed
+    )
+}
+// --- end weezterm remote features ---
+
 impl WebGpuState {
     pub async fn new(
         window: &Window,
@@ -382,6 +404,20 @@ impl WebGpuState {
 
         let queue = Arc::new(queue);
 
+        // --- weezterm remote features ---
+        // Phase 2c: Mode A wants `PreMultiplied` when the user has
+        // requested any translucency (so DComp blends the swapchain
+        // output with whatever's behind the window — Mica/Acrylic
+        // backdrop, desktop, other windows). When the window is fully
+        // opaque we ask for `Opaque` so DXGI/DComp can skip per-pixel
+        // alpha. Mode B (HWND swapchain) is necessarily opaque
+        // regardless of `alpha_mode` (DXGI HWND swapchains only
+        // support `DXGI_ALPHA_MODE_IGNORE`), so preserve the
+        // historical caps-driven fallback there to avoid breaking
+        // existing behaviour.
+        let translucent = window_uses_translucency(config);
+        // --- end weezterm remote features ---
+
         // Explicitly request an SRGB format, if available
         let pref_format_srgb = caps.formats[0].add_srgb_suffix();
         let format = if caps.formats.contains(&pref_format_srgb) {
@@ -409,19 +445,29 @@ impl WebGpuState {
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: if caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PostMultiplied
-            } else if caps
-                .alpha_modes
-                .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
-            {
-                wgpu::CompositeAlphaMode::PreMultiplied
-            } else {
-                wgpu::CompositeAlphaMode::Auto
+            // --- weezterm remote features ---
+            alpha_mode: match mode {
+                ::window::render_mode::RenderMode::WgpuDComp if translucent => {
+                    wgpu::CompositeAlphaMode::PreMultiplied
+                }
+                ::window::render_mode::RenderMode::WgpuDComp => wgpu::CompositeAlphaMode::Opaque,
+                _ => {
+                    if caps
+                        .alpha_modes
+                        .contains(&wgpu::CompositeAlphaMode::PostMultiplied)
+                    {
+                        wgpu::CompositeAlphaMode::PostMultiplied
+                    } else if caps
+                        .alpha_modes
+                        .contains(&wgpu::CompositeAlphaMode::PreMultiplied)
+                    {
+                        wgpu::CompositeAlphaMode::PreMultiplied
+                    } else {
+                        wgpu::CompositeAlphaMode::Auto
+                    }
+                }
             },
+            // --- end weezterm remote features ---
             view_formats,
             // --- weezterm remote features ---
             // Phase 2b: Mode A uses frame-latency=1 (paired with the

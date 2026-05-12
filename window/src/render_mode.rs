@@ -73,6 +73,13 @@ pub fn resolve() -> RenderMode {
     RenderMode::auto_select()
 }
 
+/// Returns `true` when the resolved render mode is Mode A (`WgpuDComp`).
+/// Used by the Windows back-end to gate legacy DWM blur / accent paths
+/// that are incompatible with a DirectComposition-backed swapchain.
+pub fn is_dcomp() -> bool {
+    resolve() == RenderMode::WgpuDComp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

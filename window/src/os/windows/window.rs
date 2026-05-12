@@ -1584,6 +1584,17 @@ fn get_window_state(hwnd: HWND) -> WindowState {
 /// to tell DWM that we set proper alpha channel info as
 /// a result of rendering our window content.
 fn enable_blur_behind(hwnd: HWND) {
+    // --- weezterm remote features ---
+    // Mode A (DComp) owns the redirection surface via a DXGI
+    // `VisualFromWndHandle` swapchain target. `DwmEnableBlurBehindWindow`
+    // is the Vista-era "Aero blur" hack used in Mode B to opt the
+    // legacy GDI compositor into honouring our alpha channel; with
+    // DComp it is at best redundant and at worst interferes with the
+    // composition tree. Skip entirely on Mode A.
+    if crate::render_mode::is_dcomp() {
+        return;
+    }
+    // --- end weezterm remote features ---
     use winapi::shared::minwindef::*;
     use winapi::um::dwmapi::*;
     use winapi::um::wingdi::*;
@@ -1731,7 +1742,20 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
                     &pv_attribute as *const _ as _,
                     std::mem::size_of_val(&pv_attribute) as u32,
                 );
-            } else {
+            // --- weezterm remote features ---
+            // Mode A (DComp) is incompatible with the legacy
+            // `SetWindowCompositionAttribute(0x13)` accent policy and
+            // `DWMWA_MICA_EFFECT` paths below: both write to the HWND
+            // redirection surface, which DComp owns and replaces.
+            // Skip them on Mode A entirely. On the DComp target,
+            // Mica/Acrylic that *does* land via the modern
+            // `DWMWA_SYSTEMBACKDROP_TYPE` branch above is fully
+            // compatible. Users on Win10 19041-19045 (Mode A
+            // capable, but no `DWMWA_SYSTEMBACKDROP_TYPE`) get no
+            // Mica/Acrylic backdrop — the safe default for a
+            // composition-aware surface.
+            } else if !crate::render_mode::is_dcomp() {
+                // --- end weezterm remote features ---
                 let mut colour = inner.config.win32_acrylic_accent_color.to_srgb_u8();
                 colour.3 = if colour.3 == 0 { 1 } else { colour.3 }; // acrylic doesn't like to have 0 alpha
 
