@@ -9,6 +9,90 @@ import pytest
 from helpers.app import WeezTermApp
 
 
+# --- weezterm remote features ---
+# Phase 0: capture the test environment (RDP / GPU / Windows build) into
+# tests/ux/test-results/env.txt at session start. This lets failure
+# triage attribute regressions to a specific environment without re-running
+# the test under a debugger.
+@pytest.fixture(scope="session", autouse=True)
+def _capture_test_env():
+    """Write rendering-environment metadata to test-results/env.txt."""
+    import datetime
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent
+    out_dir = repo_root / "test-results"
+    out_dir.mkdir(exist_ok=True)
+
+    rdp = _detect_rdp_session()
+    gpus = _enumerate_gpus()
+    win_build = _windows_build_number()
+    ts = datetime.datetime.now().isoformat()
+
+    env_path = out_dir / "env.txt"
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(f"rdp={'true' if rdp else 'false'}\n")
+        f.write(f"gpus={','.join(gpus)}\n")
+        f.write(f"win_build={win_build}\n")
+        f.write(f"ts={ts}\n")
+
+    yield
+
+
+def _detect_rdp_session() -> bool:
+    """Return True if running in an RDP session, via GetSystemMetrics(SM_REMOTESESSION)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        SM_REMOTESESSION = 0x1000
+        return bool(ctypes.windll.user32.GetSystemMetrics(SM_REMOTESESSION))
+    except Exception:
+        return False
+
+
+def _enumerate_gpus() -> list:
+    """Return a list of GPU adapter names. Empty list on non-Windows or failure."""
+    if os.name != "nt":
+        return []
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '|'",
+            ],
+            timeout=15,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return [s.strip() for s in out.strip().split("|") if s.strip()]
+    except Exception:
+        return []
+
+
+def _windows_build_number() -> int:
+    """Return the Windows build number, or 0 on failure / non-Windows."""
+    if os.name != "nt":
+        return 0
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "CurrentBuildNumber")
+            return int(value)
+    except Exception:
+        return 0
+# --- end weezterm remote features ---
+
+
 # Global timeout for all tests (seconds)
 GLOBAL_TIMEOUT = 120
 

@@ -60,6 +60,9 @@ winapi = { workspace=true, features = [
     "sysinfoapi",
     "winerror",
     "winuser",
+    # --- weezterm remote features ---
+    "dxgi",
+    # --- end weezterm remote features ---
 ]}
 windows = { workspace=true, features = [
     "UI_ViewManagement",
