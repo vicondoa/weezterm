@@ -26,6 +26,9 @@ use crate::termwindow::render::{
     LineToElementShapeItem,
 };
 use crate::termwindow::webgpu::WebGpuState;
+// --- weezterm remote features ---
+use crate::termwindow::backend::RenderBackend;
+// --- end weezterm remote features ---
 use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
@@ -83,6 +86,9 @@ pub mod resize;
 mod selection;
 pub mod spawn;
 pub mod webgpu;
+// --- weezterm remote features ---
+pub mod backend;
+// --- end weezterm remote features ---
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
@@ -463,7 +469,12 @@ pub struct TermWindow {
     connection_name: String,
 
     gl: Option<Rc<glium::backend::Context>>,
-    webgpu: Option<Rc<WebGpuState>>,
+    // --- weezterm remote features ---
+    /// Rendering backend (replaces the previous `webgpu: Option<Rc<WebGpuState>>`
+    /// field). See `crate::termwindow::backend::RenderBackend` and
+    /// `docs/windows-rendering-design.md` Phase 4.
+    backend: RenderBackend,
+    // --- end weezterm remote features ---
     config_subscription: Option<config::ConfigSubscription>,
 
     // --- weezterm remote features ---
@@ -702,7 +713,9 @@ impl TermWindow {
             // --- end weezterm remote features ---
             os_parameters: None,
             gl: None,
-            webgpu: None,
+            // --- weezterm remote features ---
+            backend: RenderBackend::None,
+            // --- end weezterm remote features ---
             window: None,
             window_background,
             config: config.clone(),
@@ -989,7 +1002,9 @@ impl TermWindow {
                 myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
             }
             if let Some(webgpu) = webgpu {
-                myself.webgpu.replace(Rc::clone(&webgpu));
+                // --- weezterm remote features ---
+                myself.backend = RenderBackend::WebGpu(Rc::clone(&webgpu));
+                // --- end weezterm remote features ---
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
             }
             myself.load_os_parameters();
@@ -1144,7 +1159,7 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
+                    if self.backend.webgpu().is_some() {
                         self.do_paint_webgpu()?;
                     } else {
                         self.do_paint(window);
@@ -1184,7 +1199,7 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
-                } else if self.webgpu.is_some() {
+                } else if self.backend.webgpu().is_some() {
                     self.do_paint_webgpu()
                 } else {
                     Ok(self.do_paint(window))
@@ -1274,13 +1289,13 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+        self.backend.webgpu().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
             Err(err) => {
                 match err.downcast_ref::<wgpu::SurfaceError>() {
                     Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+                        self.backend.webgpu().unwrap().resize(self.dimensions);
                         return self.do_paint_webgpu_impl();
                     }
                     _ => {}
