@@ -148,3 +148,90 @@ def wait_for_idle(hwnd: int, timeout_ms: int = 5000):
 def settle(delay: float = 0.5):
     """Wait for UI to settle after an operation."""
     time.sleep(delay)
+
+
+# --- weezterm remote features ---
+def get_work_area() -> WindowRect:
+    """Get the work area (screen minus taskbar) of the primary monitor."""
+    rect = ctypes.wintypes.RECT()
+    SPI_GETWORKAREA = 0x0030
+    ctypes.windll.user32.SystemParametersInfoW(
+        SPI_GETWORKAREA, 0, ctypes.byref(rect), 0
+    )
+    return WindowRect(
+        x=rect.left,
+        y=rect.top,
+        width=rect.right - rect.left,
+        height=rect.bottom - rect.top,
+    )
+
+
+def snap_left(hwnd: int):
+    """Simulate Windows Snap Left (Win+Left arrow).
+
+    Uses keybd_event to send Win+Left inside the session.
+    This works over RDP because it runs within the remote session.
+    """
+    set_foreground(hwnd)
+    time.sleep(0.2)
+    _send_snap_key(0x25)  # VK_LEFT
+
+
+def snap_right(hwnd: int):
+    """Simulate Windows Snap Right (Win+Right arrow)."""
+    set_foreground(hwnd)
+    time.sleep(0.2)
+    _send_snap_key(0x27)  # VK_RIGHT
+
+
+def _send_snap_key(arrow_vk: int):
+    """Send Win+Arrow via keybd_event for window snapping."""
+    VK_LWIN = 0x5B
+    KEYEVENTF_KEYUP = 0x0002
+    user32.keybd_event(VK_LWIN, 0, 0, 0)           # Win down
+    time.sleep(0.05)
+    user32.keybd_event(arrow_vk, 0, 0, 0)           # Arrow down
+    time.sleep(0.05)
+    user32.keybd_event(arrow_vk, 0, KEYEVENTF_KEYUP, 0)  # Arrow up
+    time.sleep(0.05)
+    user32.keybd_event(VK_LWIN, 0, KEYEVENTF_KEYUP, 0)   # Win up
+
+
+def _send_key_combo(modifier_vk: int, key_vk: int):
+    """Send a two-key combination via SendInput (e.g. Win+Left)."""
+
+    class KEYBDINPUT(ctypes.Structure):
+        _fields_ = [
+            ("wVk", ctypes.wintypes.WORD),
+            ("wScan", ctypes.wintypes.WORD),
+            ("dwFlags", ctypes.wintypes.DWORD),
+            ("time", ctypes.wintypes.DWORD),
+            ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+        ]
+
+    class INPUT(ctypes.Structure):
+        class _INPUT_UNION(ctypes.Union):
+            _fields_ = [("ki", KEYBDINPUT)]
+        _fields_ = [
+            ("type", ctypes.wintypes.DWORD),
+            ("union", _INPUT_UNION),
+        ]
+
+    INPUT_KEYBOARD = 1
+    KEYEVENTF_KEYUP = 0x0002
+
+    def make_input(vk, flags=0):
+        inp = INPUT()
+        inp.type = INPUT_KEYBOARD
+        inp.union.ki.wVk = vk
+        inp.union.ki.dwFlags = flags
+        return inp
+
+    inputs = (INPUT * 4)(
+        make_input(modifier_vk),          # modifier down
+        make_input(key_vk),               # key down
+        make_input(key_vk, KEYEVENTF_KEYUP),    # key up
+        make_input(modifier_vk, KEYEVENTF_KEYUP),  # modifier up
+    )
+    user32.SendInput(4, ctypes.byref(inputs), ctypes.sizeof(INPUT))
+# --- end weezterm remote features ---

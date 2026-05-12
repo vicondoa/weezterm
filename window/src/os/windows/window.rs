@@ -3252,8 +3252,17 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             let mut rc: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut rc);
             let brush = if let Some(inner) = rc_from_hwnd(hwnd) {
-                let inner = inner.borrow();
-                inner.bg_brush
+                // Use try_borrow() to avoid panic when WM_ERASEBKGND
+                // is sent reentrantly from BeginPaint while wm_paint
+                // already holds a mutable borrow on the same RefCell.
+                match inner.try_borrow() {
+                    Ok(inner) => inner.bg_brush,
+                    Err(_) => {
+                        winapi::um::wingdi::GetStockObject(
+                            winapi::um::wingdi::BLACK_BRUSH as i32,
+                        ) as _
+                    }
+                }
             } else {
                 winapi::um::wingdi::GetStockObject(
                     winapi::um::wingdi::BLACK_BRUSH as i32,
