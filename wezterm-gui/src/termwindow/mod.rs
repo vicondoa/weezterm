@@ -88,6 +88,8 @@ pub mod spawn;
 pub mod webgpu;
 // --- weezterm remote features ---
 pub mod backend;
+#[cfg(windows)]
+pub mod software_rdp;
 // --- end weezterm remote features ---
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
@@ -945,16 +947,30 @@ impl TermWindow {
             }
         });
 
-        let gl = match config.front_end {
+        // --- weezterm remote features ---
+        // Phase 4: WEEZTERM_RENDER_MODE always wins. When set, it
+        // forces the render-mode selection regardless of
+        // `config.front_end`. We treat that case as if the user picked
+        // `Auto` so the regular Auto routing below resolves it.
+        let env_override_active = ::window::diagnostics::render_mode_override().is_some();
+        let effective_front_end = if env_override_active {
+            FrontEndSelection::Auto
+        } else {
+            config.front_end
+        };
+        // --- end weezterm remote features ---
+
+        let gl = match effective_front_end {
             FrontEndSelection::WebGpu => None,
             // --- weezterm remote features ---
             FrontEndSelection::WebGpuHwnd => None,
             FrontEndSelection::Auto => match ::window::render_mode::resolve() {
                 ::window::render_mode::RenderMode::WgpuDComp
                 | ::window::render_mode::RenderMode::WgpuClassic => None,
-                ::window::render_mode::RenderMode::SoftwareRdp => {
-                    Some(window.enable_opengl().await?)
-                }
+                // Phase 4: SoftwareRdp now constructs a WARP swap chain
+                // below instead of falling back to OpenGL. We leave gl
+                // None here so the SoftwareRdp init block runs.
+                ::window::render_mode::RenderMode::SoftwareRdp => None,
             },
             // --- end weezterm remote features ---
             _ => Some(window.enable_opengl().await?),
@@ -962,7 +978,7 @@ impl TermWindow {
 
         {
             let mut myself = tw.borrow_mut();
-            let webgpu = match config.front_end {
+            let webgpu = match effective_front_end {
                 FrontEndSelection::WebGpu => Some(Rc::new(
                     WebGpuState::new(&window, dimensions, &config).await?,
                 )),
@@ -1007,6 +1023,75 @@ impl TermWindow {
                 // --- end weezterm remote features ---
                 myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
             }
+            // --- weezterm remote features ---
+            // Phase 4 Mode C: when Auto resolved to SoftwareRdp, neither
+            // gl nor webgpu was constructed. Build the WARP swap chain now
+            // and stash it on the backend. The CPU draw pipeline lands in
+            // Phase 4c; for 4b we present a solid clear colour so the
+            // window paints something instead of staying transparent.
+            #[cfg(windows)]
+            if matches!(effective_front_end, FrontEndSelection::Auto)
+                && matches!(
+                    ::window::render_mode::resolve(),
+                    ::window::render_mode::RenderMode::SoftwareRdp
+                )
+                && !myself.backend.is_some()
+                && myself.gl.is_none()
+            {
+                use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                match window.window_handle() {
+                    Ok(h) => match h.as_raw() {
+                        RawWindowHandle::Win32(win32) => {
+                            let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
+                            match crate::termwindow::software_rdp::SoftwareRdpState::new(
+                                hwnd,
+                                dimensions.pixel_width as u32,
+                                dimensions.pixel_height as u32,
+                            ) {
+                                Ok(state) => {
+                                    log::info!(
+                                        "[render] SoftwareRdp WARP swap chain initialised \
+                                         ({}x{})",
+                                        state.width(),
+                                        state.height(),
+                                    );
+                                    myself.backend = RenderBackend::SoftwareRdp(Rc::new(
+                                        std::cell::RefCell::new(state),
+                                    ));
+                                }
+                                Err(err) => {
+                                    log::error!(
+                                        "[render] SoftwareRdpState::new failed: {err:#}; \
+                                         falling back to OpenGL",
+                                    );
+                                    let gl = window.enable_opengl().await?;
+                                    myself.gl.replace(Rc::clone(&gl));
+                                    myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                                }
+                            }
+                        }
+                        other => {
+                            log::error!(
+                                "[render] SoftwareRdp requires a Win32 window handle; \
+                                 got {other:?}; falling back to OpenGL",
+                            );
+                            let gl = window.enable_opengl().await?;
+                            myself.gl.replace(Rc::clone(&gl));
+                            myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                        }
+                    },
+                    Err(err) => {
+                        log::error!(
+                            "[render] window_handle() failed for SoftwareRdp init: {err:#}; \
+                             falling back to OpenGL",
+                        );
+                        let gl = window.enable_opengl().await?;
+                        myself.gl.replace(Rc::clone(&gl));
+                        myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                    }
+                }
+            }
+            // --- end weezterm remote features ---
             myself.load_os_parameters();
             // --- weezterm remote features ---
             // Set the OS window background color to match the terminal scheme
@@ -1161,6 +1246,10 @@ impl TermWindow {
                     self.is_repaint_pending = false;
                     if self.backend.webgpu().is_some() {
                         self.do_paint_webgpu()?;
+                    // --- weezterm remote features ---
+                    } else if self.is_software_rdp() {
+                        self.do_paint_software_rdp()?;
+                    // --- end weezterm remote features ---
                     } else {
                         self.do_paint(window);
                     }
@@ -1201,6 +1290,10 @@ impl TermWindow {
                     Ok(true)
                 } else if self.backend.webgpu().is_some() {
                     self.do_paint_webgpu()
+                // --- weezterm remote features ---
+                } else if self.is_software_rdp() {
+                    self.do_paint_software_rdp()
+                // --- end weezterm remote features ---
                 } else {
                     Ok(self.do_paint(window))
                 }
@@ -1309,6 +1402,69 @@ impl TermWindow {
         self.paint_impl(&mut RenderFrame::WebGpu);
         Ok(true)
     }
+
+    // --- weezterm remote features ---
+    /// Phase 4 Mode C dispatch. Returns true if a SoftwareRdp backend is
+    /// attached. Cheap; matches on the enum variant.
+    #[cfg(windows)]
+    fn is_software_rdp(&self) -> bool {
+        self.backend.software_rdp().is_some()
+    }
+    #[cfg(not(windows))]
+    fn is_software_rdp(&self) -> bool {
+        false
+    }
+
+    /// Phase 4b: paint via the SoftwareRdp WARP swap chain. The CPU draw
+    /// path is added in phase 4c — for now we present a solid clear
+    /// colour matching the current palette background so the window
+    /// shows something instead of staying transparent.
+    #[cfg(windows)]
+    fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
+        let state_rc = match self.backend.software_rdp() {
+            Some(s) => s.clone(),
+            None => return Ok(false),
+        };
+        let mut state = state_rc.borrow_mut();
+
+        // Resize swap chain to current client rect if the window grew /
+        // shrunk since the last paint.
+        let target_w = self.dimensions.pixel_width as u32;
+        let target_h = self.dimensions.pixel_height as u32;
+        if state.width() != target_w.max(1) || state.height() != target_h.max(1) {
+            state
+                .resize(target_w, target_h)
+                .context("resize SoftwareRdp swap chain")?;
+        }
+
+        // Phase 4b stub: fill with a neutral dark colour so the user can
+        // see the swap chain is presenting. Phase 4c replaces this with
+        // the real terminal contents.
+        let palette = self.palette();
+        let bg = palette.background.as_rgba_u8();
+        let (pixels, stride) = state.pixels_mut();
+        let h = (pixels.len() / stride as usize) as u32;
+        for y in 0..h {
+            let row = &mut pixels[(y * stride) as usize..(y * stride + stride) as usize];
+            for px in row.chunks_exact_mut(4) {
+                // BGRA8
+                px[0] = bg.2; // B
+                px[1] = bg.1; // G
+                px[2] = bg.0; // R
+                px[3] = 0xff;
+            }
+        }
+        state.mark_all_dirty();
+        state.present().context("SoftwareRdp present")?;
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    #[allow(dead_code)]
+    fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    // --- end weezterm remote features ---
 
     fn dispatch_notif(&mut self, notif: TermWindowNotif, window: &Window) -> anyhow::Result<()> {
         fn chan_err<T>(e: smol::channel::TrySendError<T>) -> anyhow::Error {

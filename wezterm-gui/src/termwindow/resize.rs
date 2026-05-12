@@ -59,6 +59,20 @@ impl super::TermWindow {
         if let Some(webgpu) = self.backend.webgpu() {
             webgpu.resize(dimensions);
         }
+        // --- weezterm remote features ---
+        // Phase 4 Mode C: keep the WARP swap chain in sync with the
+        // window client rect.
+        #[cfg(windows)]
+        if let Some(state) = self.backend.software_rdp() {
+            let mut s = state.borrow_mut();
+            if let Err(err) = s.resize(
+                dimensions.pixel_width as u32,
+                dimensions.pixel_height as u32,
+            ) {
+                log::error!("[render] SoftwareRdp resize failed: {err:#}");
+            }
+        }
+        // --- end weezterm remote features ---
 
         // --- weezterm remote features ---
         // For any resize where the DPI hasn't changed, use the simple

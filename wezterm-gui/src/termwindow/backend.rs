@@ -26,6 +26,12 @@ pub enum RenderBackend {
     None,
     /// wgpu (Mode A `WgpuDComp` / Mode B `WgpuClassic`).
     WebGpu(Rc<WebGpuState>),
+    /// Pure CPU rasteriser presenting through a WARP DXGI swap chain
+    /// (Mode C `SoftwareRdp`). Held in a `RefCell` because the present
+    /// path needs `&mut SoftwareRdpState` while `TermWindow` only
+    /// exposes `&self`/`&mut self` cleanly through its dispatch sites.
+    #[cfg(windows)]
+    SoftwareRdp(std::rc::Rc<std::cell::RefCell<crate::termwindow::software_rdp::SoftwareRdpState>>),
 }
 
 impl RenderBackend {
@@ -33,7 +39,19 @@ impl RenderBackend {
     pub fn webgpu(&self) -> Option<&Rc<WebGpuState>> {
         match self {
             Self::WebGpu(w) => Some(w),
-            Self::None => None,
+            _ => None,
+        }
+    }
+
+    /// Returns the SoftwareRdp state, if `self` is `SoftwareRdp(_)`.
+    #[cfg(windows)]
+    pub fn software_rdp(
+        &self,
+    ) -> Option<&std::rc::Rc<std::cell::RefCell<crate::termwindow::software_rdp::SoftwareRdpState>>>
+    {
+        match self {
+            Self::SoftwareRdp(s) => Some(s),
+            _ => None,
         }
     }
 

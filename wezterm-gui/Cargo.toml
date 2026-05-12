@@ -121,6 +121,17 @@ winapi = { workspace=true, features = [
     "namedpipeapi",
     "synchapi",
     "winsock2",
+    # --- weezterm remote features ---
+    # Phase 4: Mode C (SoftwareRdp) WARP D3D11 + DXGI swap chain.
+    "d3d11",
+    "d3dcommon",
+    "dxgi",
+    "dxgi1_2",
+    "dxgi1_3",
+    "dxgiformat",
+    "dxgitype",
+    "unknwnbase",
+    # --- end weezterm remote features ---
 ]}
 windows = { workspace=true, features = [
     "Win32_UI_Shell",
