@@ -8,7 +8,15 @@ use wezterm_dynamic::{FromDynamic, ToDynamic};
 // On non-Windows targets we keep the upstream default (`OpenGL`) so a
 // merge from upstream/main does not change behaviour.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+#[allow(deprecated)] // OpenGL variant kept for back-compat; derive references all variants by name.
 pub enum FrontEndSelection {
+    #[deprecated(
+        since = "WeezTerm-rendering-overhaul",
+        note = "OpenGL/glium is incompatible with DWM (no flip-model swap chain, classic stretch \
+                on resize) and will be removed once Mode C (SoftwareRdp) has shipped for one \
+                full release. Migrate to `Auto` (the new default on Windows). \
+                See docs/windows-rendering-design.md for the full design."
+    )]
     OpenGL,
     WebGpu,
     Software,
@@ -16,6 +24,7 @@ pub enum FrontEndSelection {
     WebGpuHwnd,
 }
 
+#[allow(deprecated)] // Reference to OpenGL variant in the non-Windows back-compat default.
 impl Default for FrontEndSelection {
     fn default() -> Self {
         #[cfg(target_os = "windows")]
