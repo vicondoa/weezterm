@@ -492,6 +492,16 @@ pub struct TermWindow {
     /// so we can distinguish it from user-set overrides and restore
     /// the user's value when leaving the monitor.
     monitor_injected_color_scheme: Option<String>,
+    /// p6 (Option 6A) — dedicated cursor-blink thread. Posts an
+    /// `InvalidateRect` on the configured `cursor_blink_rate` cadence,
+    /// independent of the WindowProc message loop / smol executor that
+    /// can otherwise be starved by sustained paint load. Lives as long as
+    /// the `TermWindow`; cleaned up via Drop on the inner type. `None`
+    /// when the window has no Win32 handle, when blink is disabled, or
+    /// when the spawn failed (we log + degrade gracefully). See
+    /// `crate::cursor_blink_thread` and `docs/windows-rendering-design.md`
+    /// §6 Phase 6.
+    cursor_blink_thread: Option<crate::cursor_blink_thread::CursorBlinkThread>,
     // --- end weezterm remote features ---
 }
 
@@ -718,6 +728,7 @@ impl TermWindow {
             // --- weezterm remote features ---
             current_screen_name: None,
             monitor_injected_color_scheme: None,
+            cursor_blink_thread: None,
             // --- end weezterm remote features ---
             os_parameters: None,
             gl: None,
@@ -1155,6 +1166,16 @@ impl TermWindow {
             // Bring the window to front after restoring state, otherwise
             // maximize/fullscreen can leave it behind other windows.
             window.focus();
+
+            // p6 (Option 6A): spawn the dedicated cursor-blink thread now
+            // that the window has a valid OS handle. The thread keeps the
+            // blink schedule firing under sustained paint load that would
+            // otherwise starve the existing smol-Timer-based animation
+            // scheduler in render/paint.rs. Cleaned up via the Drop on the
+            // thread handle when the TermWindow is dropped.
+            let blink_interval = std::time::Duration::from_millis(config.cursor_blink_rate);
+            myself.cursor_blink_thread =
+                crate::cursor_blink_thread::spawn_for_window(&window, blink_interval);
             // --- end weezterm remote features ---
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
@@ -2238,6 +2259,14 @@ impl TermWindow {
             config.text_blink_rapid_ease_out,
             None,
         );
+        // --- weezterm remote features ---
+        // p6 (Option 6A): keep the cursor-blink thread cadence in sync
+        // with the live config. No-op on non-Windows / when the thread
+        // wasn't spawned.
+        if let Some(ref blink_thread) = self.cursor_blink_thread {
+            blink_thread.set_interval(std::time::Duration::from_millis(config.cursor_blink_rate));
+        }
+        // --- end weezterm remote features ---
 
         self.show_scroll_bar = config.enable_scroll_bar;
         self.shape_generation += 1;

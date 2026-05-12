@@ -181,5 +181,49 @@ even on hosts where Auto would not pick it.
 - [ ] Automated tests passed (3/3): ___/3
 - [ ] Override log line present: YES / NO
 - [ ] Smooth interactive use for 30s: YES / NO
+
+---
+
+## Test M8: Cursor Blink Stutter Under Sustained Scroll Load (p6)
+
+**Setup:** WeezTerm running in any environment (RDP or local). Default
+config (so `cursor_blink_rate = 800` ms). The Phase 6 cursor-blink
+thread runs unconditionally on Windows, so this test exercises both the
+existing smol-Timer schedule and the new dedicated thread.
+
+**Steps:**
+1. Place a focused, idle WeezTerm window where you can see the cursor.
+2. Visually note the cursor blinking on/off at the configured rate
+   (~0.6 Hz for `cursor_blink_rate = 800`).
+3. In the same pane, run a command that produces sustained output for
+   several seconds. Examples (pick one that's available):
+   - `seq 1 50000`
+   - `seq 1 100000 | head -5000`
+   - `cat <large file>`
+   - `for /l %i in (1,1,5000) do @echo %i` (CMD)
+4. Watch the cursor area during the entire scroll, not just at the end.
+
+**Expected (with p6, today):**
+- Cursor blink remains visible at the configured cadence throughout the
+  scroll. The cursor blinks even while output is streaming.
+- No panic, no deadlock, no "stuck cursor" state once the scroll
+  completes.
+
+**Without p6 (regression baseline):**
+- Cursor blink stops or stutters during the scroll burst because the
+  smol `Timer::at` reschedule lives on the same executor that's busy
+  servicing `WM_PAINT`. The blink resumes only after the scroll quiets.
+
+**Steps to verify the new thread is doing the work:**
+1. Run with `WEZTERM_LOG=weezterm_gui::cursor_blink_thread=debug,info` in
+   the env. (Note: `WEZTERM_LOG`, not `RUST_LOG`.)
+2. On startup, look for: `[render] cursor blink thread started`.
+3. On normal close, look for: `[render] cursor blink thread exiting`.
+
+**Record:**
+- [ ] Cursor blinked throughout the scroll: YES / NO
+- [ ] `cursor blink thread started` log line present: YES / NO
+- [ ] No deadlock during resize while the thread is running: YES / NO
+- [ ] Notes on subjective quality: ____________________
 <!-- --- end weezterm remote features --- -->
 

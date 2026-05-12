@@ -58,6 +58,7 @@ mod uniforms;
 mod update;
 mod utilsprites;
 // --- weezterm remote features ---
+mod cursor_blink_thread;
 mod window_state_persistence;
 // --- end weezterm remote features ---
 
