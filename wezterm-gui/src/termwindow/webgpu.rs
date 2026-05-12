@@ -41,6 +41,20 @@ pub struct WebGpuState {
     /// (`WgpuClassic`) preserves the historical HWND swapchain
     /// behaviour. See `docs/windows-rendering-design.md` §4.
     pub mode: ::window::render_mode::RenderMode,
+    /// Phase 3: cached `HANDLE` returned by
+    /// `IDXGISwapChain2::GetFrameLatencyWaitableObject`, fetched via
+    /// the wgpu HAL after surface configuration. Only `Some` when
+    /// `mode == RenderMode::WgpuDComp` AND the HAL accessor for the
+    /// underlying swap chain succeeded.
+    ///
+    /// The render loop waits on it before recording each frame.
+    /// `Drop` calls `CloseHandle` to release our reference; the swap
+    /// chain owns its own internal reference, which wgpu-hal closes
+    /// when the swap chain is destroyed. See
+    /// `docs/windows-rendering-design.md` §4 +
+    /// `tests/ux/test_frame_latency.py`.
+    #[cfg(windows)]
+    pub frame_latency_waitable: Option<winapi::shared::ntdef::HANDLE>,
     // --- end weezterm remote features ---
 }
 
@@ -483,6 +497,98 @@ impl WebGpuState {
         surface.configure(&device, &config);
 
         // --- weezterm remote features ---
+        // Phase 3: HAL-level hooks for Mode A. wgpu's API exposes
+        // `desired_maximum_frame_latency` (set above to 1) and
+        // `latency_waitable_object: Wait` (set in the BackendOptions
+        // above) and wgpu-hal already calls `SetMaximumFrameLatency`
+        // and `WaitForSingleObject` internally during
+        // `acquire_texture`. We *additionally* drop down to the raw
+        // `IDXGISwapChain3` here to:
+        //
+        //   1. Belt-and-braces re-call `SetMaximumFrameLatency(1)`
+        //      via the public `IDXGISwapChain2` method (idempotent).
+        //   2. Fetch our own copy of the waitable HANDLE via
+        //      `GetFrameLatencyWaitableObject` so the render loop
+        //      can wait on it *before* `surface.get_current_texture`
+        //      (which is where wgpu-hal performs its own wait). This
+        //      gives us the chance to discard wrong-size frames or
+        //      skip work when the GPU is still busy.
+        //
+        // Per Microsoft docs, each call to
+        // `GetFrameLatencyWaitableObject` increments the swap chain's
+        // internal refcount on the waitable; we must therefore call
+        // `CloseHandle` in `Drop`. wgpu-hal owns its own separate
+        // HANDLE which it closes via `release_resources`, so the two
+        // do not interfere.
+        //
+        // The optional `DXGI_SCALING_NONE` swap-chain rebuild
+        // mentioned in `docs/windows-rendering-design.md` §6 Phase 3
+        // is intentionally NOT done here — it would require manually
+        // recreating the swap chain through the HAL and is too risky
+        // for the marginal artifact-reduction benefit (DComp +
+        // waitable already absorb most of the resize stretch).
+        // Tracked in `docs/upstream-wgpu-pr-notes.md`.
+        #[cfg(windows)]
+        let frame_latency_waitable: Option<winapi::shared::ntdef::HANDLE> =
+            if mode == ::window::render_mode::RenderMode::WgpuDComp {
+                let mut waitable: Option<winapi::shared::ntdef::HANDLE> = None;
+                unsafe {
+                    if let Some(raw_surface) = surface.as_hal::<wgpu::hal::api::Dx12>() {
+                        // `swap_chain()` returns
+                        // `Option<windows::Win32::Graphics::Dxgi::IDXGISwapChain3>`
+                        // (from wgpu-hal's `windows = "0.62"` dep).
+                        // `IDXGISwapChain3: Deref<Target =
+                        // IDXGISwapChain2>` so the `IDXGISwapChain2`
+                        // methods are inherent.
+                        if let Some(sc) = raw_surface.swap_chain() {
+                            // Belt-and-braces; wgpu-hal already does this.
+                            if let Err(e) = sc.SetMaximumFrameLatency(1) {
+                                log::warn!(
+                                    "[render] HAL SetMaximumFrameLatency(1) \
+                                     failed: {e:?}"
+                                );
+                            }
+                            // Get our own HANDLE; closed in `Drop`.
+                            let h = sc.GetFrameLatencyWaitableObject();
+                            if !h.0.is_null() {
+                                // `windows::Foundation::HANDLE.0` is
+                                // `*mut core::ffi::c_void`; winapi's
+                                // `HANDLE` is `*mut winapi::ctypes::c_void`.
+                                // Both are `*mut c_void` ABI-wise, so
+                                // an `as` cast is safe.
+                                waitable = Some(h.0 as winapi::shared::ntdef::HANDLE);
+                                log::info!(
+                                    "[render] HAL frame-latency waitable \
+                                     acquired (mode={})",
+                                    mode.as_str()
+                                );
+                            } else {
+                                log::warn!(
+                                    "[render] HAL GetFrameLatencyWaitableObject \
+                                     returned null; waitable disabled"
+                                );
+                            }
+                        } else {
+                            log::warn!(
+                                "[render] HAL swap_chain accessor returned None; \
+                                 waitable disabled (frame latency relies on \
+                                 wgpu-API config only)"
+                            );
+                        }
+                    } else {
+                        log::warn!(
+                            "[render] surface.as_hal::<Dx12>() returned None; \
+                             not running on the DX12 backend? Waitable disabled"
+                        );
+                    }
+                }
+                waitable
+            } else {
+                None
+            };
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
         // Phase 2c diagnostic line. Format mirrors the `[render] mode=...`
         // startup line and is grepped by `tests/ux/test_transparency.py`.
         // The fields are stable; do not rename without updating the test.
@@ -623,6 +729,8 @@ impl WebGpuState {
             texture_linear_sampler,
             // --- weezterm remote features ---
             mode,
+            #[cfg(windows)]
+            frame_latency_waitable,
             // --- end weezterm remote features ---
         })
     }
@@ -677,3 +785,24 @@ impl WebGpuState {
         }
     }
 }
+
+// --- weezterm remote features ---
+// Phase 3: release the waitable HANDLE we acquired via
+// `IDXGISwapChain2::GetFrameLatencyWaitableObject`. wgpu-hal owns its
+// own separate HANDLE which it releases when the swap chain is
+// destroyed (see `wgpu_hal::dx12::SwapChain::release_resources`); we
+// only close the additional handle reference returned by our own
+// call. Closing the wrong handle would corrupt the kernel handle
+// table for this process, hence the explicit cfg gate and the
+// take()-based ownership transfer.
+impl Drop for WebGpuState {
+    fn drop(&mut self) {
+        #[cfg(windows)]
+        if let Some(h) = self.frame_latency_waitable.take() {
+            unsafe {
+                winapi::um::handleapi::CloseHandle(h);
+            }
+        }
+    }
+}
+// --- end weezterm remote features ---

@@ -24,6 +24,25 @@ impl crate::TermWindow {
         let render_state = self.render_state.as_ref().unwrap();
 
         // --- weezterm remote features ---
+        // Phase 3: wait on the frame-latency waitable object before
+        // recording the next frame. This is the HAL counterpart to
+        // wgpu's internal wait inside `surface.get_current_texture()`
+        // — placing it here lets us discard a wrong-size frame (next
+        // block) cheaply if the GPU advanced between WM_PAINT and
+        // now. 100 ms timeout chosen to match wgpu-hal's own default
+        // wait timeout. WAIT_TIMEOUT (and WAIT_FAILED) are tolerated
+        // — we just proceed and let the subsequent
+        // `get_current_texture` either succeed or report Lost/Outdated
+        // for the outer error handler to deal with.
+        #[cfg(windows)]
+        if let Some(h) = webgpu.frame_latency_waitable {
+            unsafe {
+                winapi::um::synchapi::WaitForSingleObjectEx(h, 100, 0);
+            }
+        }
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
         // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
         // surface's configured dimensions don't match the live client
         // rect, drop this frame and schedule a repaint so the next
