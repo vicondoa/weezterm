@@ -179,4 +179,27 @@ pub fn only_virtual_gpus_available() -> bool {
     })
 }
 
+/// Returns the current client area size of `hwnd` as `(width, height)` in
+/// physical pixels. Returns `(0, 0)` if `GetClientRect` fails (e.g. the
+/// window has been destroyed).
+///
+/// Used by the Phase 5 wrong-size-frame discard pattern in both the WebGpu
+/// and SoftwareRdp present paths: if the renderer's buffer dimensions don't
+/// match the live client rect, we drop the frame and schedule a repaint
+/// instead of presenting a stretched / wrong-aspect surface.
+pub fn current_client_size(hwnd: winapi::shared::windef::HWND) -> (u32, u32) {
+    use winapi::shared::windef::RECT;
+    use winapi::um::winuser::GetClientRect;
+    if hwnd.is_null() {
+        return (0, 0);
+    }
+    let mut rect: RECT = unsafe { std::mem::zeroed() };
+    if unsafe { GetClientRect(hwnd, &mut rect) } == 0 {
+        return (0, 0);
+    }
+    let w = (rect.right - rect.left).max(0) as u32;
+    let h = (rect.bottom - rect.top).max(0) as u32;
+    (w, h)
+}
+
 // --- end weezterm remote features ---

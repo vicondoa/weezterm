@@ -23,6 +23,41 @@ impl crate::TermWindow {
         let webgpu = self.backend.webgpu().unwrap().clone();
         let render_state = self.render_state.as_ref().unwrap();
 
+        // --- weezterm remote features ---
+        // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
+        // surface's configured dimensions don't match the live client
+        // rect, drop this frame and schedule a repaint so the next
+        // iteration renders at the new size. Eliminates the "smear
+        // during fast drag" artifact that occurs when WM_SIZE arrives
+        // mid-frame.
+        #[cfg(windows)]
+        {
+            use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(wh) = webgpu.handle.window_handle() {
+                if let RawWindowHandle::Win32(h) = wh.as_raw() {
+                    let hwnd = h.hwnd.get() as winapi::shared::windef::HWND;
+                    let (cw, ch) = ::window::os::windows::current_client_size(hwnd);
+                    let cfg = webgpu.config.borrow();
+                    if cw > 0 && ch > 0 && (cw != cfg.width || ch != cfg.height) {
+                        log::trace!(
+                            "[render] dropping wrong-size frame (webgpu): \
+                             surface={}x{}, client={}x{}",
+                            cfg.width,
+                            cfg.height,
+                            cw,
+                            ch
+                        );
+                        drop(cfg);
+                        unsafe {
+                            winapi::um::winuser::InvalidateRect(hwnd, std::ptr::null(), 0);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        // --- end weezterm remote features ---
+
         let output = webgpu.surface.get_current_texture()?;
         let view = output
             .texture

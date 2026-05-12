@@ -245,3 +245,103 @@ class TestResize:
                 f"Content stretching detected during resize: "
                 f"{len(stretched_frames)} frames showed stretched content"
             )
+
+    # --- weezterm remote features ---
+    def test_no_smear_during_rapid_resize(self, running_app: WeezTermApp):
+        """Phase 5 (wrong-size-frame discard): during a rapid WM_SIZE
+        storm, no intermediate frame should show stretched / wrong-aspect
+        content. The frame-discard check in webgpu.rs / software_rdp.rs
+        must catch these.
+
+        We do an 8-step random-size storm in <500 ms, then capture frames
+        as fast as possible during and just after. We assert:
+
+        * The app survives (no crash from racing resize / present).
+        * No captured frame shows content stretched into the right or
+          bottom third (the same heuristic used by
+          ``test_no_content_stretching_on_big_resize``).
+        * The window settles to a clean, artifact-free state.
+        """
+        import numpy as np
+        from helpers.window_ops import get_client_rect
+
+        hwnd = running_app.hwnd
+
+        # Establish a known starting size and let the terminal fully render.
+        initial_w, initial_h = 1000, 600
+        set_window_rect(hwnd, 200, 150, initial_w, initial_h)
+        settle(2.0)
+
+        client = get_client_rect(hwnd)
+        print(f"\n  Initial client size: {client.width}x{client.height}")
+
+        # 8 different sizes in <500 ms, returning to the start.
+        storm_sizes = [
+            (800, 400),
+            (1200, 600),
+            (700, 300),
+            (1000, 500),
+            (900, 450),
+            (1300, 650),
+            (750, 350),
+            (initial_w, initial_h),
+        ]
+
+        # Capture frames during/right after each resize step. If a
+        # wrong-size frame ever leaked through, the right/bottom third
+        # of the captured image would contain stretched terminal content
+        # (brighter than background).
+        smeared_frames = []
+        for step_idx, (w, h) in enumerate(storm_sizes):
+            set_window_rect(hwnd, 200, 150, w, h)
+            time.sleep(0.05)
+            try:
+                img = capture_window(hwnd)
+            except Exception:
+                continue
+            arr = np.array(img)
+            if arr.size == 0:
+                continue
+            ih, iw = arr.shape[:2]
+            if iw < 200 or ih < 100:
+                continue
+
+            right_third = arr[:, iw * 2 // 3:, :3]
+            bottom_third = arr[ih * 2 // 3:, :, :3]
+            right_bright = float(np.mean(right_third))
+            bottom_bright = float(np.mean(bottom_third))
+
+            if right_bright > 60 or bottom_bright > 60:
+                # Use a more permissive threshold than the single-resize
+                # stretch test (60 vs 25): during a storm the captured
+                # frame may legitimately contain a partially-painted
+                # terminal at the new size, which is brighter than pure
+                # background. We only flag clearly-stretched content.
+                save_screenshot(img, f"smear_step_{step_idx}")
+                smeared_frames.append(
+                    (step_idx, w, h, right_bright, bottom_bright)
+                )
+
+        assert running_app.is_running, "WeezTerm crashed during rapid resize storm"
+
+        # Allow the window to fully settle, then assert the final state
+        # is clean. This proves that frame discard didn't get the
+        # renderer stuck in a perpetually-dropped state.
+        settle(2.5)
+        final_img = capture_window(hwnd)
+        save_screenshot(final_img, "rapid_resize_storm_final")
+        artifacts = detect_rendering_artifacts(final_img)
+        print(f"\n  Smeared frames during storm: {len(smeared_frames)}")
+        for idx, w, h, rb, bb in smeared_frames[:5]:
+            print(f"    Step {idx} ({w}x{h}): right={rb:.1f} bottom={bb:.1f}")
+        print(f"  Final-state artifacts: {artifacts}")
+
+        if smeared_frames:
+            pytest.fail(
+                f"Wrong-size frame leaked through during rapid resize: "
+                f"{len(smeared_frames)} smeared captures"
+            )
+        if artifacts:
+            save_screenshot(final_img, "rapid_resize_storm_final", "ARTIFACT")
+            pytest.fail(f"Final state has artifacts after storm: {artifacts}")
+    # --- end weezterm remote features ---

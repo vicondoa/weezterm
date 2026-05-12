@@ -79,7 +79,8 @@ impl DirtyRect {
 
 /// Shared back-end state for Mode C rendering.
 pub struct SoftwareRdpState {
-    #[allow(dead_code)] // Reserved for future use (resize-via-WM_SIZE shortcut).
+    /// Window handle, used by `present()` for the Phase 5 wrong-size-frame
+    /// discard check (compare swap-chain dimensions to live `GetClientRect`).
     hwnd: HWND,
     /// WARP D3D11 device. Owned via raw COM pointer; released in `Drop`.
     device: *mut ID3D11Device,
@@ -287,8 +288,9 @@ impl SoftwareRdpState {
         self.height
     }
 
-    /// Window handle this surface presents to. Used by the resize hook.
-    #[allow(dead_code)] // Will be consumed by Phase 5 wrong-size-frame discard.
+    /// Window handle this surface presents to. Used by the resize hook
+    /// and the Phase 5 wrong-size-frame discard.
+    #[allow(dead_code)] // Public API; callers (diagnostics, future Lua surface) may use it.
     pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
@@ -340,6 +342,29 @@ impl SoftwareRdpState {
     /// is also how Microsoft's DirectComposition examples handle the
     /// flip-sequential case.
     pub fn present(&mut self) -> Result<()> {
+        // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
+        // swap-chain dimensions don't match the live client rect, drop
+        // this frame and schedule a repaint via InvalidateRect so the
+        // next iteration renders at the correct size. Eliminates the
+        // "smear during fast drag" artifact that occurs when WM_SIZE
+        // arrives between `resize()` and `present()`.
+        let (cw, ch) = ::window::os::windows::current_client_size(self.hwnd);
+        if cw > 0 && ch > 0 && (cw != self.width || ch != self.height) {
+            log::trace!(
+                "[render] dropping wrong-size frame (software_rdp): \
+                 buffer={}x{}, client={}x{}",
+                self.width,
+                self.height,
+                cw,
+                ch
+            );
+            self.dirty.clear();
+            unsafe {
+                winapi::um::winuser::InvalidateRect(self.hwnd, std::ptr::null(), 0);
+            }
+            return Ok(());
+        }
+
         let force_full = std::env::var_os("WEEZTERM_FORCE_FULL_PRESENT").is_some();
         if force_full || self.dirty.is_empty() {
             self.mark_all_dirty();
