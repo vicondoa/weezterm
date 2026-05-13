@@ -283,7 +283,11 @@ impl PortForwardManager {
 /// This periodically executes `cat /proc/net/tcp /proc/net/tcp6` on the remote
 /// via SSH exec, parses the output, and feeds new ports to the manager.
 ///
-/// Designed to be spawned as an async task.
+/// IMPORTANT: this function does the synchronous read of the SSH exec stdout
+/// on a dedicated `std::thread` and never inside the async task — the SSH
+/// exec stdout is a blocking socketpair, and reading it from inside a smol
+/// task or (worse) from the main GUI thread would stall everything else
+/// scheduled on that executor while the read is in flight.
 pub async fn run_proc_net_tcp_detection(
     session: wezterm_ssh::Session,
     manager: std::sync::Arc<std::sync::Mutex<PortForwardManager>>,
@@ -307,16 +311,31 @@ pub async fn run_proc_net_tcp_detection(
             .await
         {
             Ok(exec_result) => {
-                let mut buf = Vec::new();
-                let mut reader = exec_result.stdout;
-                let mut tmp = [0u8; 4096];
-                loop {
-                    match std::io::Read::read(&mut reader, &mut tmp) {
-                        Ok(0) => break,
-                        Ok(n) => buf.extend_from_slice(&tmp[..n]),
-                        Err(_) => break,
-                    }
-                }
+                // Move the blocking read onto a dedicated OS thread so we
+                // never park the executor (the GUI shares it for some
+                // tasks). The async task only awaits a oneshot channel.
+                let (tx, rx) = smol::channel::bounded::<Vec<u8>>(1);
+                std::thread::Builder::new()
+                    .name("port-detect-read".into())
+                    .spawn(move || {
+                        let mut buf = Vec::new();
+                        let mut reader = exec_result.stdout;
+                        let mut tmp = [0u8; 4096];
+                        loop {
+                            match std::io::Read::read(&mut reader, &mut tmp) {
+                                Ok(0) => break,
+                                Ok(n) => buf.extend_from_slice(&tmp[..n]),
+                                Err(_) => break,
+                            }
+                        }
+                        let _ = tx.send_blocking(buf);
+                    })
+                    .expect("spawn port-detect-read thread");
+
+                let buf = match rx.recv().await {
+                    Ok(b) => b,
+                    Err(_) => Vec::new(),
+                };
 
                 let content = String::from_utf8_lossy(&buf);
 

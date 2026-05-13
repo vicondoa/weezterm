@@ -415,13 +415,41 @@ impl Pane for LocalPane {
     }
 
     fn resize(&self, size: TerminalSize) -> Result<(), Error> {
-        self.pty.lock().resize(PtySize {
+        // --- weezterm remote features ---
+        log::debug!(
+            "LocalPane::resize pane={} rows={} cols={} px={}x{}",
+            self.pane_id,
+            size.rows,
+            size.cols,
+            size.pixel_width,
+            size.pixel_height
+        );
+        match self.pty.lock().resize(PtySize {
             rows: size.rows.try_into()?,
             cols: size.cols.try_into()?,
             pixel_width: size.pixel_width.try_into()?,
             pixel_height: size.pixel_height.try_into()?,
-        })?;
+        }) {
+            Ok(()) => {}
+            Err(err) => {
+                log::warn!(
+                    "LocalPane::resize pane={} pty.resize failed: {:#}",
+                    self.pane_id,
+                    err
+                );
+                return Err(err.into());
+            }
+        }
+        // --- end weezterm remote features ---
         self.terminal.lock().resize(size);
+        // --- weezterm remote features ---
+        let after = self.terminal.lock().get_size();
+        log::debug!(
+            "LocalPane::resize pane={} terminal.size after={:?}",
+            self.pane_id,
+            after
+        );
+        // --- end weezterm remote features ---
         Ok(())
     }
 
