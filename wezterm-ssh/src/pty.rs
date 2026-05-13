@@ -43,7 +43,17 @@ impl std::io::Write for SshPty {
 
 impl portable_pty::MasterPty for SshPty {
     fn resize(&self, size: PtySize) -> anyhow::Result<()> {
-        self.tx
+        // --- weezterm remote features ---
+        log::debug!(
+            "SshPty::resize channel={} rows={} cols={} px={}x{}",
+            self.channel,
+            size.rows,
+            size.cols,
+            size.pixel_width,
+            size.pixel_height
+        );
+        match self
+            .tx
             .as_ref()
             .unwrap()
             .try_send(SessionRequest::ResizePty(
@@ -52,7 +62,18 @@ impl portable_pty::MasterPty for SshPty {
                     size,
                 },
                 None,
-            ))?;
+            )) {
+            Ok(()) => {}
+            Err(err) => {
+                log::warn!(
+                    "SshPty::resize channel={} try_send FAILED: {:#}",
+                    self.channel,
+                    err
+                );
+                return Err(err.into());
+            }
+        }
+        // --- end weezterm remote features ---
 
         *self.size.lock().unwrap() = size;
         Ok(())
@@ -322,7 +343,27 @@ impl crate::sessioninner::SessionInner {
             .channels
             .get_mut(&resize.channel)
             .ok_or_else(|| anyhow::anyhow!("invalid channel id {}", resize.channel))?;
-        info.channel.resize_pty(&resize)?;
+        // --- weezterm remote features ---
+        log::debug!(
+            "SessionInner::resize_pty channel={} rows={} cols={} px={}x{}",
+            resize.channel,
+            resize.size.rows,
+            resize.size.cols,
+            resize.size.pixel_width,
+            resize.size.pixel_height
+        );
+        match info.channel.resize_pty(&resize) {
+            Ok(()) => {}
+            Err(err) => {
+                log::warn!(
+                    "SessionInner::resize_pty channel={} channel.resize_pty FAILED: {:#}",
+                    resize.channel,
+                    err
+                );
+                return Err(err);
+            }
+        }
+        // --- end weezterm remote features ---
         Ok(())
     }
 }

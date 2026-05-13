@@ -449,8 +449,24 @@ impl SessionInner {
 
     fn request_loop(&mut self, sess: &mut SessionWrap) -> anyhow::Result<()> {
         let mut sleep_delay = Duration::from_millis(100);
+        // --- weezterm remote features ---
+        let mut last_loop_tick_log = Instant::now();
+        let mut loop_iter = 0u64;
+        // --- end weezterm remote features ---
 
         loop {
+            // --- weezterm remote features ---
+            loop_iter += 1;
+            if last_loop_tick_log.elapsed() >= Duration::from_millis(500) {
+                log::debug!(
+                    "request_loop alive iter={} sleep_delay={:?} channels={}",
+                    loop_iter,
+                    sleep_delay,
+                    self.channels.len()
+                );
+                last_loop_tick_log = Instant::now();
+            }
+            // --- end weezterm remote features ---
             self.do_keepalive(sess)?;
             self.tick_io()?;
             self.drain_request_pipe();
@@ -498,7 +514,21 @@ impl SessionInner {
             }
 
             poll(&mut poll_array, Some(sleep_delay)).context("poll")?;
-            sleep_delay += sleep_delay;
+            // --- weezterm remote features ---
+            // Cap the exponential backoff so that incoming SSH bytes are
+            // detected within a bounded interval. libssh's get_poll_state()
+            // returns (false, false) when libssh has nothing pending at the
+            // SSH-protocol layer, even when the underlying TCP socket has
+            // unread data the kernel hasn't surfaced to libssh yet. Combined
+            // with `sleep_delay += sleep_delay`, that lets the poll() sleep
+            // grow to multiple seconds while remote heartbeats / TUI redraws
+            // sit in the kernel socket buffer, producing visible "frozen
+            // window" behaviour after operations like a window resize.
+            // 250ms is short enough for interactive use but still allows
+            // libssh to coalesce work between wakeups.
+            const MAX_SLEEP_DELAY: Duration = Duration::from_millis(250);
+            sleep_delay = (sleep_delay + sleep_delay).min(MAX_SLEEP_DELAY);
+            // --- end weezterm remote features ---
 
             for (idx, poll) in poll_array.iter().enumerate() {
                 if poll.revents != 0 {
@@ -596,7 +626,23 @@ impl SessionInner {
                     continue;
                 }
                 match read_into_buf(&mut chan.channel.reader(idx), &mut out.buf) {
-                    Ok(_) => {}
+                    Ok(_) => {
+                        // --- weezterm remote features ---
+                        // Tracing for "TUI redraws on remote but local model
+                        // is stale" investigations. Promoted via
+                        // WEZTERM_LOG=wezterm_ssh=trace.
+                        let new_len = out.buf.len();
+                        if new_len > current_len {
+                            log::debug!(
+                                "tick_io read channel={} idx={} +{} bytes (now {})",
+                                id,
+                                idx,
+                                new_len - current_len,
+                                new_len
+                            );
+                        }
+                        // --- end weezterm remote features ---
+                    }
                     Err(err) => {
                         if out.buf.is_empty() {
                             log::trace!(
