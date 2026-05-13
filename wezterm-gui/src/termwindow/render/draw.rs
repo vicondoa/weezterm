@@ -1,6 +1,6 @@
 use crate::colorease::ColorEaseUniform;
-use crate::termwindow::webgpu::ShaderUniform;
 use crate::termwindow::RenderFrame;
+use crate::termwindow::webgpu::ShaderUniform;
 use crate::uniforms::UniformBuilder;
 use ::window::glium;
 use ::window::glium::uniforms::{
@@ -55,12 +55,55 @@ impl crate::TermWindow {
         // --- end weezterm remote features ---
 
         // --- weezterm remote features ---
+        // While a background `surface.configure(...)` is in flight,
+        // the active swap chain is intentionally still at the OLD
+        // pixel size. `self.dimensions` and `self.terminal_size`
+        // have ALREADY been updated to the NEW size by
+        // `apply_dimensions`, so if we proceed to render now we will
+        // project NEW pixel coordinates into an OLD-size texture —
+        // quads beyond the OLD bounds get clipped, and DWM stretches
+        // the resulting fragment to fill the NEW client rect. The
+        // user sees a disorienting "stretched fragment of new
+        // content" for the entire duration of the bg configure
+        // (~3.7 s on WARP/RDP).
+        //
+        // Skip the rest of the draw entirely. The previous frame
+        // (rendered correctly at OLD pixel coords with OLD content
+        // into the OLD-size surface) stays on the swap chain. DWM
+        // stretches that coherent OLD frame to the NEW client rect,
+        // which looks like a clean zoom — the same UX users had
+        // with the old synchronous-configure path. The bg thread
+        // itself calls `InvalidateRect` when it finishes (see
+        // `webgpu.rs::apply_pending_resize`), so the GUI thread
+        // reliably wakes up to drain the channel and swap the new
+        // surface in.
+        if webgpu.has_pending_configure() {
+            log::debug!(
+                "[render] skipping paint while async configure in flight \
+                 (cfg={}x{} self.dims={}x{})",
+                webgpu.config.borrow().width,
+                webgpu.config.borrow().height,
+                self.dimensions.pixel_width,
+                self.dimensions.pixel_height,
+            );
+            return Ok(());
+        }
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
         // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
         // surface's configured dimensions don't match the live client
         // rect, drop this frame and schedule a repaint so the next
         // iteration renders at the new size. Eliminates the "smear
         // during fast drag" artifact that occurs when WM_SIZE arrives
         // mid-frame.
+        //
+        // We only get here when no `pending_configure` is in flight
+        // (the early return above handles that case), so a mismatch
+        // here means an out-of-band rect change (e.g., DWM-induced
+        // EXITSIZEMOVE adjustment) that didn't go through our resize
+        // event path. InvalidateRect kicks `apply_pending_resize` to
+        // start a fresh bg configure on the next paint.
         #[cfg(windows)]
         {
             use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -100,7 +143,20 @@ impl crate::TermWindow {
             cfg_h = cfg.height;
         }
         // --- end weezterm remote features ---
-        let output = webgpu.surface.borrow().get_current_texture()?;
+        let surface_borrow = webgpu.surface.borrow();
+        let surface_ref = match surface_borrow.as_ref() {
+            Some(s) => s,
+            None => {
+                // No active surface — bg configure must be in
+                // flight (or just failed). Skip this frame; the
+                // bg thread's InvalidateRect (or the next
+                // resize/timer tick) will trigger another paint.
+                log::debug!("[render] no surface (bg configure in flight); skipping frame");
+                return Ok(());
+            }
+        };
+        let output = surface_ref.get_current_texture()?;
+        drop(surface_borrow);
         // --- weezterm remote features ---
         log::debug!(
             "[render] call_draw_webgpu cfg={}x{} self.dims={}x{} got_texture={}x{} suboptimal={}",

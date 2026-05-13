@@ -24,7 +24,7 @@ pub struct ShaderUniform {
 pub struct WebGpuState {
     pub adapter_info: wgpu::AdapterInfo,
     pub downlevel_caps: wgpu::DownlevelCapabilities,
-    pub surface: RefCell<wgpu::Surface<'static>>,
+    pub surface: RefCell<Option<wgpu::Surface<'static>>>,
     pub device: wgpu::Device,
     pub queue: Arc<wgpu::Queue>,
     pub config: RefCell<wgpu::SurfaceConfiguration>,
@@ -74,13 +74,11 @@ pub struct WebGpuState {
     /// `get_current_texture` in the render path. This naturally
     /// coalesces N WM_SIZE events into 1 ResizeBuffers per frame.
     pub pending_resize: RefCell<Option<Dimensions>>,
-    /// Time of the most recent `resize()` call. Used by
-    /// `apply_pending_resize` to debounce configures during a live
-    /// drag — when WM_SIZE events keep arriving every few ms, paying
-    /// 600-1700ms ResizeBuffers between each one would be a
-    /// disaster. We only configure when the size has been stable
-    /// for `RESIZE_DEBOUNCE_MS` (default ~80ms) OR when we've been
-    /// told the live drag has ended (`live_resize_active = false`).
+    /// Time of the most recent `resize()` call. Kept as a diagnostic
+    /// — exposed for debug/log call sites and may inform future
+    /// debounce policy. The current `apply_pending_resize` does NOT
+    /// debounce on this (the slow `surface.configure` is dispatched
+    /// to a background thread instead — see `pending_configure`).
     pub last_resize_request: RefCell<Option<std::time::Instant>>,
     /// True while the window is in a `WM_ENTERSIZEMOVE` /
     /// `WM_EXITSIZEMOVE` interactive drag. We only run
@@ -89,13 +87,59 @@ pub struct WebGpuState {
     /// virtual GPU is far less jarring than blocking the UI thread
     /// for ~1 s per intermediate size.
     pub live_resize_active: RefCell<bool>,
+    /// In-flight async surface configure. When `Some`, a background
+    /// thread is currently running `surface.configure(...)` for the
+    /// dimensions in `target_dims`. The `rx` end yields the
+    /// configured surface back to the GUI thread; we swap it into
+    /// `self.surface` on the next paint that drains the channel.
+    ///
+    /// On WARP/RDP, `surface.configure(...)` can take 3+ seconds —
+    /// running it on the GUI thread blocks every other smol task
+    /// (including the codec read pump that keeps the SSH mux alive),
+    /// causing the remote `wezterm-mux-server` to drop us with
+    /// `os error 10054` after ~1s. Pushing it to a background thread
+    /// keeps the GUI fully interactive while DWM stretches the old
+    /// swapchain image to fill the new client rect for the duration.
+    pub pending_configure: RefCell<Option<PendingConfigure>>,
+    /// Newer dimensions that arrived while a `pending_configure` was
+    /// already in flight for different dims. We can't cancel the
+    /// in-flight configure, so we queue the latest target and start
+    /// another bg configure as soon as the current one lands.
+    pub queued_configure_dims: RefCell<Option<Dimensions>>,
     // --- end weezterm remote features ---
 }
 
+// --- weezterm remote features ---
+/// Handle to an in-flight background `surface.configure(...)` call.
+/// See `WebGpuState::pending_configure`.
+pub struct PendingConfigure {
+    /// Dimensions that the bg thread is configuring the new surface
+    /// for. Stored so that:
+    ///   * a follow-up resize event for the SAME dims is a no-op
+    ///   * a follow-up resize event for DIFFERENT dims goes to
+    ///     `queued_configure_dims` and starts another configure when
+    ///     this one completes
+    pub target_dims: Dimensions,
+    /// The bg thread sends the configured surface (or an error
+    /// string) here when `surface.configure(...)` returns.
+    pub rx: std::sync::mpsc::Receiver<Result<wgpu::Surface<'static>, String>>,
+    pub started_at: std::time::Instant,
+}
+// --- end weezterm remote features ---
+
+#[derive(Clone, Copy)]
 pub struct RawHandlePair {
     window: RawWindowHandle,
     display: RawDisplayHandle,
 }
+
+// `RawWindowHandle` and `RawDisplayHandle` are plain enum-of-values
+// types (HWND as NonZeroIsize on Win32, etc.). They are safe to
+// transfer between threads — we use this so the bg
+// `wgpu-async-configure` thread can rebuild a fresh `wgpu::Surface`
+// from the window's HWND after dropping the previous one.
+unsafe impl Send for RawHandlePair {}
+unsafe impl Sync for RawHandlePair {}
 
 impl RawHandlePair {
     fn new(window: &Window) -> Self {
@@ -774,7 +818,7 @@ impl WebGpuState {
         Ok(Self {
             adapter_info,
             downlevel_caps,
-            surface: RefCell::new(surface),
+            surface: RefCell::new(Some(surface)),
             device,
             queue,
             config: RefCell::new(config),
@@ -793,6 +837,8 @@ impl WebGpuState {
             pending_resize: RefCell::new(None),
             last_resize_request: RefCell::new(None),
             live_resize_active: RefCell::new(false),
+            pending_configure: RefCell::new(None),
+            queued_configure_dims: RefCell::new(None),
             // --- end weezterm remote features ---
         })
     }
@@ -870,45 +916,126 @@ impl WebGpuState {
     /// Apply any pending deferred resize. Call immediately before
     /// `surface.get_current_texture()` in the render path.
     ///
-    /// Returns `true` if the configuration was changed (the caller may want
-    /// to invalidate caches).
+    /// Returns `true` if the surface configuration was changed (the
+    /// caller may want to invalidate caches).
     ///
-    /// The configure is debounced: it only runs when the most recent
-    /// `resize()` call is at least `RESIZE_DEBOUNCE` old, OR when
-    /// `live_resize_active` is `false` (the user has finished dragging).
-    /// During an active drag, DWM stretches the last submitted frame to
-    /// fill the new client rect — that produces a "soft" stretch
-    /// artifact, but it keeps the UI fully interactive instead of
-    /// blocking 1 s per WM_SIZE.
+    /// **Async configure model.** The actual `surface.configure(...)`
+    /// call invokes `IDXGIFactory::CreateSwapChainForHwnd`, which on
+    /// WARP/RDP virtual GPUs has been measured at **3.6 seconds**.
+    /// Running it on the GUI thread blocks every smol task, the
+    /// codec read pump in particular, and the remote
+    /// `wezterm-mux-server` drops us with `os error 10054`. Instead
+    /// we:
     ///
-    /// IMPORTANT: even when no `pending_resize` is queued, this function
-    /// always reconciles `surface.config.{width,height}` against the live
-    /// `GetClientRect`. The wgpu/DXGI swap chain CAN drift from our cached
-    /// config when the OS resized the window without going through our
-    /// resize event path (e.g., DWM-induced rect changes on EXITSIZEMOVE).
-    /// Without this reconciliation the wrong-size-frame discard in the
-    /// caller would loop forever, and DWM would keep displaying a
-    /// stretched stale buffer.
+    /// 1. Drain any in-flight `pending_configure` here. If the bg
+    ///    thread has finished, atomically swap the new surface in
+    ///    and update `self.config` to match. The OLD surface is
+    ///    moved to *another* bg thread for drop (also slow on WARP).
+    /// 2. Decide what dims we want next, preferring the most-recent
+    ///    `pending_resize`, then any `queued_configure_dims`, then
+    ///    the live `GetClientRect` (Windows only, as a fallback for
+    ///    OS-driven rect changes that didn't go through our event
+    ///    path).
+    /// 3. If a configure is already in flight for those exact dims,
+    ///    do nothing. If for *different* dims, queue the new dims
+    ///    in `queued_configure_dims` so we kick off another configure
+    ///    when the current one lands. If no configure is in flight,
+    ///    spawn one now.
+    ///
+    /// While `live_resize_active` is true (interactive drag), we do
+    /// NOT start a new configure — DWM stretches the existing
+    /// swapchain image to fill the new client rect, which is much
+    /// less jarring on a slow GPU than churning configures per
+    /// pixel of drag.
     pub fn apply_pending_resize(&self) -> bool {
-        const RESIZE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(60);
-
         let live = *self.live_resize_active.borrow();
 
-        // First: figure out the size we WANT the swap chain to be.
-        // Prefer pending_resize, fall back to live GetClientRect.
-        let pending = *self.pending_resize.borrow();
-        let target_dims = match (pending, self.handle.window) {
-            (Some(d), _) => Some(d),
+        // ---------------------------------------------------------
+        // STEP 1: drain any ready bg-configured surface.
+        // We do this even during a live drag — if a configure
+        // happened to land, we want to swap it in. The next live
+        // WM_SIZE will cause us to queue another.
+        // ---------------------------------------------------------
+        let drained: Option<
+            Result<(wgpu::Surface<'static>, Dimensions, std::time::Duration), String>,
+        > = {
+            let mut pc_borrow = self.pending_configure.borrow_mut();
+            match pc_borrow.as_mut() {
+                None => None,
+                Some(pc) => match pc.rx.try_recv() {
+                    Ok(Ok(new_surface)) => {
+                        let target = pc.target_dims;
+                        let elapsed = pc.started_at.elapsed();
+                        *pc_borrow = None;
+                        Some(Ok((new_surface, target, elapsed)))
+                    }
+                    Ok(Err(e)) => {
+                        *pc_borrow = None;
+                        Some(Err(e))
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                        *pc_borrow = None;
+                        Some(Err("async-configure thread disconnected".into()))
+                    }
+                },
+            }
+        };
+
+        let mut configured_change = false;
+        match drained {
+            Some(Ok((new_surface, target, elapsed))) => {
+                let (old_w, old_h) = {
+                    let cfg = self.config.borrow();
+                    (cfg.width, cfg.height)
+                };
+                let new_w = target.pixel_width as u32;
+                let new_h = target.pixel_height as u32;
+                {
+                    let mut config = self.config.borrow_mut();
+                    config.width = new_w;
+                    config.height = new_h;
+                }
+                // The OLD surface was already moved to the bg thread
+                // (which dropped it before creating + configuring the
+                // new one), so `self.surface` is currently `None`. Put
+                // the freshly-configured surface in.
+                *self.surface.borrow_mut() = Some(new_surface);
+                log::info!(
+                    "[render] webgpu async configure landed {}x{} -> {}x{} bg_elapsed={:?}",
+                    old_w,
+                    old_h,
+                    new_w,
+                    new_h,
+                    elapsed,
+                );
+                configured_change = true;
+            }
+            Some(Err(e)) => {
+                log::warn!("[render] webgpu async configure failed: {}", e);
+            }
+            None => {}
+        }
+
+        // ---------------------------------------------------------
+        // STEP 2: figure out the size we WANT next.
+        // ---------------------------------------------------------
+        let pending_now = *self.pending_resize.borrow();
+        let queued_now = *self.queued_configure_dims.borrow();
+        #[allow(unused_variables)]
+        let target_dims = match (pending_now, queued_now, self.handle.window) {
+            (Some(d), _, _) => Some(d),
+            (None, Some(d), _) => Some(d),
             #[cfg(windows)]
-            (None, RawWindowHandle::Win32(h)) if !live => {
+            (None, None, RawWindowHandle::Win32(h)) if !live => {
                 let mut rect = unsafe { std::mem::zeroed() };
                 unsafe { winapi::um::winuser::GetClientRect(h.hwnd.get() as _, &mut rect) };
                 let w = (rect.right - rect.left) as usize;
-                let h = (rect.bottom - rect.top) as usize;
-                if w > 0 && h > 0 {
+                let hh = (rect.bottom - rect.top) as usize;
+                if w > 0 && hh > 0 {
                     Some(Dimensions {
                         pixel_width: w,
-                        pixel_height: h,
+                        pixel_height: hh,
                         dpi: 0,
                     })
                 } else {
@@ -918,140 +1045,270 @@ impl WebGpuState {
             _ => None,
         };
         let Some(dims) = target_dims else {
-            return false;
+            return configured_change;
         };
 
         if live {
-            // Hold off until the drag ends — DWM stretches the old
-            // image, which is much less jarring than per-step blocks.
-            return false;
+            // Don't start a new configure during interactive drag.
+            // Stale stretched frame is preferable to per-pixel
+            // configure churn on a slow GPU.
+            return configured_change;
         }
 
-        // Debounce ONLY if a real pending update is queued. After the
-        // drag ends we want to apply IMMEDIATELY (no debounce wait)
-        // so the very next paint draws at the right size.
-        if pending.is_some() {
-            if let Some(ts) = *self.last_resize_request.borrow() {
-                if ts.elapsed() < RESIZE_DEBOUNCE {
-                    return false;
-                }
-            }
-        }
-
-        // OK to actually configure now.
-        self.pending_resize.borrow_mut().take();
         let new_w = dims.pixel_width as u32;
         let new_h = dims.pixel_height as u32;
         if new_w == 0 || new_h == 0 {
-            return false;
+            return configured_change;
         }
-        let (old_w, old_h) = {
+
+        // If the active surface is already at the target, clear
+        // pending and we're done.
+        let (cur_w, cur_h) = {
             let cfg = self.config.borrow();
             (cfg.width, cfg.height)
         };
-        if old_w == new_w && old_h == new_h {
-            return false;
+        if cur_w == new_w && cur_h == new_h {
+            self.pending_resize.borrow_mut().take();
+            self.queued_configure_dims.borrow_mut().take();
+            return configured_change;
         }
-        {
-            let mut config = self.config.borrow_mut();
-            config.width = new_w;
-            config.height = new_h;
+
+        // ---------------------------------------------------------
+        // STEP 3: is a configure already in flight?
+        // ---------------------------------------------------------
+        let in_flight_target = self
+            .pending_configure
+            .borrow()
+            .as_ref()
+            .map(|pc| pc.target_dims);
+        if let Some(t) = in_flight_target {
+            let t_w = t.pixel_width as u32;
+            let t_h = t.pixel_height as u32;
+            if t_w == new_w && t_h == new_h {
+                // Already configuring exactly these dims; just wait.
+                self.pending_resize.borrow_mut().take();
+                self.queued_configure_dims.borrow_mut().take();
+                return configured_change;
+            } else {
+                // In-flight is for stale dims. Queue the latest;
+                // we'll start a new configure when the current lands.
+                *self.queued_configure_dims.borrow_mut() = Some(dims);
+                self.pending_resize.borrow_mut().take();
+                return configured_change;
+            }
         }
-        let _t = std::time::Instant::now();
-        // --- weezterm remote features ---
-        // Always recreate the wgpu Surface (drop old + create new),
-        // never call the in-place `surface.configure()` path on an
-        // existing surface.
+
+        // ---------------------------------------------------------
+        // STEP 4: spawn a bg configure thread.
         //
-        // wgpu's in-place configure invokes DXGI's `ResizeBuffers`,
-        // which has two distinct problems on WARP/RDP virtual GPUs:
-        //
-        //   1. **Grow**: the old swap chain is composed by DWM with
-        //      `DXGI_SCALING_STRETCH` so the user sees the previous
-        //      (smaller) image stretched to fill the new client area
-        //      and it never refreshes.
-        //   2. **Shrink**: the call itself blocks the UI thread for
-        //      ~1 s waiting on queued presents to drain, leaving the
-        //      window unresponsive after each resize.
-        //
-        // Recreating the surface forces wgpu-hal down its
-        // `CreateSwapChainForHwnd` path: a brand-new swap chain at
-        // the new size with no leftover state. The new surface +
-        // configure together complete in 4-50 ms even on WARP+RDP.
-        // The old surface is moved to a background thread for drop
-        // (which is what was blocking — `wait_for_present_queue_idle`
-        // can take 11 s on a stale queued-presents swap chain), so
-        // the GUI thread is never blocked.
+        // CRITICAL ordering: DXGI does NOT allow two swap chains for
+        // the same HWND simultaneously. The bg thread therefore must:
+        //   1. Drop the OLD surface FIRST (which destroys the OLD
+        //      swap chain — can take up to 11 s on WARP/RDP because
+        //      `wait_for_present_queue_idle` waits on the stale
+        //      present queue — but we're on a bg thread so the GUI
+        //      stays interactive)
+        //   2. Build a fresh `SurfaceTargetUnsafe` from the window
+        //      handle and `instance.create_surface_unsafe(...)` —
+        //      both fast, no swap chain yet
+        //   3. `surface.configure(device, cfg)` — this is what
+        //      actually invokes `CreateSwapChainForHwnd`. Now the
+        //      OLD swap chain is gone, so DXGI accepts it.
+        // ---------------------------------------------------------
+        self.pending_resize.borrow_mut().take();
+        self.queued_configure_dims.borrow_mut().take();
+
+        // Take ownership of the OLD surface so the bg thread can
+        // drop it before creating the new one. `self.surface` is
+        // `None` until the bg thread completes and the next paint
+        // drains the channel; the render path's `has_pending_configure()`
+        // gate means `get_current_texture()` is never called during
+        // this window.
+        let old_surface = self.surface.borrow_mut().take();
+
+        // Build the SurfaceConfiguration the bg thread will use.
+        // We clone the active config and patch in the new dims so
+        // format / present_mode / alpha_mode / view_formats / etc.
+        // all carry over.
+        let mut bg_config = self.config.borrow().clone();
+        bg_config.width = new_w;
+        bg_config.height = new_h;
+
+        let device = self.device.clone();
+        let instance = self.instance.clone();
+        let handle = self.handle;
+        let (tx, rx) = std::sync::mpsc::channel();
+        let started_at = std::time::Instant::now();
+        let bg_dims = dims;
+
         log::info!(
-            "[render] webgpu RESIZE {}x{} -> {}x{}; recreating surface",
-            old_w,
-            old_h,
+            "[render] queueing async webgpu configure {}x{} -> {}x{}",
+            cur_w,
+            cur_h,
             new_w,
             new_h,
         );
-        let _t_target = std::time::Instant::now();
-        let raw_target = match unsafe { wgpu::SurfaceTargetUnsafe::from_window(&self.handle) } {
-            Ok(t) => t,
-            Err(e) => {
-                log::error!(
-                    "[render] SurfaceTargetUnsafe::from_window failed: {e}; \
-                     falling back to in-place configure"
-                );
-                let cfg = self.config.borrow();
-                self.surface.borrow().configure(&self.device, &cfg);
-                return true;
-            }
+
+        // Capture the HWND value (as usize so it's Send) so the bg
+        // thread can wake the GUI with InvalidateRect after configure
+        // completes. Otherwise the GUI thread would only drain the
+        // channel on the next cursor-blink tick (~500 ms latency
+        // after the bg thread has already finished).
+        #[cfg(windows)]
+        let wake_hwnd: usize = match self.handle.window {
+            RawWindowHandle::Win32(h) => h.hwnd.get() as usize,
+            _ => 0,
         };
-        let _t_create = std::time::Instant::now();
-        let new_surface = match unsafe { self.instance.create_surface_unsafe(raw_target) } {
-            Ok(s) => s,
-            Err(e) => {
-                log::error!(
-                    "[render] instance.create_surface_unsafe failed: {e}; \
-                     falling back to in-place configure"
-                );
-                let cfg = self.config.borrow();
-                self.surface.borrow().configure(&self.device, &cfg);
-                return true;
-            }
-        };
-        let _t_drop = std::time::Instant::now();
-        // Move the OLD surface out and drop it on a background
-        // thread. Inline drop can stall the GUI thread for many
-        // seconds under WARP/RDP. The NEW surface has already taken
-        // over the HWND via a fresh swap chain (CreateSwapChainForHwnd
-        // succeeds even with the old swap chain still alive — DXGI
-        // handles the transient overlap gracefully).
-        let old_surface = std::mem::replace(&mut *self.surface.borrow_mut(), new_surface);
-        std::thread::Builder::new()
-            .name("wgpu-old-surface-drop".into())
+        #[cfg(not(windows))]
+        let wake_hwnd: usize = 0;
+
+        let spawn_res = std::thread::Builder::new()
+            .name("wgpu-async-configure".into())
             .spawn(move || {
-                let t = std::time::Instant::now();
-                drop(old_surface);
-                log::debug!(
-                    "[render] background drop of old wgpu surface took {:?}",
-                    t.elapsed()
+                let bg_t = std::time::Instant::now();
+                // Install a panic hook that captures the panic
+                // payload + location for this thread only, so
+                // catch_unwind below can report a meaningful error.
+                let captured: std::sync::Arc<std::sync::Mutex<Option<String>>> =
+                    std::sync::Arc::new(std::sync::Mutex::new(None));
+                let captured_for_hook = captured.clone();
+                let prev_hook = std::panic::take_hook();
+                std::panic::set_hook(Box::new(move |info| {
+                    let msg = info
+                        .payload()
+                        .downcast_ref::<&str>()
+                        .map(|s| (*s).to_string())
+                        .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                        .unwrap_or_else(|| "<non-string panic>".to_string());
+                    let loc = info
+                        .location()
+                        .map(|l| format!(" at {}:{}", l.file(), l.line()))
+                        .unwrap_or_default();
+                    *captured_for_hook.lock().unwrap() = Some(format!("{msg}{loc}"));
+                }));
+                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    // Step 1: drop the OLD surface BEFORE creating
+                    // the new swap chain. DXGI rejects two swap
+                    // chains on the same HWND.
+                    let drop_t = std::time::Instant::now();
+                    drop(old_surface);
+                    let drop_elapsed = drop_t.elapsed();
+
+                    // Step 2: build a fresh SurfaceTargetUnsafe and
+                    // a Surface object (no swap chain yet).
+                    let raw_target = unsafe {
+                        wgpu::SurfaceTargetUnsafe::from_window(&handle)
+                            .expect("SurfaceTargetUnsafe::from_window failed in bg thread")
+                    };
+                    let new_surface = unsafe {
+                        instance
+                            .create_surface_unsafe(raw_target)
+                            .expect("instance.create_surface_unsafe failed in bg thread")
+                    };
+
+                    // Step 3: configure — this invokes
+                    // CreateSwapChainForHwnd.
+                    let cfg_t = std::time::Instant::now();
+                    new_surface.configure(&device, &bg_config);
+                    let cfg_elapsed = cfg_t.elapsed();
+                    log::info!(
+                        "[render] async webgpu configure {}x{}: drop_old={:?} configure={:?}",
+                        bg_dims.pixel_width,
+                        bg_dims.pixel_height,
+                        drop_elapsed,
+                        cfg_elapsed,
+                    );
+                    new_surface
+                }))
+                .map_err(|_| {
+                    captured
+                        .lock()
+                        .unwrap()
+                        .take()
+                        .unwrap_or_else(|| "wgpu surface.configure panicked".to_string())
+                });
+                std::panic::set_hook(prev_hook);
+                log::info!(
+                    "[render] async webgpu configure for {}x{} bg-thread total time={:?}",
+                    bg_dims.pixel_width,
+                    bg_dims.pixel_height,
+                    bg_t.elapsed(),
                 );
-            })
-            .ok();
-        let _t_configure = std::time::Instant::now();
-        let cfg = self.config.borrow();
-        self.surface.borrow().configure(&self.device, &cfg);
-        log::info!(
-            "[render] webgpu surface RECREATE+configure {}x{} -> {}x{} \
-             total={:?} target={:?} create={:?} drop_handoff={:?} configure={:?}",
-            old_w,
-            old_h,
-            new_w,
-            new_h,
-            _t.elapsed(),
-            _t_create.duration_since(_t_target),
-            _t_drop.duration_since(_t_create),
-            _t_configure.duration_since(_t_drop),
-            _t_configure.elapsed(),
-        );
-        // --- end weezterm remote features ---
-        true
+                let _ = tx.send(result);
+                // Wake the GUI thread so it drains the channel
+                // immediately and swaps the new surface in.
+                // InvalidateRect is documented thread-safe.
+                #[cfg(windows)]
+                if wake_hwnd != 0 {
+                    unsafe {
+                        winapi::um::winuser::InvalidateRect(
+                            wake_hwnd as winapi::shared::windef::HWND,
+                            std::ptr::null(),
+                            0,
+                        );
+                    }
+                }
+            });
+
+        if let Err(e) = spawn_res {
+            // Couldn't spawn the bg thread; we already took the OLD
+            // surface out of self.surface. Recover by doing the whole
+            // operation inline on the GUI thread (yes, this blocks,
+            // but spawn failures are exceptionally rare).
+            log::error!(
+                "[render] failed to spawn async-configure thread: {e}; \
+                 falling back to inline drop+create+configure"
+            );
+            // The OLD surface was already moved to a local; drop it
+            // to free the swap chain slot for the HWND.
+            // (No `old_surface` binding here because it was moved
+            // into the closure — but the closure didn't run, so
+            // `old_surface` was dropped at the end of `spawn_res`'s
+            // expression. Nothing more to do here.)
+            let raw_target = match unsafe { wgpu::SurfaceTargetUnsafe::from_window(&self.handle) } {
+                Ok(t) => t,
+                Err(e) => {
+                    log::error!("[render] inline SurfaceTargetUnsafe::from_window failed: {e}");
+                    return configured_change;
+                }
+            };
+            let new_surface = match unsafe { self.instance.create_surface_unsafe(raw_target) } {
+                Ok(s) => s,
+                Err(e) => {
+                    log::error!("[render] inline instance.create_surface_unsafe failed: {e}");
+                    return configured_change;
+                }
+            };
+            {
+                let mut config = self.config.borrow_mut();
+                config.width = new_w;
+                config.height = new_h;
+            }
+            let cfg = self.config.borrow().clone();
+            new_surface.configure(&self.device, &cfg);
+            *self.surface.borrow_mut() = Some(new_surface);
+            return true;
+        }
+
+        *self.pending_configure.borrow_mut() = Some(PendingConfigure {
+            target_dims: dims,
+            rx,
+            started_at,
+        });
+
+        configured_change
+    }
+
+    /// Returns true while a background `surface.configure(...)` is
+    /// in flight. The render path uses this to suppress the
+    /// "wrong-size-frame discard" InvalidateRect loop — during the
+    /// async configure the active surface's backing swap chain is
+    /// at the OLD size, so by definition `cfg.{w,h} != client size`,
+    /// and dropping the frame would just spin WM_PAINT until the
+    /// configure lands (potentially seconds on WARP/RDP). DWM
+    /// happily stretches the old image in the meantime.
+    pub fn has_pending_configure(&self) -> bool {
+        self.pending_configure.borrow().is_some()
     }
     // --- end weezterm remote features ---
 }
