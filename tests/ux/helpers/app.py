@@ -412,12 +412,17 @@ class WeezTermApp:
         t0 = time.perf_counter()
         # --- weezterm remote features ---
         # If a stderr_log_path is configured (diagnostic tests), redirect
-        # stderr to that file directly. Otherwise keep PIPE so callers
-        # that read last_stderr still work.
+        # stderr to that file directly. Otherwise discard stderr — using
+        # subprocess.PIPE without an active reader will fill the OS pipe
+        # buffer (~4 KB on Windows) within milliseconds when WEZTERM_LOG
+        # is enabled, after which the GUI thread BLOCKS on every log
+        # write (see env-bootstrap/src/ringlog.rs:204) and the whole UI
+        # freezes. Logs already land in the per-pid file in
+        # `weezterm-gui.exe-log-<PID>.txt`, so DEVNULL is sufficient.
         if self.stderr_log_path:
             stderr_target = self._open_stderr_target()
         else:
-            stderr_target = subprocess.PIPE
+            stderr_target = subprocess.DEVNULL
         # --- end weezterm remote features ---
         self._process = subprocess.Popen(
             cmd,
