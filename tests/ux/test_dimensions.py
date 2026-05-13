@@ -164,11 +164,22 @@ class TestDimensionPersistence:
             # Verify the state has reasonable values
             # state is keyed by workspace name (usually "default")
             for workspace, ws_state in state.items():
+                # --- weezterm remote features ---
+                # Schema v2 stores dimensions inside `workspace_relative_rect`
+                # (the pre-maximize / restored normal rect). Older schemas
+                # had top-level width/height; we accept either for safety.
+                rect = ws_state.get("workspace_relative_rect") or {}
+                origin = rect.get("origin") or {}
+                w = rect.get("width", ws_state.get("width", 0))
+                h = rect.get("height", ws_state.get("height", 0))
+                x = origin.get("x", ws_state.get("x", "?"))
+                y = origin.get("y", ws_state.get("y", "?"))
                 print(f"  Workspace '{workspace}':")
-                print(f"    Size: {ws_state.get('width', '?')}x{ws_state.get('height', '?')}")
-                print(f"    Position: ({ws_state.get('x', '?')}, {ws_state.get('y', '?')})")
-                assert ws_state.get("width", 0) > 0, "Saved width should be positive"
-                assert ws_state.get("height", 0) > 0, "Saved height should be positive"
+                print(f"    Size: {w}x{h}")
+                print(f"    Position: ({x}, {y})")
+                assert w > 0, "Saved width should be positive"
+                assert h > 0, "Saved height should be positive"
+                # --- end weezterm remote features ---
         else:
             pytest.fail("window-state.json was not written on graceful close")
 

@@ -37,7 +37,11 @@ WNDENUMPROC = ctypes.WINFUNCTYPE(
 TEST_CONFIG_LUA = """\
 local wezterm = require 'wezterm'
 return {
-    front_end = "WebGpu",
+    -- --- weezterm remote features ---
+    -- Use Default (Auto on Windows) to exercise the real auto-routing
+    -- path so RDP detection -> SoftwareRdp actually applies in tests.
+    -- Set WEEZTERM_RENDER_MODE=wgpu_classic to override for diagnostics.
+    -- --- end weezterm remote features ---
     enable_tab_bar = true,
     initial_rows = 24,
     initial_cols = 80,
@@ -55,7 +59,9 @@ return {
 SSH_MUX_CONFIG_LUA = """\
 local wezterm = require 'wezterm'
 return {{
-    front_end = "WebGpu",
+    -- --- weezterm remote features ---
+    -- See TEST_CONFIG_LUA for rationale.
+    -- --- end weezterm remote features ---
     enable_tab_bar = true,
     initial_rows = 24,
     initial_cols = 80,
@@ -139,6 +145,16 @@ class WeezTermApp:
 
     binary_path: str = ""
     config_lua: str = TEST_CONFIG_LUA
+    # --- weezterm remote features ---
+    # Optional: if set, stderr is redirected to this file (instead of
+    # DEVNULL or PIPE) so the resize/render log is preserved for
+    # post-hoc inspection. The diagnostic SSH/TUI resize tests use this
+    # to correlate frame captures with the resize event sequence.
+    stderr_log_path: str = ""
+    # Optional: extra `WEZTERM_LOG` value (e.g. "info,wezterm_gui::termwindow=trace")
+    # that is merged into the env passed to the launched process.
+    log_filter: str = ""
+    # --- end weezterm remote features ---
     _temp_config: str = ""
     _temp_runtime: str = ""
     _config_file: str = ""
@@ -146,6 +162,9 @@ class WeezTermApp:
     _hwnd: int = 0
     _startup_time_s: float = 0.0
     _last_stderr: str = field(default="", repr=False)
+    # --- weezterm remote features ---
+    _stderr_file: Optional[object] = field(default=None, repr=False)
+    # --- end weezterm remote features ---
 
     def __post_init__(self):
         if not self.binary_path:
@@ -168,7 +187,39 @@ class WeezTermApp:
         for key in list(env.keys()):
             if key.startswith("WEEZTERM_") or key.startswith("WEZTERM_"):
                 del env[key]
+        # --- weezterm remote features ---
+        # If the test asked for verbose logging, set WEZTERM_LOG. The
+        # diagnostic SSH/TUI resize tests use this to capture the resize
+        # event sequence and correlate it with frame captures.
+        if self.log_filter:
+            env["WEZTERM_LOG"] = self.log_filter
+        # --- end weezterm remote features ---
         return env
+
+    # --- weezterm remote features ---
+    def _open_stderr_target(self):
+        """Return (stderr_handle, owned_file_or_none) for Popen.
+
+        If `stderr_log_path` is set, opens that file (creating parent
+        dirs as needed) and returns the handle so subprocess writes go
+        directly to disk. The caller is responsible for closing the
+        file via `_close_stderr_file()` after the process exits.
+        """
+        if self.stderr_log_path:
+            os.makedirs(os.path.dirname(self.stderr_log_path), exist_ok=True)
+            f = open(self.stderr_log_path, "wb", buffering=0)
+            self._stderr_file = f
+            return f
+        return subprocess.DEVNULL
+
+    def _close_stderr_file(self):
+        if self._stderr_file is not None:
+            try:
+                self._stderr_file.close()
+            except Exception:
+                pass
+            self._stderr_file = None
+    # --- end weezterm remote features ---
 
     def start(self, extra_args: Optional[list[str]] = None, timeout: float = 30.0) -> float:
         """Launch WeezTerm, wait for window to appear, return startup time in seconds.
@@ -255,6 +306,9 @@ class WeezTermApp:
 
         self._process = None
         self._hwnd = 0
+        # --- weezterm remote features ---
+        self._close_stderr_file()
+        # --- end weezterm remote features ---
 
     def _capture_stderr(self):
         """Capture stderr from the process if available."""
@@ -263,6 +317,16 @@ class WeezTermApp:
                 self._last_stderr = self._process.stderr.read().decode("utf-8", errors="replace")
             except Exception:
                 pass
+        # --- weezterm remote features ---
+        # If we redirected stderr to a file, read the tail back so
+        # last_stderr still works for diagnostic prints.
+        elif self.stderr_log_path and os.path.isfile(self.stderr_log_path):
+            try:
+                with open(self.stderr_log_path, "rb") as f:
+                    self._last_stderr = f.read().decode("utf-8", errors="replace")
+            except Exception:
+                pass
+        # --- end weezterm remote features ---
 
     @property
     def last_stderr(self) -> str:
@@ -346,11 +410,20 @@ class WeezTermApp:
         ]
 
         t0 = time.perf_counter()
+        # --- weezterm remote features ---
+        # If a stderr_log_path is configured (diagnostic tests), redirect
+        # stderr to that file directly. Otherwise keep PIPE so callers
+        # that read last_stderr still work.
+        if self.stderr_log_path:
+            stderr_target = self._open_stderr_target()
+        else:
+            stderr_target = subprocess.PIPE
+        # --- end weezterm remote features ---
         self._process = subprocess.Popen(
             cmd,
             env=self._build_env(),
             stdout=subprocess.DEVNULL,
-            stderr=subprocess.PIPE,
+            stderr=stderr_target,
         )
 
         # SSH connection takes a few seconds — poll with patience
@@ -361,6 +434,15 @@ class WeezTermApp:
                 stderr = ""
                 if self._process.stderr:
                     stderr = self._process.stderr.read().decode("utf-8", errors="replace")
+                # --- weezterm remote features ---
+                elif self.stderr_log_path and os.path.isfile(self.stderr_log_path):
+                    try:
+                        with open(self.stderr_log_path, "rb") as f:
+                            stderr = f.read().decode("utf-8", errors="replace")
+                    except Exception:
+                        pass
+                self._close_stderr_file()
+                # --- end weezterm remote features ---
                 raise RuntimeError(
                     f"WeezTerm exited with code {self._process.returncode} "
                     f"during SSH connection to {host}. "

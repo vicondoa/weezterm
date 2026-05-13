@@ -344,4 +344,59 @@ class TestResize:
         if artifacts:
             save_screenshot(final_img, "rapid_resize_storm_final", "ARTIFACT")
             pytest.fail(f"Final state has artifacts after storm: {artifacts}")
+
+    def test_small_grow_redraws(self, running_app: WeezTermApp):
+        """A small grow (e.g. +20 px in one dim) must redraw — not leave
+        the old smaller content stretched into the new area.
+
+        This exercises the same code path as a big grow (the surface
+        recreate) but with a much more conservative size delta. Any
+        regression in the per-pixel grow detection would cause the new
+        strip on the right/bottom edge to show stretched terminal
+        content rather than fresh background or freshly-rendered cells.
+
+        We also cap the total time so that any per-step recreate hang
+        (the 12s WARP+RDP issue we hunted in earlier sessions) would
+        cause a clear failure.
+        """
+        import numpy as np
+
+        hwnd = running_app.hwnd
+
+        start_w, start_h = 800, 500
+        set_window_rect(hwnd, 200, 150, start_w, start_h)
+        settle(1.5)
+
+        for delta in (20, 40, 60):
+            new_w = start_w + delta
+            new_h = start_h + delta
+            t0 = time.perf_counter()
+            set_window_rect(hwnd, 200, 150, new_w, new_h)
+            settle(1.5)
+            elapsed = time.perf_counter() - t0
+            assert elapsed < 5.0, (
+                f"small grow +{delta}px took {elapsed:.2f}s (>5s) — "
+                "renderer is hanging on recreate"
+            )
+
+            img = capture_window(hwnd)
+            arr = np.array(img)
+            h, w = arr.shape[:2]
+            if w < new_w - 50 or h < new_h - 80:
+                continue
+
+            right_strip = arr[:, w - 30:, :3]
+            bottom_strip = arr[h - 30:, :, :3]
+            right_bright = float(np.mean(right_strip))
+            bottom_bright = float(np.mean(bottom_strip))
+
+            if right_bright > 40 or bottom_bright > 40:
+                save_screenshot(img, f"small_grow_{delta}px_stretched")
+                pytest.fail(
+                    f"After +{delta}px grow: right={right_bright:.1f} "
+                    f"bottom={bottom_bright:.1f} — content appears "
+                    "stretched into the new area"
+                )
+
+            start_w, start_h = new_w, new_h
     # --- end weezterm remote features ---

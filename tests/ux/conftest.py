@@ -179,3 +179,80 @@ def ssh_mux_app(app):
 
     set_foreground(app.hwnd)
     yield app
+
+
+# --- weezterm remote features ---
+@pytest.fixture(scope="function")
+def ssh_mux_app_diagnostic(request):
+    """Provide a WeezTermApp connected to jvicondo-a7 via SSH for the
+    SSH/TUI diagnostic resize tests.
+
+    Differs from ``ssh_mux_app`` in two important ways:
+
+    1. stderr is redirected to a per-test log file
+       (``test-results/diagnostic/<nodeid>/stderr.log``) so the resize
+       event sequence can be inspected after the run.
+    2. ``WEZTERM_LOG`` is set to surface the resize/render debug logs
+       which are otherwise filtered out by the default INFO level.
+
+    The output directory is also exposed via ``app._diag_dir`` so
+    diagnostic tests can drop their FrameCapture frames into a sibling
+    folder.
+    """
+    import os
+    import time
+    from helpers.app import WeezTermApp
+    from helpers.window_ops import set_foreground, get_window_rect
+
+    safe_name = request.node.nodeid.replace("/", "_").replace("::", "__").replace(":", "_")
+    out_root = os.path.join(
+        os.path.dirname(__file__), "test-results", "diagnostic", safe_name
+    )
+    os.makedirs(out_root, exist_ok=True)
+
+    app = WeezTermApp(
+        stderr_log_path=os.path.join(out_root, "stderr.log"),
+        log_filter=(
+            "info,"
+            "weezterm_gui::termwindow::resize=debug,"
+            "weezterm_gui::termwindow::software_rdp=debug,"
+            "weezterm_gui::termwindow::webgpu=debug,"
+            "weezterm_gui::termwindow::render=debug,"
+            "weezterm_gui::termwindow=debug,"
+            "window::os::windows=debug,"
+            "wezterm_client=debug,"
+            "mux::tab=debug,"
+            "mux::localpane=debug,"
+            "mux=debug,"
+            "wezterm_ssh=debug"
+        ),
+    )
+    setattr(app, "_diag_dir", out_root)
+
+    try:
+        app.start_ssh_mux(
+            domain_name=SSH_MUX_DOMAIN,
+            remote_address=SSH_MUX_HOST,
+            timeout=60,
+        )
+        time.sleep(3.0)
+        for i in range(7):
+            time.sleep(1.0)
+            if not app.is_running:
+                stderr = app.last_stderr
+                pytest.skip(
+                    f"SSH mux connection to {SSH_MUX_DOMAIN} dropped at t+{3+i+1}s. "
+                    f"Stderr: {stderr[-300:] if stderr else '(empty)'}"
+                )
+
+        rect = get_window_rect(app.hwnd)
+        if rect.width == 0 or rect.height == 0:
+            pytest.skip(
+                "SSH mux diagnostic window has zero dimensions — connection likely dropped"
+            )
+
+        set_foreground(app.hwnd)
+        yield app
+    finally:
+        app.cleanup()
+# --- end weezterm remote features ---

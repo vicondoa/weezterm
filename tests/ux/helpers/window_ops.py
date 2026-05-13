@@ -78,6 +78,47 @@ def set_window_rect(hwnd: int, x: int, y: int, width: int, height: int):
     user32.MoveWindow(hwnd, x, y, width, height, True)
 
 
+# --- weezterm remote features ---
+WM_ENTERSIZEMOVE = 0x0231
+WM_EXITSIZEMOVE = 0x0232
+
+
+def simulate_live_drag_resize(
+    hwnd: int,
+    x: int,
+    y: int,
+    start_w: int,
+    start_h: int,
+    end_w: int,
+    end_h: int,
+    steps: int = 30,
+    step_delay_s: float = 0.020,
+):
+    """Simulate the WM message sequence Windows generates during an
+    interactive window resize drag: WM_ENTERSIZEMOVE → many rapid
+    WM_SIZE events → WM_EXITSIZEMOVE.
+
+    Each MoveWindow call between ENTER/EXIT will be flagged as a live
+    resize by the OS (the window has in_size_move=true), so the
+    renderer's debounce path is exercised. This is how a real human
+    drag would arrive at our window proc.
+    """
+    # Send WM_ENTERSIZEMOVE so the window proc flips in_size_move=true.
+    user32.SendMessageW(hwnd, WM_ENTERSIZEMOVE, 0, 0)
+
+    dw = end_w - start_w
+    dh = end_h - start_h
+    for i in range(1, steps + 1):
+        w = start_w + (dw * i) // steps
+        h = start_h + (dh * i) // steps
+        user32.MoveWindow(hwnd, x, y, w, h, True)
+        time.sleep(step_delay_s)
+
+    # WM_EXITSIZEMOVE drops in_size_move and triggers the final configure.
+    user32.SendMessageW(hwnd, WM_EXITSIZEMOVE, 0, 0)
+# --- end weezterm remote features ---
+
+
 def maximize(hwnd: int):
     """Maximize the window."""
     user32.ShowWindow(hwnd, SW_MAXIMIZE)
