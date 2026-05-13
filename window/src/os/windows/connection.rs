@@ -67,6 +67,37 @@ impl ConnectionOps for Connection {
         "Windows".to_string()
     }
 
+    // --- weezterm remote features ---
+    /// Return the *primary monitor's* effective DPI as the default,
+    /// rather than the constant 96. The constant fallback caused the
+    /// initial window to be created sized for 96 DPI on a HiDPI
+    /// machine; Windows would then promptly re-size it to the correct
+    /// physical pixels, leaving the user looking at a "squashed" tab
+    /// bar / undersized cells for the first ~1 s while the renderer
+    /// caught up.
+    ///
+    /// This mirrors what every existing call site wants: a sensible
+    /// default DPI when the user hasn't pinned `config.dpi`. On a
+    /// system with multiple monitors at different DPIs the window's
+    /// actual DPI is corrected via WM_DPICHANGED once it's placed,
+    /// but the *initial* sizing should match the primary monitor so
+    /// the first paint looks right.
+    fn default_dpi(&self) -> f64 {
+        let primary = unsafe { MonitorFromWindow(null_mut(), MONITOR_DEFAULTTOPRIMARY) };
+        if primary.is_null() {
+            return crate::DEFAULT_DPI;
+        }
+        let mut dpi_x = 0u32;
+        let mut dpi_y = 0u32;
+        let hr = unsafe { GetDpiForMonitor(primary, MDT_EFFECTIVE_DPI, &mut dpi_x, &mut dpi_y) };
+        if hr == 0 && dpi_x != 0 {
+            dpi_x as f64
+        } else {
+            crate::DEFAULT_DPI
+        }
+    }
+    // --- end weezterm remote features ---
+
     fn run_message_loop(&self) -> anyhow::Result<()> {
         let mut msg: MSG = unsafe { std::mem::zeroed() };
         loop {
