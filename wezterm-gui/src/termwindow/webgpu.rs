@@ -24,7 +24,7 @@ pub struct ShaderUniform {
 pub struct WebGpuState {
     pub adapter_info: wgpu::AdapterInfo,
     pub downlevel_caps: wgpu::DownlevelCapabilities,
-    pub surface: wgpu::Surface<'static>,
+    pub surface: RefCell<wgpu::Surface<'static>>,
     pub device: wgpu::Device,
     pub queue: Arc<wgpu::Queue>,
     pub config: RefCell<wgpu::SurfaceConfiguration>,
@@ -35,6 +35,13 @@ pub struct WebGpuState {
     pub texture_nearest_sampler: wgpu::Sampler,
     pub texture_linear_sampler: wgpu::Sampler,
     pub handle: RawHandlePair,
+    // --- weezterm remote features ---
+    /// wgpu instance kept around so we can drop+recreate the surface
+    /// on a grow. wgpu's in-place `ResizeBuffers` path leaves a
+    /// stretched stale front buffer visible under WARP/RDP — the only
+    /// reliable workaround is destroying the swap chain entirely.
+    pub instance: wgpu::Instance,
+    // --- end weezterm remote features ---
     // --- weezterm remote features ---
     /// Render mode this surface was configured for. Mode A
     /// (`WgpuDComp`) uses DComp + waitable + frame-latency=1; Mode B
@@ -55,6 +62,33 @@ pub struct WebGpuState {
     /// `tests/ux/test_frame_latency.py`.
     #[cfg(windows)]
     pub frame_latency_waitable: Option<winapi::shared::ntdef::HANDLE>,
+    /// Coalesced/deferred surface configuration. Calling
+    /// `surface.configure` invokes DXGI's `ResizeBuffers`, which on a
+    /// virtual GPU (Microsoft Basic Render Driver under RDP, Hyper-V
+    /// vGPU, etc.) can cost 100-1700ms per call. Live drag generates
+    /// a WM_SIZE per pixel which, if eagerly forwarded, makes the
+    /// whole UI thread block for hundreds of milliseconds.
+    ///
+    /// We instead store the desired dims here and apply them lazily
+    /// via `apply_pending_resize()` immediately before
+    /// `get_current_texture` in the render path. This naturally
+    /// coalesces N WM_SIZE events into 1 ResizeBuffers per frame.
+    pub pending_resize: RefCell<Option<Dimensions>>,
+    /// Time of the most recent `resize()` call. Used by
+    /// `apply_pending_resize` to debounce configures during a live
+    /// drag — when WM_SIZE events keep arriving every few ms, paying
+    /// 600-1700ms ResizeBuffers between each one would be a
+    /// disaster. We only configure when the size has been stable
+    /// for `RESIZE_DEBOUNCE_MS` (default ~80ms) OR when we've been
+    /// told the live drag has ended (`live_resize_active = false`).
+    pub last_resize_request: RefCell<Option<std::time::Instant>>,
+    /// True while the window is in a `WM_ENTERSIZEMOVE` /
+    /// `WM_EXITSIZEMOVE` interactive drag. We only run
+    /// `surface.configure` after the drag ends — DWM stretches the
+    /// existing swapchain image during the drag, which on a slow
+    /// virtual GPU is far less jarring than blocking the UI thread
+    /// for ~1 s per intermediate size.
+    pub live_resize_active: RefCell<bool>,
     // --- end weezterm remote features ---
 }
 
@@ -458,7 +492,31 @@ impl WebGpuState {
             format,
             width: dimensions.pixel_width as u32,
             height: dimensions.pixel_height as u32,
-            present_mode: wgpu::PresentMode::Fifo,
+            // --- weezterm remote features ---
+            // Prefer Mailbox (latest-image, no queue) over Fifo on
+            // RDP/WARP. Fifo's vsync wait can stall presents to ~1Hz on
+            // virtual GPUs, leaving DWM displaying a stale (stretched)
+            // backbuffer for many seconds after a resize. Mailbox
+            // returns the most recent submitted frame as the front
+            // buffer with no queue, so post-resize redraws appear
+            // immediately. Fall through to AutoVsync (≈ Fifo) only if
+            // neither Mailbox nor Immediate is supported.
+            present_mode: {
+                let chosen = if caps.present_modes.contains(&wgpu::PresentMode::Mailbox) {
+                    wgpu::PresentMode::Mailbox
+                } else if caps.present_modes.contains(&wgpu::PresentMode::Immediate) {
+                    wgpu::PresentMode::Immediate
+                } else {
+                    wgpu::PresentMode::AutoVsync
+                };
+                log::info!(
+                    "[render] surface present_modes={:?} chose={:?}",
+                    caps.present_modes,
+                    chosen,
+                );
+                chosen
+            },
+            // --- end weezterm remote features ---
             // --- weezterm remote features ---
             alpha_mode: match mode {
                 ::window::render_mode::RenderMode::WgpuDComp if translucent => {
@@ -716,7 +774,7 @@ impl WebGpuState {
         Ok(Self {
             adapter_info,
             downlevel_caps,
-            surface,
+            surface: RefCell::new(surface),
             device,
             queue,
             config: RefCell::new(config),
@@ -728,9 +786,13 @@ impl WebGpuState {
             texture_nearest_sampler,
             texture_linear_sampler,
             // --- weezterm remote features ---
+            instance,
             mode,
             #[cfg(windows)]
             frame_latency_waitable,
+            pending_resize: RefCell::new(None),
+            last_resize_request: RefCell::new(None),
+            live_resize_active: RefCell::new(false),
             // --- end weezterm remote features ---
         })
     }
@@ -774,16 +836,224 @@ impl WebGpuState {
             return;
         }
         *self.dimensions.borrow_mut() = dims;
-        let mut config = self.config.borrow_mut();
-        config.width = dims.pixel_width as u32;
-        config.height = dims.pixel_height as u32;
-        if config.width > 0 && config.height > 0 {
-            // Avoid reconfiguring with a 0 sized surface, as webgpu will
-            // panic in that case
-            // <https://github.com/wezterm/wezterm/issues/2881>
-            self.surface.configure(&self.device, &config);
-        }
+        // --- weezterm remote features ---
+        // Defer the actual `surface.configure` (which calls
+        // DXGI ResizeBuffers — 100-1700ms on a virtual GPU) to the
+        // render path. Many WM_SIZE events during a live drag will
+        // each call resize(), but they coalesce to ONE configure
+        // per "settled" size, executed by `apply_pending_resize`
+        // immediately before `get_current_texture`.
+        *self.pending_resize.borrow_mut() = Some(dims);
+        *self.last_resize_request.borrow_mut() = Some(std::time::Instant::now());
+        // --- end weezterm remote features ---
     }
+
+    // --- weezterm remote features ---
+    /// Inform the GPU surface that an interactive resize drag has
+    /// started or ended. While `active` is `true`, `apply_pending_resize`
+    /// will defer all configures so the user can drag the window edge
+    /// smoothly without blocking on per-step `ResizeBuffers` calls
+    /// (which cost 600-1700ms on the WARP driver under RDP). When the
+    /// drag ends, the next paint pays the configure cost ONCE for the
+    /// final dims.
+    pub fn set_live_resize_active(&self, active: bool) {
+        *self.live_resize_active.borrow_mut() = active;
+    }
+
+    /// Returns the current value of the `live_resize_active` flag.
+    /// Used by `TermWindow::resize` to detect a live -> idle transition
+    /// and force a re-paint when dims didn't change.
+    pub fn is_live_resize_active(&self) -> bool {
+        *self.live_resize_active.borrow()
+    }
+
+    /// Apply any pending deferred resize. Call immediately before
+    /// `surface.get_current_texture()` in the render path.
+    ///
+    /// Returns `true` if the configuration was changed (the caller may want
+    /// to invalidate caches).
+    ///
+    /// The configure is debounced: it only runs when the most recent
+    /// `resize()` call is at least `RESIZE_DEBOUNCE` old, OR when
+    /// `live_resize_active` is `false` (the user has finished dragging).
+    /// During an active drag, DWM stretches the last submitted frame to
+    /// fill the new client rect — that produces a "soft" stretch
+    /// artifact, but it keeps the UI fully interactive instead of
+    /// blocking 1 s per WM_SIZE.
+    ///
+    /// IMPORTANT: even when no `pending_resize` is queued, this function
+    /// always reconciles `surface.config.{width,height}` against the live
+    /// `GetClientRect`. The wgpu/DXGI swap chain CAN drift from our cached
+    /// config when the OS resized the window without going through our
+    /// resize event path (e.g., DWM-induced rect changes on EXITSIZEMOVE).
+    /// Without this reconciliation the wrong-size-frame discard in the
+    /// caller would loop forever, and DWM would keep displaying a
+    /// stretched stale buffer.
+    pub fn apply_pending_resize(&self) -> bool {
+        const RESIZE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(60);
+
+        let live = *self.live_resize_active.borrow();
+
+        // First: figure out the size we WANT the swap chain to be.
+        // Prefer pending_resize, fall back to live GetClientRect.
+        let pending = *self.pending_resize.borrow();
+        let target_dims = match (pending, self.handle.window) {
+            (Some(d), _) => Some(d),
+            #[cfg(windows)]
+            (None, RawWindowHandle::Win32(h)) if !live => {
+                let mut rect = unsafe { std::mem::zeroed() };
+                unsafe { winapi::um::winuser::GetClientRect(h.hwnd.get() as _, &mut rect) };
+                let w = (rect.right - rect.left) as usize;
+                let h = (rect.bottom - rect.top) as usize;
+                if w > 0 && h > 0 {
+                    Some(Dimensions {
+                        pixel_width: w,
+                        pixel_height: h,
+                        dpi: 0,
+                    })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        let Some(dims) = target_dims else {
+            return false;
+        };
+
+        if live {
+            // Hold off until the drag ends — DWM stretches the old
+            // image, which is much less jarring than per-step blocks.
+            return false;
+        }
+
+        // Debounce ONLY if a real pending update is queued. After the
+        // drag ends we want to apply IMMEDIATELY (no debounce wait)
+        // so the very next paint draws at the right size.
+        if pending.is_some() {
+            if let Some(ts) = *self.last_resize_request.borrow() {
+                if ts.elapsed() < RESIZE_DEBOUNCE {
+                    return false;
+                }
+            }
+        }
+
+        // OK to actually configure now.
+        self.pending_resize.borrow_mut().take();
+        let new_w = dims.pixel_width as u32;
+        let new_h = dims.pixel_height as u32;
+        if new_w == 0 || new_h == 0 {
+            return false;
+        }
+        let (old_w, old_h) = {
+            let cfg = self.config.borrow();
+            (cfg.width, cfg.height)
+        };
+        if old_w == new_w && old_h == new_h {
+            return false;
+        }
+        {
+            let mut config = self.config.borrow_mut();
+            config.width = new_w;
+            config.height = new_h;
+        }
+        let _t = std::time::Instant::now();
+        // --- weezterm remote features ---
+        // Always recreate the wgpu Surface (drop old + create new),
+        // never call the in-place `surface.configure()` path on an
+        // existing surface.
+        //
+        // wgpu's in-place configure invokes DXGI's `ResizeBuffers`,
+        // which has two distinct problems on WARP/RDP virtual GPUs:
+        //
+        //   1. **Grow**: the old swap chain is composed by DWM with
+        //      `DXGI_SCALING_STRETCH` so the user sees the previous
+        //      (smaller) image stretched to fill the new client area
+        //      and it never refreshes.
+        //   2. **Shrink**: the call itself blocks the UI thread for
+        //      ~1 s waiting on queued presents to drain, leaving the
+        //      window unresponsive after each resize.
+        //
+        // Recreating the surface forces wgpu-hal down its
+        // `CreateSwapChainForHwnd` path: a brand-new swap chain at
+        // the new size with no leftover state. The new surface +
+        // configure together complete in 4-50 ms even on WARP+RDP.
+        // The old surface is moved to a background thread for drop
+        // (which is what was blocking — `wait_for_present_queue_idle`
+        // can take 11 s on a stale queued-presents swap chain), so
+        // the GUI thread is never blocked.
+        log::info!(
+            "[render] webgpu RESIZE {}x{} -> {}x{}; recreating surface",
+            old_w,
+            old_h,
+            new_w,
+            new_h,
+        );
+        let _t_target = std::time::Instant::now();
+        let raw_target = match unsafe { wgpu::SurfaceTargetUnsafe::from_window(&self.handle) } {
+            Ok(t) => t,
+            Err(e) => {
+                log::error!(
+                    "[render] SurfaceTargetUnsafe::from_window failed: {e}; \
+                     falling back to in-place configure"
+                );
+                let cfg = self.config.borrow();
+                self.surface.borrow().configure(&self.device, &cfg);
+                return true;
+            }
+        };
+        let _t_create = std::time::Instant::now();
+        let new_surface = match unsafe { self.instance.create_surface_unsafe(raw_target) } {
+            Ok(s) => s,
+            Err(e) => {
+                log::error!(
+                    "[render] instance.create_surface_unsafe failed: {e}; \
+                     falling back to in-place configure"
+                );
+                let cfg = self.config.borrow();
+                self.surface.borrow().configure(&self.device, &cfg);
+                return true;
+            }
+        };
+        let _t_drop = std::time::Instant::now();
+        // Move the OLD surface out and drop it on a background
+        // thread. Inline drop can stall the GUI thread for many
+        // seconds under WARP/RDP. The NEW surface has already taken
+        // over the HWND via a fresh swap chain (CreateSwapChainForHwnd
+        // succeeds even with the old swap chain still alive — DXGI
+        // handles the transient overlap gracefully).
+        let old_surface = std::mem::replace(&mut *self.surface.borrow_mut(), new_surface);
+        std::thread::Builder::new()
+            .name("wgpu-old-surface-drop".into())
+            .spawn(move || {
+                let t = std::time::Instant::now();
+                drop(old_surface);
+                log::debug!(
+                    "[render] background drop of old wgpu surface took {:?}",
+                    t.elapsed()
+                );
+            })
+            .ok();
+        let _t_configure = std::time::Instant::now();
+        let cfg = self.config.borrow();
+        self.surface.borrow().configure(&self.device, &cfg);
+        log::info!(
+            "[render] webgpu surface RECREATE+configure {}x{} -> {}x{} \
+             total={:?} target={:?} create={:?} drop_handoff={:?} configure={:?}",
+            old_w,
+            old_h,
+            new_w,
+            new_h,
+            _t.elapsed(),
+            _t_create.duration_since(_t_target),
+            _t_drop.duration_since(_t_create),
+            _t_configure.duration_since(_t_drop),
+            _t_configure.elapsed(),
+        );
+        // --- end weezterm remote features ---
+        true
+    }
+    // --- end weezterm remote features ---
 }
 
 // --- weezterm remote features ---

@@ -21,11 +21,26 @@ impl RenderMode {
     pub fn auto_select() -> Self {
         #[cfg(windows)]
         {
+            // --- weezterm remote features ---
+            // NOTE (2025-12): the SoftwareRdp WARP path renders as a
+            // black box in actual RDP sessions (see
+            // tests/ux/test-results/diagnostic/...). Until the
+            // CpuRenderer issue is fixed (tracked in
+            // docs/windows-rendering-design.md §6 Phase 4c follow-up),
+            // we route RDP and virtual-GPU machines through Mode B
+            // (WgpuClassic) which renders correctly but pays the
+            // ResizeBuffers cost on a virtual GPU. Resize latency is
+            // mitigated by the deferred-resize path in
+            // wezterm-gui/src/termwindow/webgpu.rs.
+            //
+            // Users who want to opt back into SoftwareRdp can set
+            // WEEZTERM_RENDER_MODE=software_rdp explicitly.
             if crate::os::windows::is_running_in_rdp_session()
                 || crate::os::windows::only_virtual_gpus_available()
             {
-                return Self::SoftwareRdp;
+                return Self::WgpuClassic;
             }
+            // --- end weezterm remote features ---
             if crate::os::windows::windows_build_number() < 19041 {
                 return Self::WgpuClassic;
             }

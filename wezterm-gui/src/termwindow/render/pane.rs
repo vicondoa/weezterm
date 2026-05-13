@@ -85,6 +85,22 @@ impl crate::TermWindow {
         let pane_id = pos.pane.pane_id();
         let current_viewport = self.get_viewport(pane_id);
         let dims = pos.pane.get_dimensions();
+        // --- weezterm remote features ---
+        // Trace the model dims at paint time so we can reconcile against
+        // LocalPane::resize logs when investigating "screen looks like the
+        // pre-resize PTY size" reports.
+        log::debug!(
+            "[paint] pane={} model dims viewport_rows={} cols={} \
+             cell_metric={}x{} self.dims={}x{}",
+            pane_id,
+            dims.viewport_rows,
+            dims.cols,
+            self.render_metrics.cell_size.width,
+            self.render_metrics.cell_size.height,
+            self.dimensions.pixel_width,
+            self.dimensions.pixel_height,
+        );
+        // --- end weezterm remote features ---
 
         let gl_state = self.render_state.as_ref().unwrap();
 

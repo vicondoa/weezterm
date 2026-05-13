@@ -255,6 +255,15 @@ impl SoftwareRdpState {
         if width == self.width && height == self.height {
             return Ok(());
         }
+        // --- weezterm remote features ---
+        log::debug!(
+            "[render] software_rdp::resize {}x{} -> {}x{}",
+            self.width,
+            self.height,
+            width,
+            height,
+        );
+        // --- end weezterm remote features ---
         let hr = unsafe {
             (*self.swap_chain).ResizeBuffers(0, width, height, DXGI_FORMAT_B8G8R8A8_UNORM, 0)
         };
@@ -350,14 +359,16 @@ impl SoftwareRdpState {
         // arrives between `resize()` and `present()`.
         let (cw, ch) = ::window::os::windows::current_client_size(self.hwnd);
         if cw > 0 && ch > 0 && (cw != self.width || ch != self.height) {
-            log::trace!(
-                "[render] dropping wrong-size frame (software_rdp): \
-                 buffer={}x{}, client={}x{}",
+            // --- weezterm remote features ---
+            log::debug!(
+                "[render] software_rdp wrong-size frame discard: \
+                 buffer={}x{} client={}x{}",
                 self.width,
                 self.height,
                 cw,
                 ch
             );
+            // --- end weezterm remote features ---
             self.dirty.clear();
             unsafe {
                 winapi::um::winuser::InvalidateRect(self.hwnd, std::ptr::null(), 0);

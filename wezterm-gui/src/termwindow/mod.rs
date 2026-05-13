@@ -1501,10 +1501,16 @@ impl TermWindow {
     /// active pane is available (e.g. during startup).
     #[cfg(windows)]
     fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
+        // --- weezterm remote features ---
+        let _t = std::time::Instant::now();
         let state_rc = match self.backend.software_rdp() {
             Some(s) => s.clone(),
-            None => return Ok(false),
+            None => {
+                log::debug!("[render] do_paint_software_rdp: no backend, returning");
+                return Ok(false);
+            }
         };
+        // --- end weezterm remote features ---
         let mut state = state_rc.borrow_mut();
 
         // Resize swap chain to current client rect if the window grew /
@@ -1529,10 +1535,20 @@ impl TermWindow {
         match self.get_active_pane_or_overlay() {
             Some(pane) => {
                 if let Some(cpu) = self.cpu_renderer.as_mut() {
+                    // --- weezterm remote features ---
+                    let _t_render = std::time::Instant::now();
                     cpu.render(&mut state, &pane, &fonts, &metrics, &palette)?;
+                    log::debug!(
+                        "[render] do_paint_software_rdp: cpu.render took {:?}",
+                        _t_render.elapsed()
+                    );
+                    // --- end weezterm remote features ---
                 } else {
                     // CpuRenderer wasn't initialised (shouldn't happen
                     // when SoftwareRdp backend is active, but be safe).
+                    // --- weezterm remote features ---
+                    log::warn!("[render] do_paint_software_rdp: no CpuRenderer, fill_solid");
+                    // --- end weezterm remote features ---
                     let bg = palette.background.as_rgba_u8();
                     Self::fill_solid_software_rdp(&mut state, bg);
                     state.mark_all_dirty();
@@ -1540,6 +1556,9 @@ impl TermWindow {
             }
             None => {
                 // Pre-spawn or shutdown: just clear to bg.
+                // --- weezterm remote features ---
+                log::debug!("[render] do_paint_software_rdp: no active pane, fill_solid");
+                // --- end weezterm remote features ---
                 let bg = palette.background.as_rgba_u8();
                 Self::fill_solid_software_rdp(&mut state, bg);
                 state.mark_all_dirty();
@@ -1547,6 +1566,9 @@ impl TermWindow {
         }
 
         state.present().context("SoftwareRdp present")?;
+        // --- weezterm remote features ---
+        log::debug!("[render] do_paint_software_rdp: total {:?}", _t.elapsed());
+        // --- end weezterm remote features ---
         Ok(true)
     }
 

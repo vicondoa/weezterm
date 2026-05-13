@@ -43,6 +43,18 @@ impl crate::TermWindow {
         // --- end weezterm remote features ---
 
         // --- weezterm remote features ---
+        // Apply any deferred surface.configure that was coalesced
+        // from the resize event(s). On a virtual GPU this can take
+        // 100-800ms, but we now pay it at most once per paint
+        // instead of once per WM_SIZE during a live drag. By the
+        // time we get here, `apply_dimensions` has already updated
+        // the terminal grid for these dims, so the very next paint
+        // will be visually correct (no "snap to original size in
+        // big window" middle frame).
+        let _config_changed = webgpu.apply_pending_resize();
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
         // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
         // surface's configured dimensions don't match the live client
         // rect, drop this frame and schedule a repaint so the next
@@ -58,13 +70,15 @@ impl crate::TermWindow {
                     let (cw, ch) = ::window::os::windows::current_client_size(hwnd);
                     let cfg = webgpu.config.borrow();
                     if cw > 0 && ch > 0 && (cw != cfg.width || ch != cfg.height) {
-                        log::trace!(
+                        log::debug!(
                             "[render] dropping wrong-size frame (webgpu): \
-                             surface={}x{}, client={}x{}",
+                             surface={}x{}, client={}x{}, self.dims={}x{}",
                             cfg.width,
                             cfg.height,
                             cw,
-                            ch
+                            ch,
+                            self.dimensions.pixel_width,
+                            self.dimensions.pixel_height,
                         );
                         drop(cfg);
                         unsafe {
@@ -77,7 +91,28 @@ impl crate::TermWindow {
         }
         // --- end weezterm remote features ---
 
-        let output = webgpu.surface.get_current_texture()?;
+        // --- weezterm remote features ---
+        let cfg_w;
+        let cfg_h;
+        {
+            let cfg = webgpu.config.borrow();
+            cfg_w = cfg.width;
+            cfg_h = cfg.height;
+        }
+        // --- end weezterm remote features ---
+        let output = webgpu.surface.borrow().get_current_texture()?;
+        // --- weezterm remote features ---
+        log::debug!(
+            "[render] call_draw_webgpu cfg={}x{} self.dims={}x{} got_texture={}x{} suboptimal={}",
+            cfg_w,
+            cfg_h,
+            self.dimensions.pixel_width,
+            self.dimensions.pixel_height,
+            output.texture.width(),
+            output.texture.height(),
+            output.suboptimal,
+        );
+        // --- end weezterm remote features ---
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -200,7 +235,27 @@ impl crate::TermWindow {
 
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
+        // --- weezterm remote features ---
+        let cfg_w_log;
+        let cfg_h_log;
+        {
+            let cfg = webgpu.config.borrow();
+            cfg_w_log = cfg.width;
+            cfg_h_log = cfg.height;
+        }
+        log::debug!(
+            "[render] presenting frame tex={}x{} cfg={}x{} cleared={}",
+            output.texture.width(),
+            output.texture.height(),
+            cfg_w_log,
+            cfg_h_log,
+            cleared
+        );
+        // --- end weezterm remote features ---
         output.present();
+        // --- weezterm remote features ---
+        log::debug!("[render] present returned");
+        // --- end weezterm remote features ---
 
         Ok(())
     }

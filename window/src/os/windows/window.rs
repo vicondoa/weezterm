@@ -382,6 +382,14 @@ impl WindowInner {
         if !same {
             self.set_ime_window_position(Rect::default());
 
+            // --- weezterm remote features ---
+            log::debug!(
+                "[wm] dispatch WindowEvent::Resized hwnd={:p} dims={:?} live_resizing={}",
+                self.hwnd.0,
+                current_dims,
+                self.in_size_move,
+            );
+            // --- end weezterm remote features ---
             self.events.dispatch(WindowEvent::Resized {
                 dimensions: current_dims,
                 window_state: get_window_state(self.hwnd.0),
@@ -1824,15 +1832,90 @@ unsafe fn wm_enter_exit_size_move(
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
     let mut should_size = false;
+    // --- weezterm remote features ---
+    // On WM_EXITSIZEMOVE the OS often does NOT send a final WM_SIZE
+    // (the last drag step's WM_SIZE already matched the current
+    // size). We must still notify the renderer that the live drag
+    // is over so it can apply its deferred surface.configure for
+    // the final dims. Force a resize dispatch with live_resizing=false.
+    let mut force_dispatch_exit_size_move = false;
+    // --- end weezterm remote features ---
     if let Some(inner) = rc_from_hwnd(hwnd) {
         let mut inner = inner.borrow_mut();
+        // --- weezterm remote features ---
+        let was_in_size_move = inner.in_size_move;
+        // --- end weezterm remote features ---
         inner.in_size_move = msg == WM_ENTERSIZEMOVE;
         should_size = !inner.in_size_move;
+        // --- weezterm remote features ---
+        if was_in_size_move && !inner.in_size_move {
+            force_dispatch_exit_size_move = true;
+        }
+        log::debug!(
+            "[wm] {} hwnd={:p} in_size_move={}",
+            if msg == WM_ENTERSIZEMOVE {
+                "WM_ENTERSIZEMOVE"
+            } else {
+                "WM_EXITSIZEMOVE"
+            },
+            hwnd,
+            inner.in_size_move,
+        );
+        // --- end weezterm remote features ---
     }
 
     if should_size {
-        wm_size(hwnd, 0, 0, 0)?;
+        // Note: wm_size's normal return is `None` (let DefWindowProc
+        // handle WM_SIZE). The `?` operator would early-return,
+        // skipping our force-dispatch logic below. Discard the
+        // return so we always reach the EXITSIZEMOVE handler.
+        let _ = wm_size(hwnd, 0, 0, 0);
     }
+
+    // --- weezterm remote features ---
+    // After wm_size has run (which may or may not have fired a
+    // Resized event), force a final Resized dispatch with
+    // live_resizing=false so the renderer drops its debounce and
+    // performs the final surface.configure.
+    if force_dispatch_exit_size_move {
+        if let Some(inner) = rc_from_hwnd(hwnd) {
+            let mut inner = inner.borrow_mut();
+            let mut rect = RECT {
+                left: 0,
+                bottom: 0,
+                right: 0,
+                top: 0,
+            };
+            GetClientRect(hwnd, &mut rect);
+            let dims = Dimensions {
+                pixel_width: rect_width(&rect) as usize,
+                pixel_height: rect_height(&rect) as usize,
+                dpi: inner.get_effective_dpi(),
+            };
+            log::debug!(
+                "[wm] WM_EXITSIZEMOVE force-dispatch Resized hwnd={:p} dims={:?}",
+                hwnd,
+                dims,
+            );
+            inner.events.dispatch(WindowEvent::Resized {
+                dimensions: dims,
+                window_state: get_window_state(hwnd),
+                live_resizing: false,
+            });
+            // Drop the borrow before InvalidateRect below — the OS may
+            // re-enter our wndproc synchronously when handling
+            // WM_PAINT.
+            drop(inner);
+            // Force a fresh paint at the new dims. Without this, the
+            // renderer might not re-paint at all if the prior frames
+            // were all the same content (DWM keeps showing a
+            // stretched stale image). NULL rect + erase=FALSE
+            // invalidates the whole client area without erasing the
+            // background (we paint everything ourselves).
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+        }
+    }
+    // --- end weezterm remote features ---
 
     Some(0)
 }
@@ -1847,6 +1930,9 @@ unsafe fn wm_windowposchanged(
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
     // let pos = &*(lparam as *const WINDOWPOS);
+    // --- weezterm remote features ---
+    log::debug!("[wm] WM_WINDOWPOSCHANGED hwnd={:p} -> wm_size", hwnd);
+    // --- end weezterm remote features ---
     wm_size(hwnd, 0, 0, 0)?;
     Some(0)
 }
@@ -1857,6 +1943,25 @@ unsafe fn wm_size(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> O
 
     if let Some(inner) = rc_from_hwnd(hwnd) {
         let mut inner = inner.borrow_mut();
+        // --- weezterm remote features ---
+        if log::log_enabled!(log::Level::Debug) {
+            let mut rect_dbg = RECT {
+                left: 0,
+                bottom: 0,
+                right: 0,
+                top: 0,
+            };
+            GetClientRect(hwnd, &mut rect_dbg);
+            log::debug!(
+                "[wm] WM_SIZE hwnd={:p} client={}x{} in_size_move={} last_size={:?}",
+                hwnd,
+                rect_width(&rect_dbg),
+                rect_height(&rect_dbg),
+                inner.in_size_move,
+                inner.last_size,
+            );
+        }
+        // --- end weezterm remote features ---
         should_paint = inner.check_and_call_resize_if_needed();
         should_pump = inner.in_size_move;
     }
