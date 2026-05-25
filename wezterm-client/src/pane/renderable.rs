@@ -352,11 +352,12 @@ impl RenderableInner {
         // --- weezterm remote features ---
         // Don't overwrite dimensions from a server push when a local resize
         // was recently sent AND the server hasn't caught up yet. Accept the
-        // server's dimensions once they match or exceed what we requested.
+        // server's dimensions once they match what we requested.
+        // Use a 2s window to accommodate SSH connections with higher latency.
         let server_matches_or_exceeds = delta.dimensions.cols == self.dimensions.cols
             && delta.dimensions.viewport_rows == self.dimensions.viewport_rows;
         let recent_local_resize =
-            now.duration_since(self.last_send_time) < std::time::Duration::from_millis(500);
+            now.duration_since(self.last_send_time) < std::time::Duration::from_secs(2);
         if recent_local_resize && !server_matches_or_exceeds {
             log::debug!(
                 "apply_changes_to_surface: skipping stale server dimensions for pane {} \

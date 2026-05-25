@@ -58,6 +58,7 @@ mod uniforms;
 mod update;
 mod utilsprites;
 // --- weezterm remote features ---
+mod cursor_blink_thread;
 mod window_state_persistence;
 // --- end weezterm remote features ---
 
@@ -153,6 +154,18 @@ async fn async_run_ssh(opts: SshCommand) -> anyhow::Result<()> {
         username: opts.user_at_host_and_port.username.clone(),
         multiplexing: SshMultiplexing::None,
         ssh_option,
+        // --- weezterm remote features ---
+        // The `weezterm ssh` subcommand is a transient one-shot SSH session.
+        // Background port-forward polling makes no sense for it AND its blocking
+        // /proc/net/tcp reads can stall the GUI thread during high-traffic
+        // moments (e.g. window resize storms). Users who want port forwarding
+        // should use a multiplexed connection via `weezterm connect` with an
+        // explicit ssh_domain config.
+        port_forwarding: config::PortForwardConfig {
+            enabled: false,
+            ..Default::default()
+        },
+        // --- end weezterm remote features ---
         ..Default::default()
     };
 

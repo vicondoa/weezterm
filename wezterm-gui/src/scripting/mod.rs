@@ -86,8 +86,8 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
                 backends,
                 ..Default::default()
             });
-            let gpus: Vec<GpuInfo> = instance
-                .enumerate_adapters(backends)
+            let adapters = smol::block_on(instance.enumerate_adapters(backends));
+            let gpus: Vec<GpuInfo> = adapters
                 .into_iter()
                 .map(|adapter| {
                     let info = adapter.get_info();

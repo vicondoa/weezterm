@@ -30,7 +30,7 @@ impl super::TermWindow {
         // --- weezterm remote features ---
         let _t = std::time::Instant::now();
         log::debug!(
-            "resize event, live={} current cells: {:?}, current dims: {:?}, new dims: {:?} window_state:{:?}",
+            "[resize] event live={} current_cells={:?} current_dims={:?} new_dims={:?} state={:?}",
             live_resizing,
             self.current_cell_dimensions(),
             self.dimensions,
@@ -44,9 +44,46 @@ impl super::TermWindow {
             log::trace!("new dimensions are zero: NOP!");
             return;
         }
+        // --- weezterm remote features ---
+        // Even if the dims haven't changed, we MUST propagate the
+        // `live_resizing` transition to the GPU surface so it can
+        // drop its debounce and apply the deferred surface.configure
+        // for the final size. The dispatch fired by
+        // `wm_enter_exit_size_move` on WM_EXITSIZEMOVE often arrives
+        // with dims == self.dimensions (the last drag step already
+        // updated us), so we cannot rely on the "real change" path
+        // below to do this.
+        let was_live_resize = if let Some(webgpu) = self.backend.webgpu() {
+            let prev = webgpu.is_live_resize_active();
+            webgpu.set_live_resize_active(live_resizing);
+            prev
+        } else {
+            false
+        };
+        // --- end weezterm remote features ---
         if self.dimensions == dimensions && self.window_state == window_state {
             // It didn't really change
             log::trace!("dimensions didn't change NOP!");
+            // --- weezterm remote features ---
+            // BUT: if we just transitioned live -> idle, the swap
+            // chain is still at the OLD pre-drag size and DWM is
+            // displaying it stretched to fill the new client rect.
+            // We MUST kick a fresh paint so apply_pending_resize
+            // runs and the new frame is rendered at the right size.
+            // We also bump quad_generation to invalidate any cached
+            // scene that might have been built for the old viewport.
+            if was_live_resize && !live_resizing {
+                log::debug!(
+                    "[resize] live->idle transition with unchanged dims; \
+                     forcing repaint to apply deferred surface.configure"
+                );
+                self.quad_generation += 1;
+                self.invalidate_fancy_tab_bar();
+                if let Some(window) = self.window.as_ref() {
+                    window.invalidate();
+                }
+            }
+            // --- end weezterm remote features ---
             return;
         }
         let last_state = self.window_state;
@@ -56,22 +93,77 @@ impl super::TermWindow {
             self.load_os_parameters();
         }
 
-        if let Some(webgpu) = self.webgpu.as_mut() {
-            webgpu.resize(dimensions);
-        }
-
-        // For simple, user-interactive resizes where the dpi doesn't change,
-        // skip our scaling recalculation
-        if live_resizing && self.dimensions.dpi == dimensions.dpi {
+        // --- weezterm remote features ---
+        // Phase 4d (perf): reorder to ensure the terminal grid
+        // (rows/cols) is recomputed for the new dims BEFORE we
+        // touch the GPU surface. webgpu.resize() now only stores
+        // the pending dims (surface.configure is deferred to the
+        // render path), so this ordering guarantees that when the
+        // next paint runs, BOTH the swapchain AND the grid match
+        // the new client rect — eliminating the
+        // "snap to original (small) size in big window"
+        // intermediate frame the user sees during drag-to-grow.
+        let _t_apply = std::time::Instant::now();
+        if self.dimensions.dpi == dimensions.dpi {
             self.apply_dimensions(&dimensions, None, window);
         } else {
             self.scaling_changed(dimensions, self.fonts.get_font_scale(), window);
         }
+        log::debug!(
+            "[resize] apply_dimensions/scaling_changed took {:?}",
+            _t_apply.elapsed()
+        );
+        // --- end weezterm remote features ---
+
+        if let Some(webgpu) = self.backend.webgpu() {
+            // --- weezterm remote features ---
+            // Tell the surface whether we're in a live drag so it
+            // can decide whether to debounce its `surface.configure`
+            // (the slow DXGI ResizeBuffers call). During an active
+            // drag we keep the OS-stretched stale frame on screen
+            // and avoid blocking the UI thread.
+            webgpu.set_live_resize_active(live_resizing);
+            let _t_gpu = std::time::Instant::now();
+            // --- end weezterm remote features ---
+            webgpu.resize(dimensions);
+            // --- weezterm remote features ---
+            log::debug!("[resize] webgpu.resize took {:?}", _t_gpu.elapsed());
+            // --- end weezterm remote features ---
+        }
+        // --- weezterm remote features ---
+        // Phase 4 Mode C: keep the WARP swap chain in sync with the
+        // window client rect.
+        #[cfg(windows)]
+        if let Some(state) = self.backend.software_rdp() {
+            let _t_swrast = std::time::Instant::now();
+            let mut s = state.borrow_mut();
+            if let Err(err) = s.resize(
+                dimensions.pixel_width as u32,
+                dimensions.pixel_height as u32,
+            ) {
+                log::error!("[render] SoftwareRdp resize failed: {err:#}");
+            }
+            drop(s);
+            if let Some(cpu) = self.cpu_renderer.as_mut() {
+                cpu.invalidate_all();
+            }
+            log::debug!(
+                "[resize] software_rdp.resize took {:?}",
+                _t_swrast.elapsed()
+            );
+        }
+        // --- end weezterm remote features ---
         if let Some(modal) = self.get_modal() {
             modal.reconfigure(self);
         }
+        // --- weezterm remote features ---
+        let _t_emit = std::time::Instant::now();
+        // --- end weezterm remote features ---
         self.emit_window_event("window-resized", None);
-        log::debug!("resize event completed in {:?}", _t.elapsed());
+        // --- weezterm remote features ---
+        log::debug!("[resize] emit_window_event took {:?}", _t_emit.elapsed());
+        log::debug!("[resize] event completed in {:?}", _t.elapsed());
+        // --- end weezterm remote features ---
     }
 
     pub fn apply_pending_scale_changes(&mut self) {
@@ -309,7 +401,12 @@ impl super::TermWindow {
         };
 
         // --- weezterm remote features ---
-        log::debug!("apply_dimensions computed size {:?}, dims {:?}", size, dims);
+        log::debug!(
+            "[resize] apply_dimensions computed size={:?} dims={:?}",
+            size,
+            dims
+        );
+        let _t_compute = std::time::Instant::now();
         // --- end weezterm remote features ---
 
         self.terminal_size = size;
@@ -322,13 +419,21 @@ impl super::TermWindow {
             for tab in window.iter() {
                 // --- weezterm remote features ---
                 log::debug!(
-                    "apply_dimensions: resizing tab {} to {:?} (window has {} tabs)",
+                    "[resize] tab.resize tab={} size={:?} (window has {} tabs)",
                     tab.tab_id(),
                     size,
                     tab_count,
                 );
+                let _t_tab = std::time::Instant::now();
                 // --- end weezterm remote features ---
                 tab.resize(size);
+                // --- weezterm remote features ---
+                log::debug!(
+                    "[resize] tab.resize tab={} took {:?}",
+                    tab.tab_id(),
+                    _t_tab.elapsed()
+                );
+                // --- end weezterm remote features ---
             }
         // --- weezterm remote features ---
         } else {
@@ -338,9 +443,30 @@ impl super::TermWindow {
             );
             // --- end weezterm remote features ---
         };
+        // --- weezterm remote features ---
+        let _t_overlays = std::time::Instant::now();
+        // --- end weezterm remote features ---
         self.resize_overlays();
+        // --- weezterm remote features ---
+        log::debug!("[resize] resize_overlays took {:?}", _t_overlays.elapsed());
+        let _t_inv = std::time::Instant::now();
+        // --- end weezterm remote features ---
         self.invalidate_fancy_tab_bar();
+        // --- weezterm remote features ---
+        log::debug!(
+            "[resize] invalidate_fancy_tab_bar took {:?}",
+            _t_inv.elapsed()
+        );
+        let _t_title = std::time::Instant::now();
+        // --- end weezterm remote features ---
         self.update_title();
+        // --- weezterm remote features ---
+        log::debug!("[resize] update_title took {:?}", _t_title.elapsed());
+        log::debug!(
+            "[resize] apply_dimensions tail took {:?}",
+            _t_compute.elapsed()
+        );
+        // --- end weezterm remote features ---
 
         window.set_resize_increments(if self.config.use_resize_increments {
             ri_calc.into()

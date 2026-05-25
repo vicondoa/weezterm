@@ -16,6 +16,11 @@ pub mod os;
 pub mod screen;
 mod spawn;
 
+// --- weezterm remote features ---
+pub mod diagnostics;
+pub mod render_mode;
+// --- end weezterm remote features ---
+
 pub use raw_window_handle;
 
 #[cfg(target_os = "macos")]

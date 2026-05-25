@@ -8,16 +8,14 @@ working on this codebase.
 
 | Task | Command |
 |------|---------|
-| **Pre-commit (run before PR)** | **`make precommit`** |
-| **Cross-build (Windows + Linux)** | **`ci/build-cross.sh`** |
-| Build | `cargo build -p wezterm -p wezterm-gui -p wezterm-mux-server` |
-| Check (fast) | `cargo check` |
+| **Build & test (run before PR)** | **`ci/build-cross.sh`** (Git Bash) |
+| Format | `cargo +nightly fmt` |
+| Check (fast, single platform) | `cargo check` |
 | Check specific crate | `cargo check -p <crate>` |
 | Test all | `cargo nextest run` |
 | Test specific crate | `cargo nextest run -p <crate>` |
 | Test escape parser (no_std) | `cargo nextest run -p wezterm-escape-parser` |
 | **UX tests (Windows)** | **`cd tests/ux && pip install -r requirements.txt && python -m pytest -v -s`** |
-| Format | `cargo +nightly fmt` |
 | Lint | `cargo clippy` |
 
 ## Project Structure
@@ -113,38 +111,16 @@ When adding new PDU types to `codec/src/lib.rs`:
 
 ## Pre-commit Workflow
 
-**Always run `make precommit` before pushing or creating a PR.** This runs the same
-checks that CI will enforce:
+**Always run `ci/build-cross.sh` from Git Bash before pushing or creating a PR.**
+This is the single command that validates your changes. It builds Windows
+binaries natively and Linux binaries via WSL, runs tests, and assembles a
+ready-to-test package. It catches platform-specific issues that `cargo check`
+alone misses.
 
-1. `cargo +nightly fmt` — format all code (nightly required)
-2. `cargo check` — compile-check the full workspace
-3. `cargo nextest run` + escape-parser no_std tests
-
-On Windows, ensure Strawberry Perl is in your PATH for the OpenSSL build:
 ```bash
+# From Git Bash on Windows (ensure Strawberry Perl is in PATH):
 export PATH="/c/Strawberry/perl/bin:$HOME/.cargo/bin:$PATH"
-make precommit
-```
-
-If `make` is not available, run the steps manually:
-```bash
-cargo +nightly fmt
-cargo check
-cargo nextest run
-cargo nextest run -p wezterm-escape-parser
-```
-
-### Cross-Build Verification
-
-**Always run `ci/build-cross.sh` to verify both Windows and Linux builds succeed.**
-This script builds Windows binaries natively and Linux binaries via WSL, then
-assembles a ready-to-test package in `target/cross-pkg/`. This catches issues
-that `cargo check` alone misses (e.g., platform-specific compilation, rustc
-ICEs on Linux, and linker errors).
-
-```bash
-# From Git Bash on Windows:
-ci/build-cross.sh              # debug build
+ci/build-cross.sh              # debug build (faster)
 ci/build-cross.sh --release    # release build
 ```
 
@@ -154,6 +130,36 @@ target/cross-pkg/
 ├── windows/          Windows binaries (weezterm.exe, weezterm-gui.exe, …)
 └── linux-x86_64/     Linux binaries  (weezterm, weezterm-mux-server)
 ```
+
+### What CI checks (and you should too)
+
+The following checks run in CI on every PR to `main`. All must pass before merge.
+
+| CI Workflow | What it does | Local equivalent |
+|-------------|-------------|------------------|
+| **check-code-formatting** (`fmt.yml`) | `cargo +nightly fmt --all -- --check` | `cargo +nightly fmt` |
+| **weezterm-build / windows** (required gate) | Full build + `cargo nextest run` on Windows | `ci/build-cross.sh` (Windows part) |
+| **weezterm-build / macos** | Build ARM64 + x86_64, run tests | macOS only (CI covers this) |
+| **weezterm-build / linux** ×8 distros | Build + test in Docker containers | `ci/build-cross.sh` (Linux/WSL part) |
+| **Nix** (`nix.yml`) | `nix build ./nix` | Only if you changed `nix/**` |
+| **termwiz** (`termwiz.yml`) | `cargo build/test -p termwiz --all-features` | Only if you changed `termwiz/**` |
+| **wezterm-ssh** (`wezterm_ssh.yml`) | Build + test SSH crate | Only if you changed `wezterm-ssh/**` |
+| **CodeQL** | Security analysis (actions + rust) | N/A (CI only) |
+
+The **`windows`** job is the required status check for merge. The other jobs
+are informational but should also pass.
+
+### If `make` is available
+
+`make precommit` runs format + check + tests but does NOT cross-build for Linux:
+```bash
+cargo +nightly fmt
+cargo check
+cargo nextest run
+cargo nextest run -p wezterm-escape-parser
+```
+
+Prefer `ci/build-cross.sh` which covers both platforms.
 
 **Important**: The Linux/WSL build uses a separate Rust toolchain and can
 surface warnings/errors that don't appear on Windows (e.g., unused code

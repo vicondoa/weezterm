@@ -51,7 +51,7 @@ weezterm-windows-setup: build
 	-cp assets/windows/conhost/OpenConsole.exe $(ZIPDIR)/ 2>/dev/null
 	-cp assets/windows/angle/libEGL.dll $(ZIPDIR)/ 2>/dev/null
 	-cp assets/windows/angle/libGLESv2.dll $(ZIPDIR)/ 2>/dev/null
-	-mkdir -p $(ZIPDIR)/mesa && cp target/release/mesa/opengl32.dll $(ZIPDIR)/mesa/ 2>/dev/null
+	-cp target/release/opengl32.dll target/release/libgallium_wgl.dll $(ZIPDIR)/ 2>/dev/null
 	@echo "Created $(ZIPDIR)/ with WeezTerm binaries"
 	@echo "To create ZIP: 7z a -tzip $(ZIPDIR).zip $(ZIPDIR)"
 	@echo "To create installer: iscc.exe -DMyAppVersion=$(TAG_NAME) -F$(INSTNAME) ci/windows-installer.iss"

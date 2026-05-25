@@ -9,6 +9,90 @@ import pytest
 from helpers.app import WeezTermApp
 
 
+# --- weezterm remote features ---
+# Phase 0: capture the test environment (RDP / GPU / Windows build) into
+# tests/ux/test-results/env.txt at session start. This lets failure
+# triage attribute regressions to a specific environment without re-running
+# the test under a debugger.
+@pytest.fixture(scope="session", autouse=True)
+def _capture_test_env():
+    """Write rendering-environment metadata to test-results/env.txt."""
+    import datetime
+    from pathlib import Path
+
+    repo_root = Path(__file__).resolve().parent
+    out_dir = repo_root / "test-results"
+    out_dir.mkdir(exist_ok=True)
+
+    rdp = _detect_rdp_session()
+    gpus = _enumerate_gpus()
+    win_build = _windows_build_number()
+    ts = datetime.datetime.now().isoformat()
+
+    env_path = out_dir / "env.txt"
+    with open(env_path, "w", encoding="utf-8") as f:
+        f.write(f"rdp={'true' if rdp else 'false'}\n")
+        f.write(f"gpus={','.join(gpus)}\n")
+        f.write(f"win_build={win_build}\n")
+        f.write(f"ts={ts}\n")
+
+    yield
+
+
+def _detect_rdp_session() -> bool:
+    """Return True if running in an RDP session, via GetSystemMetrics(SM_REMOTESESSION)."""
+    if os.name != "nt":
+        return False
+    try:
+        import ctypes
+
+        SM_REMOTESESSION = 0x1000
+        return bool(ctypes.windll.user32.GetSystemMetrics(SM_REMOTESESSION))
+    except Exception:
+        return False
+
+
+def _enumerate_gpus() -> list:
+    """Return a list of GPU adapter names. Empty list on non-Windows or failure."""
+    if os.name != "nt":
+        return []
+    try:
+        import subprocess
+
+        out = subprocess.check_output(
+            [
+                "powershell",
+                "-NoProfile",
+                "-Command",
+                "(Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty Name) -join '|'",
+            ],
+            timeout=15,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        return [s.strip() for s in out.strip().split("|") if s.strip()]
+    except Exception:
+        return []
+
+
+def _windows_build_number() -> int:
+    """Return the Windows build number, or 0 on failure / non-Windows."""
+    if os.name != "nt":
+        return 0
+    try:
+        import winreg
+
+        with winreg.OpenKey(
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SOFTWARE\Microsoft\Windows NT\CurrentVersion",
+        ) as key:
+            value, _ = winreg.QueryValueEx(key, "CurrentBuildNumber")
+            return int(value)
+    except Exception:
+        return 0
+# --- end weezterm remote features ---
+
+
 # Global timeout for all tests (seconds)
 GLOBAL_TIMEOUT = 120
 
@@ -95,3 +179,80 @@ def ssh_mux_app(app):
 
     set_foreground(app.hwnd)
     yield app
+
+
+# --- weezterm remote features ---
+@pytest.fixture(scope="function")
+def ssh_mux_app_diagnostic(request):
+    """Provide a WeezTermApp connected to jvicondo-a7 via SSH for the
+    SSH/TUI diagnostic resize tests.
+
+    Differs from ``ssh_mux_app`` in two important ways:
+
+    1. stderr is redirected to a per-test log file
+       (``test-results/diagnostic/<nodeid>/stderr.log``) so the resize
+       event sequence can be inspected after the run.
+    2. ``WEZTERM_LOG`` is set to surface the resize/render debug logs
+       which are otherwise filtered out by the default INFO level.
+
+    The output directory is also exposed via ``app._diag_dir`` so
+    diagnostic tests can drop their FrameCapture frames into a sibling
+    folder.
+    """
+    import os
+    import time
+    from helpers.app import WeezTermApp
+    from helpers.window_ops import set_foreground, get_window_rect
+
+    safe_name = request.node.nodeid.replace("/", "_").replace("::", "__").replace(":", "_")
+    out_root = os.path.join(
+        os.path.dirname(__file__), "test-results", "diagnostic", safe_name
+    )
+    os.makedirs(out_root, exist_ok=True)
+
+    app = WeezTermApp(
+        stderr_log_path=os.path.join(out_root, "stderr.log"),
+        log_filter=(
+            "info,"
+            "weezterm_gui::termwindow::resize=debug,"
+            "weezterm_gui::termwindow::software_rdp=debug,"
+            "weezterm_gui::termwindow::webgpu=debug,"
+            "weezterm_gui::termwindow::render=debug,"
+            "weezterm_gui::termwindow=debug,"
+            "window::os::windows=debug,"
+            "wezterm_client=debug,"
+            "mux::tab=debug,"
+            "mux::localpane=debug,"
+            "mux=debug,"
+            "wezterm_ssh=debug"
+        ),
+    )
+    setattr(app, "_diag_dir", out_root)
+
+    try:
+        app.start_ssh_mux(
+            domain_name=SSH_MUX_DOMAIN,
+            remote_address=SSH_MUX_HOST,
+            timeout=60,
+        )
+        time.sleep(3.0)
+        for i in range(7):
+            time.sleep(1.0)
+            if not app.is_running:
+                stderr = app.last_stderr
+                pytest.skip(
+                    f"SSH mux connection to {SSH_MUX_DOMAIN} dropped at t+{3+i+1}s. "
+                    f"Stderr: {stderr[-300:] if stderr else '(empty)'}"
+                )
+
+        rect = get_window_rect(app.hwnd)
+        if rect.width == 0 or rect.height == 0:
+            pytest.skip(
+                "SSH mux diagnostic window has zero dimensions — connection likely dropped"
+            )
+
+        set_foreground(app.hwnd)
+        yield app
+    finally:
+        app.cleanup()
+# --- end weezterm remote features ---

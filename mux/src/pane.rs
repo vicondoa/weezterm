@@ -264,6 +264,11 @@ pub trait Pane: Downcast + Send + Sync {
 
     fn erase_scrollback(&self, _erase_mode: ScrollbackEraseMode) {}
 
+    /// Notify the pane that the terminal's effective color scheme may
+    /// have changed due to a config reload.  Panes with Mode 2031
+    /// enabled will send a CSI ? 997 report to the application.
+    fn notify_color_scheme_changed(&self) {}
+
     /// Called to advise on whether this tab has focus
     fn focus_changed(&self, _focused: bool) {}
 

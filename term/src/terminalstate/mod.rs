@@ -392,6 +392,13 @@ pub struct TerminalState {
     /// applied to lines.
     /// If none, then the default value specified by the config is used.
     bidi_hint: Option<ParagraphDirectionHint>,
+
+    /// Mode 2031: color scheme change reporting.
+    /// When enabled, sends CSI ? 997 ; {1|2} n on palette changes.
+    color_scheme_reporting: bool,
+    /// Tracks the last reported color scheme (1=dark, 2=light)
+    /// to avoid duplicate reports on non-transitions.
+    last_reported_color_scheme: Option<u8>,
 }
 
 #[derive(Debug)]
@@ -581,6 +588,8 @@ impl TerminalState {
             bidi_enabled: None,
             bidi_hint: None,
             progress: Progress::default(),
+            color_scheme_reporting: false,
+            last_reported_color_scheme: None,
         }
     }
 
@@ -929,6 +938,45 @@ impl TerminalState {
         if let Some(handler) = self.alert_handler.as_mut() {
             handler.alert(Alert::PaletteChanged);
         }
+        self.maybe_send_color_scheme_report();
+    }
+
+    /// Compute whether the current palette represents dark (1) or light (2) mode
+    /// using the relative luminance of the background color in linear sRGB space.
+    fn compute_color_scheme_mode(&self) -> u8 {
+        let palette = self.palette();
+        let linear = palette.background.to_linear();
+        if linear.relative_luminance() > 0.5 {
+            2 // light
+        } else {
+            1 // dark
+        }
+    }
+
+    /// Send a CSI ? 997 ; {mode} n report to the application.
+    fn send_color_scheme_report(&mut self, mode: u8) {
+        self.last_reported_color_scheme = Some(mode);
+        write!(self.writer, "\x1b[?997;{}n", mode).ok();
+        self.writer.flush().ok();
+    }
+
+    /// If mode 2031 is enabled and the effective color scheme has changed
+    /// since the last report, send an unsolicited DSR.
+    fn maybe_send_color_scheme_report(&mut self) {
+        if !self.color_scheme_reporting {
+            return;
+        }
+        let mode = self.compute_color_scheme_mode();
+        if self.last_reported_color_scheme != Some(mode) {
+            self.send_color_scheme_report(mode);
+        }
+    }
+
+    /// Called by the GUI layer when the config-driven palette changes.
+    /// Re-evaluates dark/light mode and sends a report if mode 2031 is
+    /// enabled and the classification changed.
+    pub fn notify_color_scheme_change(&mut self) {
+        self.maybe_send_color_scheme_report();
     }
 
     /// When dealing with selection, mark a range of lines as dirty
@@ -1283,6 +1331,8 @@ impl TerminalState {
 
                 self.g0_charset = CharSet::Ascii;
                 self.g1_charset = CharSet::Ascii;
+                self.color_scheme_reporting = false;
+                self.last_reported_color_scheme = None;
             }
             Device::RequestPrimaryDeviceAttributes => {
                 let mut ident = "\x1b[?65".to_string(); // Vt500
@@ -1377,6 +1427,15 @@ impl TerminalState {
 
                 write!(self.writer, "\x1b[{}", dev).ok();
                 self.writer.flush().ok();
+            }
+            Device::ColorSchemeQuery => {
+                // CSI ? 996 n — respond with current color scheme
+                // regardless of whether mode 2031 is enabled
+                let mode = self.compute_color_scheme_mode();
+                self.send_color_scheme_report(mode);
+            }
+            Device::ColorSchemeResponse(_) => {
+                // This is a response we emit, not something we handle
             }
         }
     }
@@ -1931,6 +1990,28 @@ impl TerminalState {
             | Mode::ResetDecPrivateMode(DecPrivateMode::Code(
                 DecPrivateModeCode::XTermAltSendsEscape,
             )) => {}
+
+            Mode::SetDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::ColorSchemeReporting,
+            )) => {
+                self.color_scheme_reporting = true;
+                // Send initial report so the application knows the
+                // current color scheme immediately after opting in,
+                // and also on reattach when mode was already enabled.
+                let mode = self.compute_color_scheme_mode();
+                self.send_color_scheme_report(mode);
+            }
+            Mode::ResetDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::ColorSchemeReporting,
+            )) => {
+                self.color_scheme_reporting = false;
+                self.last_reported_color_scheme = None;
+            }
+            Mode::QueryDecPrivateMode(DecPrivateMode::Code(
+                DecPrivateModeCode::ColorSchemeReporting,
+            )) => {
+                self.decqrm_response(mode, true, self.color_scheme_reporting);
+            }
 
             Mode::SetDecPrivateMode(DecPrivateMode::Unspecified(_))
             | Mode::ResetDecPrivateMode(DecPrivateMode::Unspecified(_))

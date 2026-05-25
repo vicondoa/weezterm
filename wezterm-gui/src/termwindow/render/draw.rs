@@ -20,32 +20,155 @@ impl crate::TermWindow {
     fn call_draw_webgpu(&mut self) -> anyhow::Result<()> {
         use crate::termwindow::webgpu::WebGpuTexture;
 
-        // --- weezterm remote features ---
-        // Compute clear color before borrowing webgpu/render_state
-        let window_is_transparent_webgpu =
-            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
-        let clear_color = if window_is_transparent_webgpu {
-            wgpu::Color {
-                r: 0.,
-                g: 0.,
-                b: 0.,
-                a: 0.,
-            }
-        } else {
-            let bg = self.palette().background.to_linear();
-            wgpu::Color {
-                r: bg.0 as f64,
-                g: bg.1 as f64,
-                b: bg.2 as f64,
-                a: 1.0,
-            }
-        };
-        // --- end weezterm remote features ---
-
-        let webgpu = self.webgpu.as_mut().unwrap();
+        let webgpu = self.backend.webgpu().unwrap().clone();
         let render_state = self.render_state.as_ref().unwrap();
 
-        let output = webgpu.surface.get_current_texture()?;
+        // --- weezterm remote features ---
+        // Phase 3: wait on the frame-latency waitable object before
+        // recording the next frame. This is the HAL counterpart to
+        // wgpu's internal wait inside `surface.get_current_texture()`
+        // — placing it here lets us discard a wrong-size frame (next
+        // block) cheaply if the GPU advanced between WM_PAINT and
+        // now. 100 ms timeout chosen to match wgpu-hal's own default
+        // wait timeout. WAIT_TIMEOUT (and WAIT_FAILED) are tolerated
+        // — we just proceed and let the subsequent
+        // `get_current_texture` either succeed or report Lost/Outdated
+        // for the outer error handler to deal with.
+        #[cfg(windows)]
+        if let Some(h) = webgpu.frame_latency_waitable {
+            unsafe {
+                winapi::um::synchapi::WaitForSingleObjectEx(h, 100, 0);
+            }
+        }
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
+        // Apply any deferred surface.configure that was coalesced
+        // from the resize event(s). On a virtual GPU this can take
+        // 100-800ms, but we now pay it at most once per paint
+        // instead of once per WM_SIZE during a live drag. By the
+        // time we get here, `apply_dimensions` has already updated
+        // the terminal grid for these dims, so the very next paint
+        // will be visually correct (no "snap to original size in
+        // big window" middle frame).
+        let _config_changed = webgpu.apply_pending_resize();
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
+        // While a background `surface.configure(...)` is in flight,
+        // the active swap chain is intentionally still at the OLD
+        // pixel size. `self.dimensions` and `self.terminal_size`
+        // have ALREADY been updated to the NEW size by
+        // `apply_dimensions`, so if we proceed to render now we will
+        // project NEW pixel coordinates into an OLD-size texture —
+        // quads beyond the OLD bounds get clipped, and DWM stretches
+        // the resulting fragment to fill the NEW client rect. The
+        // user sees a disorienting "stretched fragment of new
+        // content" for the entire duration of the bg configure
+        // (~3.7 s on WARP/RDP).
+        //
+        // Skip the rest of the draw entirely. The previous frame
+        // (rendered correctly at OLD pixel coords with OLD content
+        // into the OLD-size surface) stays on the swap chain. DWM
+        // stretches that coherent OLD frame to the NEW client rect,
+        // which looks like a clean zoom — the same UX users had
+        // with the old synchronous-configure path. The bg thread
+        // itself calls `InvalidateRect` when it finishes (see
+        // `webgpu.rs::apply_pending_resize`), so the GUI thread
+        // reliably wakes up to drain the channel and swap the new
+        // surface in.
+        if webgpu.has_pending_configure() {
+            log::debug!(
+                "[render] skipping paint while async configure in flight \
+                 (cfg={}x{} self.dims={}x{})",
+                webgpu.config.borrow().width,
+                webgpu.config.borrow().height,
+                self.dimensions.pixel_width,
+                self.dimensions.pixel_height,
+            );
+            return Ok(());
+        }
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
+        // Phase 5: wrong-size-frame discard (Ghostty pattern). If the
+        // surface's configured dimensions don't match the live client
+        // rect, drop this frame and schedule a repaint so the next
+        // iteration renders at the new size. Eliminates the "smear
+        // during fast drag" artifact that occurs when WM_SIZE arrives
+        // mid-frame.
+        //
+        // We only get here when no `pending_configure` is in flight
+        // (the early return above handles that case), so a mismatch
+        // here means an out-of-band rect change (e.g., DWM-induced
+        // EXITSIZEMOVE adjustment) that didn't go through our resize
+        // event path. InvalidateRect kicks `apply_pending_resize` to
+        // start a fresh bg configure on the next paint.
+        #[cfg(windows)]
+        {
+            use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+            if let Ok(wh) = webgpu.handle.window_handle() {
+                if let RawWindowHandle::Win32(h) = wh.as_raw() {
+                    let hwnd = h.hwnd.get() as winapi::shared::windef::HWND;
+                    let (cw, ch) = ::window::os::windows::current_client_size(hwnd);
+                    let cfg = webgpu.config.borrow();
+                    if cw > 0 && ch > 0 && (cw != cfg.width || ch != cfg.height) {
+                        log::debug!(
+                            "[render] dropping wrong-size frame (webgpu): \
+                             surface={}x{}, client={}x{}, self.dims={}x{}",
+                            cfg.width,
+                            cfg.height,
+                            cw,
+                            ch,
+                            self.dimensions.pixel_width,
+                            self.dimensions.pixel_height,
+                        );
+                        drop(cfg);
+                        unsafe {
+                            winapi::um::winuser::InvalidateRect(hwnd, std::ptr::null(), 0);
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+        }
+        // --- end weezterm remote features ---
+
+        // --- weezterm remote features ---
+        let cfg_w;
+        let cfg_h;
+        {
+            let cfg = webgpu.config.borrow();
+            cfg_w = cfg.width;
+            cfg_h = cfg.height;
+        }
+        // --- end weezterm remote features ---
+        let surface_borrow = webgpu.surface.borrow();
+        let surface_ref = match surface_borrow.as_ref() {
+            Some(s) => s,
+            None => {
+                // No active surface — bg configure must be in
+                // flight (or just failed). Skip this frame; the
+                // bg thread's InvalidateRect (or the next
+                // resize/timer tick) will trigger another paint.
+                log::debug!("[render] no surface (bg configure in flight); skipping frame");
+                return Ok(());
+            }
+        };
+        let output = surface_ref.get_current_texture()?;
+        drop(surface_borrow);
+        // --- weezterm remote features ---
+        log::debug!(
+            "[render] call_draw_webgpu cfg={}x{} self.dims={}x{} got_texture={}x{} suboptimal={}",
+            cfg_w,
+            cfg_h,
+            self.dimensions.pixel_width,
+            self.dimensions.pixel_height,
+            output.texture.width(),
+            output.texture.height(),
+            output.suboptimal,
+        );
+        // --- end weezterm remote features ---
         let view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -121,14 +244,18 @@ impl crate::TermWindow {
                         label: Some("Render Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                             view: &view,
+                            depth_slice: None,
                             resolve_target: None,
                             ops: wgpu::Operations {
                                 load: if cleared {
                                     wgpu::LoadOp::Load
                                 } else {
-                                    // --- weezterm remote features ---
-                                    wgpu::LoadOp::Clear(clear_color)
-                                    // --- end weezterm remote features ---
+                                    wgpu::LoadOp::Clear(wgpu::Color {
+                                        r: 0.,
+                                        g: 0.,
+                                        b: 0.,
+                                        a: 0.,
+                                    })
                                 },
                                 store: wgpu::StoreOp::Store,
                             },
@@ -136,6 +263,7 @@ impl crate::TermWindow {
                         depth_stencil_attachment: None,
                         occlusion_query_set: None,
                         timestamp_writes: None,
+                        multiview_mask: None,
                     });
                     cleared = true;
 
@@ -163,7 +291,27 @@ impl crate::TermWindow {
 
         // submit will accept anything that implements IntoIter
         webgpu.queue.submit(std::iter::once(encoder.finish()));
+        // --- weezterm remote features ---
+        let cfg_w_log;
+        let cfg_h_log;
+        {
+            let cfg = webgpu.config.borrow();
+            cfg_w_log = cfg.width;
+            cfg_h_log = cfg.height;
+        }
+        log::debug!(
+            "[render] presenting frame tex={}x{} cfg={}x{} cleared={}",
+            output.texture.width(),
+            output.texture.height(),
+            cfg_w_log,
+            cfg_h_log,
+            cleared
+        );
+        // --- end weezterm remote features ---
         output.present();
+        // --- weezterm remote features ---
+        log::debug!("[render] present returned");
+        // --- end weezterm remote features ---
 
         Ok(())
     }
@@ -171,24 +319,34 @@ impl crate::TermWindow {
     fn call_draw_glium(&mut self, frame: &mut glium::Frame) -> anyhow::Result<()> {
         use window::glium::texture::SrgbTexture2d;
 
-        // --- weezterm remote features ---
-        // Use the theme's background color as the clear color instead of
-        // transparent black, so the first frame (and every frame) starts with
-        // the correct background. This prevents the transparent-window-with-
-        // black-box artifact on startup.
-        let window_is_transparent_glium =
-            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
-        if window_is_transparent_glium {
-            frame.clear_color(0., 0., 0., 0.);
-        } else {
-            let bg = self.palette().background.to_linear();
-            frame.clear_color(bg.0, bg.1, bg.2, 1.0);
-        }
-        // --- end weezterm remote features ---
-
         let gl_state = self.render_state.as_ref().unwrap();
         let tex = gl_state.glyph_cache.borrow().atlas.texture();
         let tex = tex.downcast_ref::<SrgbTexture2d>().unwrap();
+
+        // --- weezterm remote features ---
+        // The OpenGL pixel format requests 8 alpha bits and the window
+        // calls `DwmEnableBlurBehindWindow`, which together cause DWM
+        // to honour the framebuffer alpha channel for compositing.
+        // If we cleared with alpha=0, every pixel not subsequently
+        // written by a draw call (e.g. window-resize that races the
+        // terminal-size update, or the brief one-frame window between
+        // `assign_overlay` and the overlay's bg thread writing its
+        // first prompt) would be transparent — exposing the desktop or
+        // any window behind us. On the wgpu / DXGI HWND-swapchain path
+        // this never showed up because HWND swapchains are forced opaque
+        // by DXGI; on the OpenGL+Mesa path (now the default on RDP) it
+        // is very visible.
+        //
+        // Use alpha=1.0 when the user wants an opaque window so the
+        // cleared framebuffer is opaque-black even where the renderer
+        // doesn't paint over it. Translucent users (window_background_
+        // opacity < 1.0 or a window_background_image) keep alpha=0 so
+        // their compositing behaves as before.
+        let window_is_transparent =
+            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
+        let clear_alpha = if window_is_transparent { 0. } else { 1. };
+        frame.clear_color(0., 0., 0., clear_alpha);
+        // --- end weezterm remote features ---
 
         let projection = euclid::Transform3D::<f32, f32, f32>::ortho(
             -(self.dimensions.pixel_width as f32) / 2.0,

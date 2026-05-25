@@ -165,16 +165,23 @@ def draw_screen(stdscr):
 def main(stdscr):
     global resize_count
 
+    # --- weezterm remote features ---
+    # Diagnostic log: write SIGWINCH events and observed sizes to a file
+    # so we can verify whether the remote side actually receives resize.
+    import os as _os
+    _diag_log = open("/tmp/tui_resize_diag.log", "a", buffering=1)
+    _diag_log.write(f"\n=== TUI started pid={_os.getpid()} initial_size={stdscr.getmaxyx()} ===\n")
+    # --- end weezterm remote features ---
+
     curses.curs_set(0)  # hide cursor
     stdscr.timeout(100)  # 100ms timeout for getch
 
-    def on_resize(signum, frame):
-        global resize_count
-        resize_count += 1
-        curses.endwin()
-        stdscr.refresh()
-
-    signal.signal(signal.SIGWINCH, on_resize)
+    # --- weezterm remote features ---
+    # NOTE: Do NOT install a Python signal.signal(SIGWINCH, ...) handler.
+    # ncurses installs its own SIGWINCH handler at initscr() time which
+    # updates LINES/COLS and posts KEY_RESIZE. A Python-level handler
+    # overrides that, breaking curses' internal size tracking.
+    # --- end weezterm remote features ---
 
     once = "--once" in sys.argv
 
@@ -185,16 +192,37 @@ def main(stdscr):
         return
 
     last_size = None
+    # --- weezterm remote features ---
+    last_loglog = time.time()
+    # --- end weezterm remote features ---
     while True:
         try:
             key = stdscr.getch()
             if key == ord("q") or key == 3:  # q or Ctrl+C
                 break
             if key == curses.KEY_RESIZE or key == -1:
+                # --- weezterm remote features ---
+                if key == curses.KEY_RESIZE:
+                    resize_count += 1
+                    try:
+                        _diag_log.write(f"KEY_RESIZE #{resize_count} size={stdscr.getmaxyx()}\n")
+                    except Exception:
+                        pass
+                # --- end weezterm remote features ---
                 current_size = stdscr.getmaxyx()
                 if current_size != last_size:
+                    # --- weezterm remote features ---
+                    _diag_log.write(f"main_loop size_changed {last_size} -> {current_size}\n")
+                    # --- end weezterm remote features ---
                     last_size = current_size
                     draw_screen(stdscr)
+                # --- weezterm remote features ---
+                else:
+                    now = time.time()
+                    if now - last_loglog > 1.0:
+                        _diag_log.write(f"main_loop heartbeat size={current_size} count={resize_count}\n")
+                        last_loglog = now
+                # --- end weezterm remote features ---
         except KeyboardInterrupt:
             break
 

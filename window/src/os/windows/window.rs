@@ -382,6 +382,14 @@ impl WindowInner {
         if !same {
             self.set_ime_window_position(Rect::default());
 
+            // --- weezterm remote features ---
+            log::debug!(
+                "[wm] dispatch WindowEvent::Resized hwnd={:p} dims={:?} live_resizing={}",
+                self.hwnd.0,
+                current_dims,
+                self.in_size_move,
+            );
+            // --- end weezterm remote features ---
             self.events.dispatch(WindowEvent::Resized {
                 dimensions: current_dims,
                 window_state: get_window_state(self.hwnd.0),
@@ -1584,6 +1592,45 @@ fn get_window_state(hwnd: HWND) -> WindowState {
 /// to tell DWM that we set proper alpha channel info as
 /// a result of rendering our window content.
 fn enable_blur_behind(hwnd: HWND) {
+    // --- weezterm remote features ---
+    // Mode A (DComp) owns the redirection surface via a DXGI
+    // `VisualFromWndHandle` swapchain target. `DwmEnableBlurBehindWindow`
+    // is the Vista-era "Aero blur" hack used in Mode B to opt the
+    // legacy GDI compositor into honouring our alpha channel; with
+    // DComp it is at best redundant and at worst interferes with the
+    // composition tree. Skip entirely on Mode A.
+    if crate::render_mode::is_dcomp() {
+        return;
+    }
+
+    // On the OpenGL+Mesa-llvmpipe path used in RDP sessions, the WGL
+    // pixel format always has 8 alpha bits (Mesa does not honour
+    // ChoosePixelFormatARB requests for 0 alpha bits), and any
+    // framebuffer pixel that the layer renderer fails to fully cover
+    // with opaque content (e.g. dual-source-blend glyph cells with
+    // sub-pixel alpha < 1, transparent edges of antialiased glyphs,
+    // brief one-frame races between window resize and terminal-size
+    // updates, or empty overlay panes that have not yet been written
+    // to by their bg thread) ends up < 1.0 alpha. With blur-behind
+    // enabled, DWM treats those pixels as semi-transparent and
+    // composites the desktop / windows behind them through, producing
+    // the visible "ghost text from another app" flash users reported
+    // when opening the kill-window confirmation overlay. Skip the
+    // blur-behind call on the swrast path so DWM ignores the alpha
+    // channel entirely and the window is treated as opaque.
+    //
+    // This intentionally disables `window_background_opacity < 1.0`
+    // for OpenGL+Mesa+RDP users; transparent windows on RDP+software
+    // rendering are an extreme corner case and previously did not work
+    // correctly anyway (full-frame readback every paint).
+    if crate::configuration::prefer_swrast() {
+        log::debug!(
+            "skipping DwmEnableBlurBehindWindow (prefer_swrast=true; \
+             OpenGL+Mesa-llvmpipe path needs DWM to ignore framebuffer alpha)"
+        );
+        return;
+    }
+    // --- end weezterm remote features ---
     use winapi::shared::minwindef::*;
     use winapi::um::dwmapi::*;
     use winapi::um::wingdi::*;
@@ -1731,7 +1778,20 @@ fn apply_theme(hwnd: HWND) -> Option<LRESULT> {
                     &pv_attribute as *const _ as _,
                     std::mem::size_of_val(&pv_attribute) as u32,
                 );
-            } else {
+            // --- weezterm remote features ---
+            // Mode A (DComp) is incompatible with the legacy
+            // `SetWindowCompositionAttribute(0x13)` accent policy and
+            // `DWMWA_MICA_EFFECT` paths below: both write to the HWND
+            // redirection surface, which DComp owns and replaces.
+            // Skip them on Mode A entirely. On the DComp target,
+            // Mica/Acrylic that *does* land via the modern
+            // `DWMWA_SYSTEMBACKDROP_TYPE` branch above is fully
+            // compatible. Users on Win10 19041-19045 (Mode A
+            // capable, but no `DWMWA_SYSTEMBACKDROP_TYPE`) get no
+            // Mica/Acrylic backdrop — the safe default for a
+            // composition-aware surface.
+            } else if !crate::render_mode::is_dcomp() {
+                // --- end weezterm remote features ---
                 let mut colour = inner.config.win32_acrylic_accent_color.to_srgb_u8();
                 colour.3 = if colour.3 == 0 { 1 } else { colour.3 }; // acrylic doesn't like to have 0 alpha
 
@@ -1800,15 +1860,90 @@ unsafe fn wm_enter_exit_size_move(
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
     let mut should_size = false;
+    // --- weezterm remote features ---
+    // On WM_EXITSIZEMOVE the OS often does NOT send a final WM_SIZE
+    // (the last drag step's WM_SIZE already matched the current
+    // size). We must still notify the renderer that the live drag
+    // is over so it can apply its deferred surface.configure for
+    // the final dims. Force a resize dispatch with live_resizing=false.
+    let mut force_dispatch_exit_size_move = false;
+    // --- end weezterm remote features ---
     if let Some(inner) = rc_from_hwnd(hwnd) {
         let mut inner = inner.borrow_mut();
+        // --- weezterm remote features ---
+        let was_in_size_move = inner.in_size_move;
+        // --- end weezterm remote features ---
         inner.in_size_move = msg == WM_ENTERSIZEMOVE;
         should_size = !inner.in_size_move;
+        // --- weezterm remote features ---
+        if was_in_size_move && !inner.in_size_move {
+            force_dispatch_exit_size_move = true;
+        }
+        log::debug!(
+            "[wm] {} hwnd={:p} in_size_move={}",
+            if msg == WM_ENTERSIZEMOVE {
+                "WM_ENTERSIZEMOVE"
+            } else {
+                "WM_EXITSIZEMOVE"
+            },
+            hwnd,
+            inner.in_size_move,
+        );
+        // --- end weezterm remote features ---
     }
 
     if should_size {
-        wm_size(hwnd, 0, 0, 0)?;
+        // Note: wm_size's normal return is `None` (let DefWindowProc
+        // handle WM_SIZE). The `?` operator would early-return,
+        // skipping our force-dispatch logic below. Discard the
+        // return so we always reach the EXITSIZEMOVE handler.
+        let _ = wm_size(hwnd, 0, 0, 0);
     }
+
+    // --- weezterm remote features ---
+    // After wm_size has run (which may or may not have fired a
+    // Resized event), force a final Resized dispatch with
+    // live_resizing=false so the renderer drops its debounce and
+    // performs the final surface.configure.
+    if force_dispatch_exit_size_move {
+        if let Some(inner) = rc_from_hwnd(hwnd) {
+            let mut inner = inner.borrow_mut();
+            let mut rect = RECT {
+                left: 0,
+                bottom: 0,
+                right: 0,
+                top: 0,
+            };
+            GetClientRect(hwnd, &mut rect);
+            let dims = Dimensions {
+                pixel_width: rect_width(&rect) as usize,
+                pixel_height: rect_height(&rect) as usize,
+                dpi: inner.get_effective_dpi(),
+            };
+            log::debug!(
+                "[wm] WM_EXITSIZEMOVE force-dispatch Resized hwnd={:p} dims={:?}",
+                hwnd,
+                dims,
+            );
+            inner.events.dispatch(WindowEvent::Resized {
+                dimensions: dims,
+                window_state: get_window_state(hwnd),
+                live_resizing: false,
+            });
+            // Drop the borrow before InvalidateRect below — the OS may
+            // re-enter our wndproc synchronously when handling
+            // WM_PAINT.
+            drop(inner);
+            // Force a fresh paint at the new dims. Without this, the
+            // renderer might not re-paint at all if the prior frames
+            // were all the same content (DWM keeps showing a
+            // stretched stale image). NULL rect + erase=FALSE
+            // invalidates the whole client area without erasing the
+            // background (we paint everything ourselves).
+            InvalidateRect(hwnd, std::ptr::null(), 0);
+        }
+    }
+    // --- end weezterm remote features ---
 
     Some(0)
 }
@@ -1823,6 +1958,9 @@ unsafe fn wm_windowposchanged(
     _lparam: LPARAM,
 ) -> Option<LRESULT> {
     // let pos = &*(lparam as *const WINDOWPOS);
+    // --- weezterm remote features ---
+    log::debug!("[wm] WM_WINDOWPOSCHANGED hwnd={:p} -> wm_size", hwnd);
+    // --- end weezterm remote features ---
     wm_size(hwnd, 0, 0, 0)?;
     Some(0)
 }
@@ -1833,6 +1971,25 @@ unsafe fn wm_size(hwnd: HWND, _msg: UINT, _wparam: WPARAM, _lparam: LPARAM) -> O
 
     if let Some(inner) = rc_from_hwnd(hwnd) {
         let mut inner = inner.borrow_mut();
+        // --- weezterm remote features ---
+        if log::log_enabled!(log::Level::Debug) {
+            let mut rect_dbg = RECT {
+                left: 0,
+                bottom: 0,
+                right: 0,
+                top: 0,
+            };
+            GetClientRect(hwnd, &mut rect_dbg);
+            log::debug!(
+                "[wm] WM_SIZE hwnd={:p} client={}x{} in_size_move={} last_size={:?}",
+                hwnd,
+                rect_width(&rect_dbg),
+                rect_height(&rect_dbg),
+                inner.in_size_move,
+                inner.last_size,
+            );
+        }
+        // --- end weezterm remote features ---
         should_paint = inner.check_and_call_resize_if_needed();
         should_pump = inner.in_size_move;
     }
@@ -3252,8 +3409,17 @@ unsafe fn do_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam: LPARAM) -> 
             let mut rc: RECT = std::mem::zeroed();
             GetClientRect(hwnd, &mut rc);
             let brush = if let Some(inner) = rc_from_hwnd(hwnd) {
-                let inner = inner.borrow();
-                inner.bg_brush
+                // Use try_borrow() to avoid panic when WM_ERASEBKGND
+                // is sent reentrantly from BeginPaint while wm_paint
+                // already holds a mutable borrow on the same RefCell.
+                match inner.try_borrow() {
+                    Ok(inner) => inner.bg_brush,
+                    Err(_) => {
+                        winapi::um::wingdi::GetStockObject(
+                            winapi::um::wingdi::BLACK_BRUSH as i32,
+                        ) as _
+                    }
+                }
             } else {
                 winapi::um::wingdi::GetStockObject(
                     winapi::um::wingdi::BLACK_BRUSH as i32,

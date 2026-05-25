@@ -55,8 +55,15 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "..\target\release\weezterm.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\weezterm-gui.exe"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\weezterm-mux-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+; Mesa opengl32.dll AND its gallium megadriver (libgallium_wgl.dll)
+; must sit next to weezterm-gui.exe so the SxS manifest
+; <file name="opengl32.dll"/> redirection picks them up in
+; preference to the System32 KnownDLLs entry. Both files are
+; required: since Mesa 21.3.0 the megadriver was split out of
+; opengl32.dll.
+Source: "..\target\release\opengl32.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\target\release\libgallium_wgl.dll"; DestDir: "{app}"; Flags: ignoreversion
 ; --- end weezterm remote features ---
-Source: "..\target\release\mesa\opengl32.dll"; DestDir: "{app}\mesa"; Flags: ignoreversion
 Source: "..\target\release\libEGL.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\libGLESv2.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "..\target\release\conpty.dll"; DestDir: "{app}"; Flags: ignoreversion

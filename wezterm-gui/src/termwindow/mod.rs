@@ -26,6 +26,9 @@ use crate::termwindow::render::{
     LineToElementShapeItem,
 };
 use crate::termwindow::webgpu::WebGpuState;
+// --- weezterm remote features ---
+use crate::termwindow::backend::RenderBackend;
+// --- end weezterm remote features ---
 use ::wezterm_term::input::{ClickPosition, MouseButton as TMB};
 use ::window::*;
 use anyhow::{anyhow, ensure, Context};
@@ -83,6 +86,13 @@ pub mod resize;
 mod selection;
 pub mod spawn;
 pub mod webgpu;
+// --- weezterm remote features ---
+pub mod backend;
+#[cfg(windows)]
+pub mod software_rdp;
+#[cfg(windows)]
+pub mod software_rdp_render;
+// --- end weezterm remote features ---
 use crate::spawn::SpawnWhere;
 use prevcursor::PrevCursorPos;
 
@@ -463,7 +473,16 @@ pub struct TermWindow {
     connection_name: String,
 
     gl: Option<Rc<glium::backend::Context>>,
-    webgpu: Option<Rc<WebGpuState>>,
+    // --- weezterm remote features ---
+    /// Rendering backend (replaces the previous `webgpu: Option<Rc<WebGpuState>>`
+    /// field). See `crate::termwindow::backend::RenderBackend` and
+    /// `docs/windows-rendering-design.md` Phase 4.
+    backend: RenderBackend,
+    /// Mode C CPU rasteriser. Allocated alongside `backend ==
+    /// RenderBackend::SoftwareRdp(_)`; `None` for all other backends.
+    #[cfg(windows)]
+    cpu_renderer: Option<software_rdp_render::CpuRenderer>,
+    // --- end weezterm remote features ---
     config_subscription: Option<config::ConfigSubscription>,
 
     // --- weezterm remote features ---
@@ -473,6 +492,16 @@ pub struct TermWindow {
     /// so we can distinguish it from user-set overrides and restore
     /// the user's value when leaving the monitor.
     monitor_injected_color_scheme: Option<String>,
+    /// p6 (Option 6A) — dedicated cursor-blink thread. Posts an
+    /// `InvalidateRect` on the configured `cursor_blink_rate` cadence,
+    /// independent of the WindowProc message loop / smol executor that
+    /// can otherwise be starved by sustained paint load. Lives as long as
+    /// the `TermWindow`; cleaned up via Drop on the inner type. `None`
+    /// when the window has no Win32 handle, when blink is disabled, or
+    /// when the spawn failed (we log + degrade gracefully). See
+    /// `crate::cursor_blink_thread` and `docs/windows-rendering-design.md`
+    /// §6 Phase 6.
+    cursor_blink_thread: Option<crate::cursor_blink_thread::CursorBlinkThread>,
     // --- end weezterm remote features ---
 }
 
@@ -699,10 +728,15 @@ impl TermWindow {
             // --- weezterm remote features ---
             current_screen_name: None,
             monitor_injected_color_scheme: None,
+            cursor_blink_thread: None,
             // --- end weezterm remote features ---
             os_parameters: None,
             gl: None,
-            webgpu: None,
+            // --- weezterm remote features ---
+            backend: RenderBackend::None,
+            #[cfg(windows)]
+            cpu_renderer: None,
+            // --- end weezterm remote features ---
             window: None,
             window_background,
             config: config.clone(),
@@ -826,37 +860,71 @@ impl TermWindow {
             origin = position.origin;
         // --- weezterm remote features ---
         } else {
-            // No CLI position specified; try loading saved window state
+            // No CLI position specified; delegate to the persistence module.
+            // All coord-space conversion / monitor fallback / DPI rescale /
+            // off-screen validation lives there. See window_state_persistence.
+            use crate::window_state_persistence::{self as persist, RestoreResult};
+            use ::window::ConnectionOps;
+
             let workspace = mux
                 .get_window(mux_window_id)
                 .map(|w| w.get_workspace().to_string())
                 .unwrap_or_else(|| mux.active_workspace());
-            if let Some(saved) = crate::window_state_persistence::load_window_state(&workspace) {
-                // Use the saved monitor name to place window on the right monitor.
-                // Coordinates are relative to the monitor origin.
-                if let Some(ref monitor) = saved.monitor {
+            let screens = ::window::Connection::get().and_then(|conn| conn.screens().ok());
+            let (monitors, primary_name) = persist::collect_monitors(screens.as_ref());
+            let saved = persist::load_for_workspace(&workspace);
+
+            match persist::restore_window(saved.as_ref(), &monitors, primary_name.as_deref()) {
+                RestoreResult::Restored {
+                    monitor,
+                    coords,
+                    width,
+                    height,
+                    maximized,
+                    fullscreen,
+                } => {
                     log::info!(
-                        "Restoring window to monitor {:?} (workspace {:?})",
-                        monitor,
+                        "Restoring window for workspace '{}' to monitor '{}' at \
+                         workspace-relative ({},{}) {}x{}",
                         workspace,
+                        monitor.name,
+                        coords.x,
+                        coords.y,
+                        width,
+                        height,
                     );
-                    origin = GeometryOrigin::Named(monitor.clone());
-                    if saved.x != 0 || saved.y != 0 {
-                        x.replace(Dimension::Pixels(saved.x as f32));
-                        y.replace(Dimension::Pixels(saved.y as f32));
-                    }
-                    // else leave x/y as None so OS centers on the monitor
-                } else {
-                    origin = GeometryOrigin::ScreenCoordinateSystem;
-                    x.replace(Dimension::Pixels(saved.x as f32));
-                    y.replace(Dimension::Pixels(saved.y as f32));
+                    origin = GeometryOrigin::Named(monitor.name);
+                    x.replace(Dimension::Pixels(coords.x as f32));
+                    y.replace(Dimension::Pixels(coords.y as f32));
+                    dimensions.pixel_width = width as usize;
+                    dimensions.pixel_height = height as usize;
+                    saved_maximized = maximized;
+                    saved_fullscreen = fullscreen;
                 }
-                // Override dimensions from saved state (unless maximized — use
-                // saved normal size so maximize can expand from it)
-                dimensions.pixel_width = saved.width;
-                dimensions.pixel_height = saved.height;
-                saved_maximized = saved.maximized;
-                saved_fullscreen = saved.fullscreen;
+                RestoreResult::CenteredOnMonitor {
+                    monitor,
+                    width,
+                    height,
+                    maximized,
+                    fullscreen,
+                } => {
+                    log::info!(
+                        "Restoring window for workspace '{}' centered on monitor '{}' at {}x{}",
+                        workspace,
+                        monitor.name,
+                        width,
+                        height,
+                    );
+                    origin = GeometryOrigin::Named(monitor.name);
+                    // Leave x/y as None so the system centers.
+                    dimensions.pixel_width = width as usize;
+                    dimensions.pixel_height = height as usize;
+                    saved_maximized = maximized;
+                    saved_fullscreen = fullscreen;
+                }
+                RestoreResult::SkippedStaleSchema | RestoreResult::NoState => {
+                    // Fall through to default geometry (config-driven).
+                }
             }
             // --- end weezterm remote features ---
         }
@@ -898,17 +966,116 @@ impl TermWindow {
             }
         });
 
-        let gl = match config.front_end {
+        // --- weezterm remote features ---
+        // Phase 4: WEEZTERM_RENDER_MODE always wins. When set, it
+        // forces the render-mode selection regardless of
+        // `config.front_end`. We treat that case as if the user picked
+        // `Auto` so the regular Auto routing below resolves it.
+        let env_override_active = ::window::diagnostics::render_mode_override().is_some();
+        // RDP/virtual-GPU short-circuit (2026-05): wgpu/WARP's
+        // `CreateSwapChainForHwnd` and `ResizeBuffers` both block for
+        // 3.6 s+ on a virtual GPU, leaving the user staring at a
+        // DWM-stretched OLD frame for the entire resize. The Mesa
+        // llvmpipe (`opengl32.dll` shipped in `assets/windows/mesa/`)
+        // path through glium has no DXGI swap chain at all and
+        // resizes in milliseconds even under RDP. When the user has
+        // not explicitly picked a backend (i.e. they are on the
+        // default `Auto`) and we detect an RDP session or only
+        // virtual GPUs, override `Auto` → `OpenGL` so the
+        // `_ => enable_opengl()` arm below loads Mesa via
+        // `prefer_swrast()` (see `window/src/configuration.rs`).
+        // Explicit `WebGpu`, `WebGpuHwnd`, or `WEEZTERM_RENDER_MODE`
+        // still take precedence so power users can opt back in.
+        let force_swrast_for_rdp = !env_override_active
+            && config.front_end == FrontEndSelection::Auto
+            && ({
+                #[cfg(windows)]
+                {
+                    ::window::os::windows::is_running_in_rdp_session()
+                        || ::window::os::windows::only_virtual_gpus_available()
+                }
+                #[cfg(not(windows))]
+                {
+                    false
+                }
+            });
+        #[allow(deprecated)]
+        let effective_front_end = if env_override_active {
+            FrontEndSelection::Auto
+        } else if force_swrast_for_rdp {
+            log::info!(
+                "[render] RDP/virtual-GPU detected with front_end=Auto; \
+                 routing to OpenGL+Mesa to avoid wgpu/WARP swap-chain \
+                 latency on resize"
+            );
+            FrontEndSelection::OpenGL
+        } else {
+            config.front_end
+        };
+        // --- end weezterm remote features ---
+
+        let gl = match effective_front_end {
             FrontEndSelection::WebGpu => None,
+            // --- weezterm remote features ---
+            FrontEndSelection::WebGpuHwnd => None,
+            FrontEndSelection::Auto => match ::window::render_mode::resolve() {
+                ::window::render_mode::RenderMode::WgpuDComp
+                | ::window::render_mode::RenderMode::WgpuClassic => None,
+                // Phase 4: SoftwareRdp now constructs a WARP swap chain
+                // below instead of falling back to OpenGL. We leave gl
+                // None here so the SoftwareRdp init block runs.
+                ::window::render_mode::RenderMode::SoftwareRdp => None,
+            },
+            // --- end weezterm remote features ---
             _ => Some(window.enable_opengl().await?),
         };
 
         {
             let mut myself = tw.borrow_mut();
-            let webgpu = match config.front_end {
+            let webgpu = match effective_front_end {
                 FrontEndSelection::WebGpu => Some(Rc::new(
-                    WebGpuState::new(&window, dimensions, &config).await?,
+                    // --- weezterm remote features ---
+                    // Explicit `WebGpu` choice means "use wgpu; pick the
+                    // best flavour for this environment". On Win10+ with
+                    // a real GPU we land on Mode A (DComp). In RDP or on
+                    // WARP-only machines DComp swapchain creation fails
+                    // (DXGI_ERROR_INVALID_CALL), so fall back to Mode B
+                    // (Classic HWND swapchain) which works there.
+                    // Explicit Mode A is still selectable via
+                    // `WEEZTERM_RENDER_MODE=wgpu_dcomp` or
+                    // `front_end = "WebGpuHwnd"` for the opposite.
+                    WebGpuState::new(
+                        &window,
+                        dimensions,
+                        &config,
+                        match ::window::render_mode::RenderMode::auto_select() {
+                            ::window::render_mode::RenderMode::WgpuDComp => {
+                                ::window::render_mode::RenderMode::WgpuDComp
+                            }
+                            _ => ::window::render_mode::RenderMode::WgpuClassic,
+                        },
+                    )
+                    .await?,
+                    // --- end weezterm remote features ---
                 )),
+                // --- weezterm remote features ---
+                FrontEndSelection::WebGpuHwnd => Some(Rc::new(
+                    WebGpuState::new(
+                        &window,
+                        dimensions,
+                        &config,
+                        ::window::render_mode::RenderMode::WgpuClassic,
+                    )
+                    .await?,
+                )),
+                FrontEndSelection::Auto => match ::window::render_mode::resolve() {
+                    mode @ (::window::render_mode::RenderMode::WgpuDComp
+                    | ::window::render_mode::RenderMode::WgpuClassic) => Some(Rc::new(
+                        WebGpuState::new(&window, dimensions, &config, mode).await?,
+                    )),
+                    ::window::render_mode::RenderMode::SoftwareRdp => None,
+                },
+                // --- end weezterm remote features ---
                 _ => None,
             };
             myself.config_subscription.replace(config_subscription);
@@ -933,16 +1100,83 @@ impl TermWindow {
                 myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
             }
             if let Some(webgpu) = webgpu {
-                myself.webgpu.replace(Rc::clone(&webgpu));
-                myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
                 // --- weezterm remote features ---
-                // Immediately clear the newly-created WebGPU surface to the
-                // scheme background color. Without this, the surface's initial
-                // white backbuffer is visible between show() and first paint.
-                let bg = myself.palette().background.to_linear();
-                webgpu.clear_and_present_with_color(bg.0 as f64, bg.1 as f64, bg.2 as f64);
+                myself.backend = RenderBackend::WebGpu(Rc::clone(&webgpu));
                 // --- end weezterm remote features ---
+                myself.created(RenderContext::WebGpu(Rc::clone(&webgpu)))?;
             }
+            // --- weezterm remote features ---
+            // Phase 4 Mode C: when Auto resolved to SoftwareRdp, neither
+            // gl nor webgpu was constructed. Build the WARP swap chain now
+            // and stash it on the backend. The CPU draw pipeline lands in
+            // Phase 4c; for 4b we present a solid clear colour so the
+            // window paints something instead of staying transparent.
+            #[cfg(windows)]
+            if matches!(effective_front_end, FrontEndSelection::Auto)
+                && matches!(
+                    ::window::render_mode::resolve(),
+                    ::window::render_mode::RenderMode::SoftwareRdp
+                )
+                && !myself.backend.is_some()
+                && myself.gl.is_none()
+            {
+                use ::window::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                match window.window_handle() {
+                    Ok(h) => match h.as_raw() {
+                        RawWindowHandle::Win32(win32) => {
+                            let hwnd = win32.hwnd.get() as winapi::shared::windef::HWND;
+                            match crate::termwindow::software_rdp::SoftwareRdpState::new(
+                                hwnd,
+                                dimensions.pixel_width as u32,
+                                dimensions.pixel_height as u32,
+                            ) {
+                                Ok(state) => {
+                                    log::info!(
+                                        "[render] SoftwareRdp WARP swap chain initialised \
+                                         ({}x{})",
+                                        state.width(),
+                                        state.height(),
+                                    );
+                                    myself.backend = RenderBackend::SoftwareRdp(Rc::new(
+                                        std::cell::RefCell::new(state),
+                                    ));
+                                    myself.cpu_renderer = Some(
+                                        crate::termwindow::software_rdp_render::CpuRenderer::new(),
+                                    );
+                                }
+                                Err(err) => {
+                                    log::error!(
+                                        "[render] SoftwareRdpState::new failed: {err:#}; \
+                                         falling back to OpenGL",
+                                    );
+                                    let gl = window.enable_opengl().await?;
+                                    myself.gl.replace(Rc::clone(&gl));
+                                    myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                                }
+                            }
+                        }
+                        other => {
+                            log::error!(
+                                "[render] SoftwareRdp requires a Win32 window handle; \
+                                 got {other:?}; falling back to OpenGL",
+                            );
+                            let gl = window.enable_opengl().await?;
+                            myself.gl.replace(Rc::clone(&gl));
+                            myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                        }
+                    },
+                    Err(err) => {
+                        log::error!(
+                            "[render] window_handle() failed for SoftwareRdp init: {err:#}; \
+                             falling back to OpenGL",
+                        );
+                        let gl = window.enable_opengl().await?;
+                        myself.gl.replace(Rc::clone(&gl));
+                        myself.created(RenderContext::Glium(Rc::clone(&gl)))?;
+                    }
+                }
+            }
+            // --- end weezterm remote features ---
             myself.load_os_parameters();
             // --- weezterm remote features ---
             // Set the OS window background color to match the terminal scheme
@@ -967,6 +1201,16 @@ impl TermWindow {
             // Bring the window to front after restoring state, otherwise
             // maximize/fullscreen can leave it behind other windows.
             window.focus();
+
+            // p6 (Option 6A): spawn the dedicated cursor-blink thread now
+            // that the window has a valid OS handle. The thread keeps the
+            // blink schedule firing under sustained paint load that would
+            // otherwise starve the existing smol-Timer-based animation
+            // scheduler in render/paint.rs. Cleaned up via the Drop on the
+            // thread handle when the TermWindow is dropped.
+            let blink_interval = std::time::Duration::from_millis(config.cursor_blink_rate);
+            myself.cursor_blink_thread =
+                crate::cursor_blink_thread::spawn_for_window(&window, blink_interval);
             // --- end weezterm remote features ---
             myself.subscribe_to_pane_updates();
             myself.emit_window_event("window-config-reloaded", None);
@@ -1095,8 +1339,12 @@ impl TermWindow {
                 self.resizes_pending -= 1;
                 if self.is_repaint_pending {
                     self.is_repaint_pending = false;
-                    if self.webgpu.is_some() {
+                    if self.backend.webgpu().is_some() {
                         self.do_paint_webgpu()?;
+                    // --- weezterm remote features ---
+                    } else if self.is_software_rdp() {
+                        self.do_paint_software_rdp()?;
+                    // --- end weezterm remote features ---
                     } else {
                         self.do_paint(window);
                     }
@@ -1135,8 +1383,12 @@ impl TermWindow {
                 if self.resizes_pending > 0 {
                     self.is_repaint_pending = true;
                     Ok(true)
-                } else if self.webgpu.is_some() {
+                } else if self.backend.webgpu().is_some() {
                     self.do_paint_webgpu()
+                // --- weezterm remote features ---
+                } else if self.is_software_rdp() {
+                    self.do_paint_software_rdp()
+                // --- end weezterm remote features ---
                 } else {
                     Ok(self.do_paint(window))
                 }
@@ -1225,13 +1477,13 @@ impl TermWindow {
     }
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
-        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+        self.backend.webgpu().unwrap().resize(self.dimensions);
         match self.do_paint_webgpu_impl() {
             Ok(ok) => Ok(ok),
             Err(err) => {
                 match err.downcast_ref::<wgpu::SurfaceError>() {
                     Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        self.webgpu.as_mut().unwrap().resize(self.dimensions);
+                        self.backend.webgpu().unwrap().resize(self.dimensions);
                         return self.do_paint_webgpu_impl();
                     }
                     _ => {}
@@ -1245,6 +1497,122 @@ impl TermWindow {
         self.paint_impl(&mut RenderFrame::WebGpu);
         Ok(true)
     }
+
+    // --- weezterm remote features ---
+    /// Phase 4 Mode C dispatch. Returns true if a SoftwareRdp backend is
+    /// attached. Cheap; matches on the enum variant.
+    #[cfg(windows)]
+    fn is_software_rdp(&self) -> bool {
+        self.backend.software_rdp().is_some()
+    }
+    #[cfg(not(windows))]
+    fn is_software_rdp(&self) -> bool {
+        false
+    }
+
+    /// Phase 4c fallback: fill the entire scratch buffer with the
+    /// palette background colour. Used during startup before a pane is
+    /// available, or if the CpuRenderer somehow wasn't initialised.
+    #[cfg(windows)]
+    fn fill_solid_software_rdp(
+        state: &mut crate::termwindow::software_rdp::SoftwareRdpState,
+        rgba: (u8, u8, u8, u8),
+    ) {
+        let (pixels, stride) = state.pixels_mut();
+        let h = pixels.len() / stride as usize;
+        for y in 0..h {
+            let row = &mut pixels[y * stride as usize..(y + 1) * stride as usize];
+            for px in row.chunks_exact_mut(4) {
+                px[0] = rgba.2;
+                px[1] = rgba.1;
+                px[2] = rgba.0;
+                px[3] = 0xff;
+            }
+        }
+    }
+
+    /// Phase 4c: paint via the SoftwareRdp WARP swap chain using the
+    /// CPU rasteriser. Falls back to a solid background fill if no
+    /// active pane is available (e.g. during startup).
+    #[cfg(windows)]
+    fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
+        // --- weezterm remote features ---
+        let _t = std::time::Instant::now();
+        let state_rc = match self.backend.software_rdp() {
+            Some(s) => s.clone(),
+            None => {
+                log::debug!("[render] do_paint_software_rdp: no backend, returning");
+                return Ok(false);
+            }
+        };
+        // --- end weezterm remote features ---
+        let mut state = state_rc.borrow_mut();
+
+        // Resize swap chain to current client rect if the window grew /
+        // shrunk since the last paint. After a successful resize we mark
+        // the renderer dirty so the next frame is a full repaint.
+        let target_w = self.dimensions.pixel_width as u32;
+        let target_h = self.dimensions.pixel_height as u32;
+        let resized = state.width() != target_w.max(1) || state.height() != target_h.max(1);
+        if resized {
+            state
+                .resize(target_w, target_h)
+                .context("resize SoftwareRdp swap chain")?;
+            if let Some(cpu) = self.cpu_renderer.as_mut() {
+                cpu.invalidate_all();
+            }
+        }
+
+        let palette = self.palette().clone();
+        let metrics = self.render_metrics;
+        let fonts = Rc::clone(&self.fonts);
+
+        match self.get_active_pane_or_overlay() {
+            Some(pane) => {
+                if let Some(cpu) = self.cpu_renderer.as_mut() {
+                    // --- weezterm remote features ---
+                    let _t_render = std::time::Instant::now();
+                    cpu.render(&mut state, &pane, &fonts, &metrics, &palette)?;
+                    log::debug!(
+                        "[render] do_paint_software_rdp: cpu.render took {:?}",
+                        _t_render.elapsed()
+                    );
+                    // --- end weezterm remote features ---
+                } else {
+                    // CpuRenderer wasn't initialised (shouldn't happen
+                    // when SoftwareRdp backend is active, but be safe).
+                    // --- weezterm remote features ---
+                    log::warn!("[render] do_paint_software_rdp: no CpuRenderer, fill_solid");
+                    // --- end weezterm remote features ---
+                    let bg = palette.background.as_rgba_u8();
+                    Self::fill_solid_software_rdp(&mut state, bg);
+                    state.mark_all_dirty();
+                }
+            }
+            None => {
+                // Pre-spawn or shutdown: just clear to bg.
+                // --- weezterm remote features ---
+                log::debug!("[render] do_paint_software_rdp: no active pane, fill_solid");
+                // --- end weezterm remote features ---
+                let bg = palette.background.as_rgba_u8();
+                Self::fill_solid_software_rdp(&mut state, bg);
+                state.mark_all_dirty();
+            }
+        }
+
+        state.present().context("SoftwareRdp present")?;
+        // --- weezterm remote features ---
+        log::debug!("[render] do_paint_software_rdp: total {:?}", _t.elapsed());
+        // --- end weezterm remote features ---
+        Ok(true)
+    }
+
+    #[cfg(not(windows))]
+    #[allow(dead_code)]
+    fn do_paint_software_rdp(&mut self) -> anyhow::Result<bool> {
+        Ok(false)
+    }
+    // --- end weezterm remote features ---
 
     fn dispatch_notif(&mut self, notif: TermWindowNotif, window: &Window) -> anyhow::Result<()> {
         fn chan_err<T>(e: smol::channel::TrySendError<T>) -> anyhow::Error {
@@ -1948,6 +2316,14 @@ impl TermWindow {
             config.text_blink_rapid_ease_out,
             None,
         );
+        // --- weezterm remote features ---
+        // p6 (Option 6A): keep the cursor-blink thread cadence in sync
+        // with the live config. No-op on non-Windows / when the thread
+        // wasn't spawned.
+        if let Some(ref blink_thread) = self.cursor_blink_thread {
+            blink_thread.set_interval(std::time::Duration::from_millis(config.cursor_blink_rate));
+        }
+        // --- end weezterm remote features ---
 
         self.show_scroll_bar = config.enable_scroll_bar;
         self.shape_generation += 1;
@@ -2026,40 +2402,50 @@ impl TermWindow {
 
     // --- weezterm remote features ---
     /// Save the current window state (position, size, maximized, monitor)
-    /// to disk for future restore on reconnect/restart.
+    /// to disk for future restore on reconnect/restart. All Win32 logic /
+    /// coord-space conversion / monitor selection lives in
+    /// `window_state_persistence`.
     fn save_current_window_state(&self, window: &Window) {
+        use crate::window_state_persistence::{self as persist, ScreenCoords, ScreenRect};
+        use ::window::ConnectionOps;
+
         let mux = Mux::get();
         let workspace = mux
             .get_window(self.mux_window_id)
             .map(|w| w.get_workspace().to_string())
             .unwrap_or_else(|| mux.active_workspace());
 
-        // Use get_window_placement() to get the NORMAL (restored) position
-        // and client dimensions. This correctly handles:
-        // - Normal state: returns current position and size
-        // - Maximized: returns the pre-maximize normal rect
-        // - Fullscreen: returns the pre-fullscreen normal rect
-        // If placement is unavailable, skip saving to avoid overwriting
-        // good state with default/zero values.
-        let (x, y, width, height) = match window.get_window_placement() {
-            Some(placement) => placement,
+        // get_window_placement returns the *normal* (un-maximized) rect in
+        // screen coords. We pair it with the maximize/fullscreen booleans
+        // from the live window state so that on restore we re-create the
+        // normal rect first and then re-apply the maximize state.
+        let placement = match window.get_window_placement() {
+            Some(p) => p,
             None => {
                 log::warn!("Skipping window state save: placement unavailable");
                 return;
             }
         };
-
-        let state = crate::window_state_persistence::SavedWindowState {
-            x,
-            y,
-            width,
-            height,
-            maximized: self.window_state.contains(WindowState::MAXIMIZED),
-            fullscreen: self.window_state.contains(WindowState::FULL_SCREEN),
-            monitor: self.current_screen_name.clone(),
+        let placement = ScreenRect {
+            origin: ScreenCoords {
+                x: placement.0 as i32,
+                y: placement.1 as i32,
+            },
+            width: placement.2 as u32,
+            height: placement.3 as u32,
         };
 
-        crate::window_state_persistence::save_window_state(&workspace, state);
+        let screens = ::window::Connection::get().and_then(|conn| conn.screens().ok());
+        let (monitors, _primary) = persist::collect_monitors(screens.as_ref());
+
+        persist::capture_and_save(
+            &workspace,
+            placement,
+            self.window_state.contains(WindowState::MAXIMIZED),
+            self.window_state.contains(WindowState::FULL_SCREEN),
+            self.current_screen_name.as_deref(),
+            &monitors,
+        );
     }
     // --- end weezterm remote features ---
 
@@ -2074,14 +2460,44 @@ impl TermWindow {
     }
 
     /// Applies or removes monitor-specific config overrides
-    /// based on the current monitor name.
+    /// based on the current monitor name and/or position.
     fn apply_monitor_overrides(&mut self, screen_name: &str) {
-        // Find a matching monitor override in the config
+        // Compute position labels for all connected monitors
+        let position_map: std::collections::HashMap<String, String> = {
+            use ::window::ConnectionOps;
+            ::window::Connection::get()
+                .and_then(|conn| conn.screens().ok())
+                .map(|screens| ::window::screen::compute_monitor_positions(&screens.by_name))
+                .unwrap_or_default()
+        };
+
+        let current_position = position_map.get(screen_name).cloned();
+        log::info!(
+            "Monitor position: {:?} -> {:?}",
+            screen_name,
+            current_position
+        );
+
+        // Find a matching monitor override in the config.
+        // Match by name, position, or both (AND when both are set).
         let matching_scheme = self
             .config
             .monitor_overrides
             .iter()
-            .find(|mo| mo.monitor == screen_name)
+            .find(|mo| {
+                let name_ok = match &mo.monitor {
+                    Some(name) => name == screen_name,
+                    None => true, // no name constraint
+                };
+                let pos_ok = match (&mo.position, &current_position) {
+                    (Some(pos), Some(cur)) => pos == cur,
+                    (Some(_), None) => false, // position required but unknown
+                    (None, _) => true,        // no position constraint
+                };
+                // At least one selector must be present
+                let has_selector = mo.monitor.is_some() || mo.position.is_some();
+                has_selector && name_ok && pos_ok
+            })
             .and_then(|mo| mo.color_scheme.clone());
 
         // Check if anything actually changed

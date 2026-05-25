@@ -105,7 +105,14 @@ impl crate::TermWindow {
         }
         log::debug!("paint_impl before call_draw elapsed={:?}", start.elapsed());
 
-        self.call_draw(frame).ok();
+        // --- weezterm remote features ---
+        // Don't silently swallow errors — they are critical for
+        // diagnosing why frames don't appear (e.g., Lost/Outdated
+        // surface).
+        if let Err(err) = self.call_draw(frame) {
+            log::warn!("[render] call_draw failed: {:#}", err);
+        }
+        // --- end weezterm remote features ---
         self.last_frame_duration = start.elapsed();
         log::debug!(
             "paint_impl elapsed={:?}, fps={}",

@@ -128,6 +128,17 @@ const BUFSIZE: usize = 1024 * 1024;
 /// mux subscribers about the output event
 fn send_actions_to_mux(pane: &Weak<dyn Pane>, dead: &Arc<AtomicBool>, actions: Vec<Action>) {
     let start = Instant::now();
+    // --- weezterm remote features ---
+    // Tracing: useful when debugging "TUI redraws on remote but local
+    // model is stale" cases. Promoted via WEZTERM_LOG=mux=trace.
+    let n_actions = actions.len();
+    let pane_id_for_log = pane.upgrade().map(|p| p.pane_id()).unwrap_or(0);
+    log::debug!(
+        "send_actions_to_mux pane={} n_actions={}",
+        pane_id_for_log,
+        n_actions
+    );
+    // --- end weezterm remote features ---
     match pane.upgrade() {
         Some(pane) => {
             pane.perform_actions(actions);

@@ -118,3 +118,112 @@ automated.
 
 See the UX findings report for root cause analysis and fix recommendations.
 The manual tests above (M1–M5) are designed to verify this behavior.
+
+---
+
+<!-- --- weezterm remote features --- -->
+## Test M6: SoftwareRdp (Mode C) — Cold Start in RDP Session
+
+**Setup:** Connect to the host via Remote Desktop. Confirm there is no
+locally-attached GPU (the only adapters reported by `Get-PnpDevice -Class
+Display` should be `Microsoft Basic Render Driver` / WARP / virtual GPUs).
+
+**Steps:**
+1. Make sure no `WEEZTERM_RENDER_MODE` env var is set:
+   `Remove-Item Env:WEEZTERM_RENDER_MODE -ErrorAction SilentlyContinue`
+2. Launch: `.\target\debug\weezterm-gui.exe`
+3. Wait 3 seconds for the window to become visible
+4. Type a few commands (`dir`, `cd`, `cls`)
+5. Resize the window by dragging the bottom-right corner
+6. Maximise and restore once
+
+**Expected:**
+- Stderr contains `[render] mode=software_rdp rdp=true` (Auto resolved correctly)
+- Stderr does NOT contain `[render] WEEZTERM_RENDER_MODE override` (no env var)
+- Stderr contains `SoftwareRdp WARP swap chain initialised (WxH)`
+- Stderr does NOT contain any `Present1 failed: HRESULT 0x887a0001`
+- Cursor blinks
+- Text appears in the correct font/colour as you type
+- Window resize redraws cleanly (no torn frames, no permanent artefacts)
+- No crash
+
+**Record:**
+- [ ] mode=software_rdp logged: YES / NO
+- [ ] No Present1 errors: YES / NO
+- [ ] Text input visible: YES / NO
+- [ ] Resize clean: YES / NO
+- [ ] Maximise/restore clean: YES / NO
+
+---
+
+## Test M7: SoftwareRdp (Mode C) — Force-Override Smoke Test
+
+**Setup:** Same machine as M6, but explicitly force the SoftwareRdp backend
+even on hosts where Auto would not pick it.
+
+**Steps:**
+1. `$env:WEEZTERM_RENDER_MODE = 'software_rdp'`
+2. Launch: `.\target\debug\weezterm-gui.exe`
+3. Run `python tests\ux\test_software_rdp.py` (or
+   `python -m pytest tests/ux/test_software_rdp.py -v -s`)
+4. Verify all 3 automated tests pass
+5. Manually exercise the window for 30 seconds: typed input, scrolling,
+   resize, maximise/restore
+
+**Expected:**
+- All 3 automated tests pass
+- Stderr contains `[render] WEEZTERM_RENDER_MODE override = software_rdp`
+- Stderr contains `[render] mode=software_rdp`
+- No `Present1 failed` lines, no panics
+- Window remains responsive throughout
+
+**Record:**
+- [ ] Automated tests passed (3/3): ___/3
+- [ ] Override log line present: YES / NO
+- [ ] Smooth interactive use for 30s: YES / NO
+
+---
+
+## Test M8: Cursor Blink Stutter Under Sustained Scroll Load (p6)
+
+**Setup:** WeezTerm running in any environment (RDP or local). Default
+config (so `cursor_blink_rate = 800` ms). The Phase 6 cursor-blink
+thread runs unconditionally on Windows, so this test exercises both the
+existing smol-Timer schedule and the new dedicated thread.
+
+**Steps:**
+1. Place a focused, idle WeezTerm window where you can see the cursor.
+2. Visually note the cursor blinking on/off at the configured rate
+   (~0.6 Hz for `cursor_blink_rate = 800`).
+3. In the same pane, run a command that produces sustained output for
+   several seconds. Examples (pick one that's available):
+   - `seq 1 50000`
+   - `seq 1 100000 | head -5000`
+   - `cat <large file>`
+   - `for /l %i in (1,1,5000) do @echo %i` (CMD)
+4. Watch the cursor area during the entire scroll, not just at the end.
+
+**Expected (with p6, today):**
+- Cursor blink remains visible at the configured cadence throughout the
+  scroll. The cursor blinks even while output is streaming.
+- No panic, no deadlock, no "stuck cursor" state once the scroll
+  completes.
+
+**Without p6 (regression baseline):**
+- Cursor blink stops or stutters during the scroll burst because the
+  smol `Timer::at` reschedule lives on the same executor that's busy
+  servicing `WM_PAINT`. The blink resumes only after the scroll quiets.
+
+**Steps to verify the new thread is doing the work:**
+1. Run with `WEZTERM_LOG=weezterm_gui::cursor_blink_thread=debug,info` in
+   the env. (Note: `WEZTERM_LOG`, not `RUST_LOG`.)
+2. On startup, look for: `[render] cursor blink thread started`.
+3. On normal close, look for: `[render] cursor blink thread exiting`.
+
+**Record:**
+- [ ] Cursor blinked throughout the scroll: YES / NO
+- [ ] `cursor blink thread started` log line present: YES / NO
+- [ ] No deadlock during resize while the thread is running: YES / NO
+- [ ] Notes on subjective quality: ____________________
+<!-- --- end weezterm remote features --- -->
+

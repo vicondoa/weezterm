@@ -29,6 +29,7 @@
 **Severity:** Medium
 **Test:** `test_position_preserved_on_restart`
 **Status:** ✅ Fixed
+**Resolved by:** `b203f9536` — window state persistence rebuild (prior session).
 
 **Fix applied:** Added `get_window_placement()` method to the `WindowOps` trait with
 platform-specific implementations (Windows, macOS, X11). On Windows, it uses
@@ -45,6 +46,7 @@ during `Destroyed` events.
 **Severity:** High
 **Test:** `test_non_maximized_size_preserved_through_maximize_cycle`
 **Status:** ✅ Fixed
+**Resolved by:** `b203f9536` — window state persistence rebuild (prior session).
 
 **Fix applied:** The `get_window_placement()` method now uses `GetWindowPlacement.rcNormalPosition`
 when the window is maximized, which returns the pre-maximize rect. This is converted from
@@ -120,6 +122,8 @@ would exceed the monitor, reduce rows/cols rather than overflow.
 **Severity:** High
 **Test:** Manual (requires multi-monitor with different DPI — see `tests/ux/MANUAL_TESTS.md`)
 **Status:** 🟡 Fixed, needs manual testing on multi-monitor setup
+**Resolved by:** `b203f9536` — window state persistence rebuild (prior session)
+added the `WM_DPICHANGED` handler that applies the Windows-suggested rect.
 
 **Evidence:** User-reported. The drag rectangle stays reasonable but the window
 "never fits in that geometry, it always balloons to be huge."
@@ -235,6 +239,10 @@ Local process isolation is still maintained via `--config-file` and `XDG_*` env 
 
 **Severity:** Medium (visual quality)
 **Status:** ✅ Fixed
+**Resolved by:** `ff7b65cf8` — phase 5 wrong-size-frame discard (Ghostty pattern).
+Frame-size mismatch detection drops wrong-size frames before present, eliminating
+the visible stretch during `WM_SIZE` storms across all backends (WebGpu Mode A/B
+and SoftwareRdp Mode C).
 
 **Fix applied:** During live resize (user dragging window edge), the terminal content
 recalculation is now deferred. The WebGPU surface is reconfigured to match the new
@@ -255,6 +263,23 @@ the existing `live_resizing` flag (already tracked on all platforms via
 ### ✅ Priority 2: Fix window position persistence (Issue 1) — DONE
 ### ✅ Priority 3: Add WM_DPICHANGED handler (Issue 3) — DONE (needs manual verification)
 ### ✅ Priority 4: Fix content stretching during resize (Issue 5) — DONE
+### ✅ Priority 5: RDP / Azure-VM rendering quality — DONE
+
+The Azure-VM-on-RDP environment described in the platform header (Hyper-V
+Video / Remote Display Adapter) is now handled by **Mode C `SoftwareRdp`**:
+WARP D3D11 + `Present1` with dirty rectangles. RDP-encoder friendly, low
+wire bytes, no GPU readback per frame. `Auto` (the new default on Windows)
+selects this mode automatically when a RDP session is detected.
+
+**Resolved by:** p4 — `ada3fb54a` (RenderBackend enum + dispatch refactor) →
+`62386353d` (SoftwareRdp WARP swap chain + clear-color present) →
+`59375f034` (SoftwareRdp CPU draw path + Auto routing) →
+`86b208fa2` (default Auto on Windows + SoftwareRdp UX tests).
+
+The previous LLVMpipe-via-`prefer_swrast` fallback (in
+`window/src/configuration.rs`) is kept as a safety net for the deprecated
+OpenGL front-end on RDP and will be removed once Mode C has shipped for one
+release.
 
 ### Remaining: Fix SSH mux connection stability (Issue 4)
 SSH mux connections via `connect` with an isolated config drop after ~6 seconds.

@@ -1,13 +1,43 @@
 use luahelper::impl_lua_conversion_dynamic;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic, Default)]
+// --- weezterm remote features ---
+// Phase 4d: default to `Auto` on Windows. The platform-conditional
+// default lets WeezTerm pick `SoftwareRdp` automatically on RDP boxes
+// where neither real OpenGL nor a usable wgpu adapter is available.
+// On non-Windows targets we keep the upstream default (`OpenGL`) so a
+// merge from upstream/main does not change behaviour.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromDynamic, ToDynamic)]
+#[allow(deprecated)] // OpenGL variant kept for back-compat; derive references all variants by name.
 pub enum FrontEndSelection {
-    #[default]
+    #[deprecated(
+        since = "WeezTerm-rendering-overhaul",
+        note = "OpenGL/glium is incompatible with DWM (no flip-model swap chain, classic stretch \
+                on resize) and will be removed once Mode C (SoftwareRdp) has shipped for one \
+                full release. Migrate to `Auto` (the new default on Windows). \
+                See docs/windows-rendering-design.md for the full design."
+    )]
     OpenGL,
     WebGpu,
     Software,
+    Auto,
+    WebGpuHwnd,
 }
+
+#[allow(deprecated)] // Reference to OpenGL variant in the non-Windows back-compat default.
+impl Default for FrontEndSelection {
+    fn default() -> Self {
+        #[cfg(target_os = "windows")]
+        {
+            Self::Auto
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Self::OpenGL
+        }
+    }
+}
+// --- end weezterm remote features ---
 
 /// Corresponds to <https://docs.rs/wgpu/latest/wgpu/struct.AdapterInfo.html>
 #[derive(Debug, Clone, FromDynamic, ToDynamic)]

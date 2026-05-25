@@ -304,6 +304,7 @@ fn domain_to_json(dom: &SshDomainConfig) -> serde_json::Value {
 
 // --- weezterm remote features ---
 fn parse_monitor_overrides(val: &serde_json::Value) -> Vec<MonitorOverrideEntry> {
+    use super::data::MonitorMatchBy;
     let mut entries = vec![];
     if let serde_json::Value::Array(arr) = val {
         for item in arr {
@@ -313,14 +314,32 @@ fn parse_monitor_overrides(val: &serde_json::Value) -> Vec<MonitorOverrideEntry>
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
+                let position = obj
+                    .get("position")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let match_by_str = obj.get("match_by").and_then(|v| v.as_str()).unwrap_or("");
+                let match_by = match match_by_str {
+                    "position" => MonitorMatchBy::Position,
+                    "name" => MonitorMatchBy::Name,
+                    _ => {
+                        if position.is_some() {
+                            MonitorMatchBy::Position
+                        } else {
+                            MonitorMatchBy::Name
+                        }
+                    }
+                };
                 let color_scheme = obj
                     .get("color_scheme")
                     .and_then(|v| v.as_str())
                     .map(|s| s.to_string());
 
-                if !monitor_name.is_empty() {
+                if !monitor_name.is_empty() || position.is_some() {
                     entries.push(MonitorOverrideEntry {
                         monitor_name,
+                        position,
+                        match_by,
                         color_scheme,
                         is_current: false,
                         expanded: false,
@@ -334,10 +353,27 @@ fn parse_monitor_overrides(val: &serde_json::Value) -> Vec<MonitorOverrideEntry>
 }
 
 fn monitor_override_to_json(entry: &MonitorOverrideEntry) -> serde_json::Value {
+    use super::data::MonitorMatchBy;
     let mut obj = serde_json::Map::new();
     obj.insert(
         "monitor".to_string(),
         serde_json::Value::String(entry.monitor_name.clone()),
+    );
+    if let Some(ref pos) = entry.position {
+        obj.insert(
+            "position".to_string(),
+            serde_json::Value::String(pos.clone()),
+        );
+    }
+    obj.insert(
+        "match_by".to_string(),
+        serde_json::Value::String(
+            match entry.match_by {
+                MonitorMatchBy::Position => "position",
+                MonitorMatchBy::Name => "name",
+            }
+            .to_string(),
+        ),
     );
     if let Some(ref scheme) = entry.color_scheme {
         obj.insert(

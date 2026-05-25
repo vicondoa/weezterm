@@ -16,6 +16,7 @@ Isolation:
 import os
 import subprocess
 import time
+from typing import Optional
 import pytest
 from helpers.app import WeezTermApp
 from helpers.window_ops import (
@@ -26,6 +27,7 @@ from helpers.window_ops import (
     is_maximized,
     set_foreground,
     settle,
+    simulate_live_drag_resize,
 )
 from helpers.screenshot import (
     capture_window,
@@ -33,6 +35,9 @@ from helpers.screenshot import (
     image_black_percentage,
     save_screenshot,
 )
+# --- weezterm remote features ---
+from helpers.frame_capture import FrameCapture, summarize_frames
+# --- end weezterm remote features ---
 from helpers.timing import TimingResult
 
 
@@ -361,12 +366,37 @@ def _deploy_tui_script(host: str) -> str:
     """
     local_script = TUI_TEST_SCRIPT
     remote_path = "/tmp/tui_resize_test.py"
+    # --- weezterm remote features ---
+    # Clear the diag log so previous-run noise doesn't pollute the
+    # current run's analysis.
+    subprocess.run(
+        ["ssh", host, "rm -f /tmp/tui_resize_diag.log"],
+        check=False,
+        timeout=30,
+    )
+    # --- end weezterm remote features ---
     subprocess.run(
         ["scp", "-q", local_script, f"{host}:{remote_path}"],
         check=True,
         timeout=10,
     )
     return remote_path
+
+
+# --- weezterm remote features ---
+def _fetch_remote_diag_log(host: str, dest_dir: str) -> Optional[str]:
+    """scp the TUI's diag log back to the local test-results dir."""
+    dest = os.path.join(dest_dir, "tui_resize_diag.log")
+    try:
+        subprocess.run(
+            ["scp", "-q", f"{host}:/tmp/tui_resize_diag.log", dest],
+            check=True,
+            timeout=10,
+        )
+        return dest
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        return None
+# --- end weezterm remote features ---
 
 
 @pytest.mark.ssh_mux
@@ -521,3 +551,337 @@ class TestSshTuiResize:
 
         artifacts = detect_rendering_artifacts(img)
         print(f"\n  TUI rapid resize artifacts: {artifacts}")
+
+
+# --- weezterm remote features ---
+@pytest.mark.ssh_mux
+@pytest.mark.timeout(300)
+class TestSshTuiResizeDiagnostic:
+    """Frame-by-frame diagnostic capture of SSH/TUI resize behavior.
+
+    These tests do **not** assert pass/fail on rendering correctness —
+    they exist purely to collect artifacts for human inspection so the
+    user can see exactly what happens during a resize over SSH:
+
+      - one PNG per ~16 ms continuously while the resize is in progress
+      - a CSV manifest correlating frame index to elapsed time and
+        live window dimensions
+      - the GUI process stderr including the `[wm]` and `[resize]`
+        debug logs
+      - a metadata.txt summarizing the test parameters
+
+    Output goes to ``tests/ux/test-results/diagnostic/<nodeid>/``.
+
+    The captures target the two specific bugs the user reported:
+
+      Bug 1 — "content stretches before snapping to the new size" during
+              a window-border drag
+      Bug 2 — "resizing the window LARGER causes the full-screen TUI app
+              to first SHRINK to dimensions smaller than before, then
+              jump to the right size" (two-phase resize)
+
+    Each test deploys ``tui_resize_test.py`` to the remote host (a
+    curses app drawing borders / grid / quadrant markers) so the bug
+    pattern is visible in the captured frames as a cell-grid shift or a
+    smaller-than-expected redrawn area.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _deploy_tui(self):
+        try:
+            self.remote_tui_path = _deploy_tui_script(SSH_HOST)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            pytest.skip("Cannot deploy TUI script to remote host via scp")
+
+    def _start_tui(self, app: WeezTermApp):
+        """Start the TUI app on the remote and wait for it to draw."""
+        import ctypes
+
+        user32 = ctypes.windll.user32
+        set_foreground(app.hwnd)
+        time.sleep(1.0)
+        cmd = f"python3 {self.remote_tui_path}\r"
+        for ch in cmd:
+            WM_CHAR = 0x0102
+            user32.PostMessageW(app.hwnd, WM_CHAR, 13 if ch == "\r" else ord(ch), 0)
+            time.sleep(0.01)
+        time.sleep(4.0)
+
+    def _write_metadata(self, app: WeezTermApp, name: str, **fields):
+        """Write a metadata.txt next to the captured frames."""
+        path = os.path.join(app._diag_dir, "metadata.txt")
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(f"test_name: {name}\n")
+            for k, v in fields.items():
+                f.write(f"{k}: {v}\n")
+
+    def _slow_drag(self, hwnd: int, x: int, y: int, w_from: int, w_to: int,
+                    h_from: int, h_to: int, steps: int, total_s: float, cap):
+        """Simulate a gradual user-driven drag by interpolating between
+        two sizes over `steps` linear steps spaced over `total_s`
+        seconds. ``cap`` is the FrameCapture that's already running so
+        the interpolation can call ``cap.note()`` between steps."""
+        per_step = total_s / max(steps, 1)
+        for i in range(steps + 1):
+            t = i / max(steps, 1)
+            w = int(round(w_from + (w_to - w_from) * t))
+            h = int(round(h_from + (h_to - h_from) * t))
+            cap.note(f"step {i}/{steps} -> set {w}x{h}")
+            set_window_rect(hwnd, x, y, w, h)
+            time.sleep(per_step)
+
+    def test_diagnostic_slow_grow_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Slow drag from small to large — captures the BUG 2 sequence
+        if it reproduces (large initial size NOT necessarily required —
+        the TUI may shrink intermediately even on a smooth grow).
+
+        Frames go to ``test-results/diagnostic/<nodeid>/frames/``.
+        """
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        # Establish a known starting size and let the TUI redraw.
+        set_window_rect(hwnd, 100, 100, 700, 500)
+        settle(2.5)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.030)  # ~33 fps
+        cap.start()
+        cap.note("baseline (700x500)")
+        time.sleep(0.3)
+
+        cap.note("BEGIN slow grow 700x500 -> 1400x900 over 2.5s in 25 steps")
+        self._slow_drag(hwnd, 100, 100, 700, 1400, 500, 900, steps=25, total_s=2.5, cap=cap)
+        cap.note("END slow grow; settling 4s")
+        time.sleep(4.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        self._write_metadata(
+            app,
+            name="diagnostic_slow_grow_with_tui",
+            from_size="700x500",
+            to_size="1400x900",
+            steps=25,
+            total_s=2.5,
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+        # Diagnostic only — no asserts.
+
+    def test_diagnostic_slow_shrink_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Slow drag from large to small with TUI running."""
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        set_window_rect(hwnd, 100, 100, 1400, 900)
+        settle(2.5)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.030)
+        cap.start()
+        cap.note("baseline (1400x900)")
+        time.sleep(0.3)
+
+        cap.note("BEGIN slow shrink 1400x900 -> 700x500 over 2.5s in 25 steps")
+        self._slow_drag(hwnd, 100, 100, 1400, 700, 900, 500, steps=25, total_s=2.5, cap=cap)
+        cap.note("END slow shrink; settling 4s")
+        time.sleep(4.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        self._write_metadata(
+            app,
+            name="diagnostic_slow_shrink_with_tui",
+            from_size="1400x900",
+            to_size="700x500",
+            steps=25,
+            total_s=2.5,
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+
+    def test_diagnostic_one_step_grow_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Single programmatic resize larger — best repro for BUG 2.
+
+        A one-shot SetWindowPos call from a small size to a large size.
+        The user reports this causes the TUI to first SHRINK to a size
+        smaller than the original, then jump to the correct (larger)
+        size. The frames will show the intermediate shrink.
+        """
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        set_window_rect(hwnd, 100, 100, 800, 500)
+        settle(3.0)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.020)  # ~50 fps
+        cap.start()
+        cap.note("baseline (800x500); waiting 0.5s")
+        time.sleep(0.5)
+
+        cap.note("BEGIN one-step grow 800x500 -> 1600x1000")
+        set_window_rect(hwnd, 100, 100, 1600, 1000)
+        cap.note("END set_window_rect; settling 6s")
+        time.sleep(6.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        self._write_metadata(
+            app,
+            name="diagnostic_one_step_grow_with_tui",
+            from_size="800x500",
+            to_size="1600x1000",
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+
+    def test_diagnostic_one_step_shrink_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Single programmatic resize smaller — captures BUG 1 (content
+        stretching) if it reproduces."""
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        set_window_rect(hwnd, 100, 100, 1600, 1000)
+        settle(3.0)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.020)
+        cap.start()
+        cap.note("baseline (1600x1000); waiting 0.5s")
+        time.sleep(0.5)
+
+        cap.note("BEGIN one-step shrink 1600x1000 -> 800x500")
+        set_window_rect(hwnd, 100, 100, 800, 500)
+        cap.note("END set_window_rect; settling 6s")
+        time.sleep(6.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        self._write_metadata(
+            app,
+            name="diagnostic_one_step_shrink_with_tui",
+            from_size="1600x1000",
+            to_size="800x500",
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+
+    def test_diagnostic_step_resize_burst_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Sequence of distinct programmatic resizes spaced ~500ms apart
+        with TUI running. Captures the full transient between each
+        resize, including any double-resize artifact that may be
+        triggered by WM_WINDOWPOSCHANGED + WM_SIZE both firing."""
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        set_window_rect(hwnd, 100, 100, 800, 500)
+        settle(3.0)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.020)
+        cap.start()
+        cap.note("baseline (800x500); waiting 0.5s")
+        time.sleep(0.5)
+
+        sequence = [
+            (1100, 700),
+            (900, 600),
+            (1400, 900),
+            (1000, 700),
+            (1600, 1000),
+            (700, 500),
+        ]
+        for i, (w, h) in enumerate(sequence):
+            cap.note(f"step {i}: set {w}x{h}")
+            set_window_rect(hwnd, 100, 100, w, h)
+            time.sleep(0.6)
+
+        cap.note("END burst; settling 4s")
+        time.sleep(4.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        self._write_metadata(
+            app,
+            name="diagnostic_step_resize_burst_with_tui",
+            sequence=";".join(f"{w}x{h}" for w, h in sequence),
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+
+    def test_diagnostic_live_drag_grow_with_tui(self, ssh_mux_app_diagnostic: WeezTermApp):
+        """Simulates a real interactive resize drag: WM_ENTERSIZEMOVE,
+        many fast WM_SIZE events spaced ~20ms apart (typical for human
+        drag), then WM_EXITSIZEMOVE.
+
+        With the deferred / debounced surface.configure path, only a
+        SINGLE configure should run at the END of the drag, instead
+        of one per WM_SIZE step. Look in stderr.log for
+        `webgpu surface.configure` lines — there should be ~1.
+
+        Without the fix, the test would emit ~30 configures (one per
+        WM_SIZE), each blocking the UI for 600-1700ms on the WARP
+        virtual GPU."""
+        app = ssh_mux_app_diagnostic
+        hwnd = app.hwnd
+
+        self._start_tui(app)
+        set_window_rect(hwnd, 100, 100, 800, 500)
+        settle(3.0)
+
+        frames_dir = os.path.join(app._diag_dir, "frames")
+        cap = FrameCapture(hwnd, frames_dir, interval_s=0.020)
+        cap.start()
+        cap.note("baseline (800x500); waiting 0.5s")
+        time.sleep(0.5)
+
+        cap.note("BEGIN live drag grow 800x500 -> 1600x1000 in 30 steps")
+        simulate_live_drag_resize(
+            hwnd, 100, 100,
+            start_w=800, start_h=500,
+            end_w=1600, end_h=1000,
+            steps=30,
+            step_delay_s=0.020,
+        )
+        cap.note("END live drag; settling 6s")
+        time.sleep(6.0)
+        cap.note("done")
+        manifest = cap.stop()
+
+        # --- weezterm remote features ---
+        diag_path = _fetch_remote_diag_log(SSH_HOST, app._diag_dir)
+        # --- end weezterm remote features ---
+
+        self._write_metadata(
+            app,
+            name="diagnostic_live_drag_grow_with_tui",
+            from_size="800x500",
+            to_size="1600x1000",
+            steps=30,
+            frames_captured=cap.frames_captured,
+            manifest=manifest,
+        )
+        print("\n  " + summarize_frames(frames_dir))
+        print(f"  stderr log: {app.stderr_log_path}")
+        # --- weezterm remote features ---
+        if diag_path:
+            print(f"  remote diag: {diag_path}")
+        # --- end weezterm remote features ---
+# --- end weezterm remote features ---

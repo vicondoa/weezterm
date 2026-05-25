@@ -164,16 +164,33 @@ class TestDimensionPersistence:
             # Verify the state has reasonable values
             # state is keyed by workspace name (usually "default")
             for workspace, ws_state in state.items():
+                # --- weezterm remote features ---
+                # Schema v2 stores dimensions inside `workspace_relative_rect`
+                # (the pre-maximize / restored normal rect). Older schemas
+                # had top-level width/height; we accept either for safety.
+                rect = ws_state.get("workspace_relative_rect") or {}
+                origin = rect.get("origin") or {}
+                w = rect.get("width", ws_state.get("width", 0))
+                h = rect.get("height", ws_state.get("height", 0))
+                x = origin.get("x", ws_state.get("x", "?"))
+                y = origin.get("y", ws_state.get("y", "?"))
                 print(f"  Workspace '{workspace}':")
-                print(f"    Size: {ws_state.get('width', '?')}x{ws_state.get('height', '?')}")
-                print(f"    Position: ({ws_state.get('x', '?')}, {ws_state.get('y', '?')})")
-                assert ws_state.get("width", 0) > 0, "Saved width should be positive"
-                assert ws_state.get("height", 0) > 0, "Saved height should be positive"
+                print(f"    Size: {w}x{h}")
+                print(f"    Position: ({x}, {y})")
+                assert w > 0, "Saved width should be positive"
+                assert h > 0, "Saved height should be positive"
+                # --- end weezterm remote features ---
         else:
             pytest.fail("window-state.json was not written on graceful close")
 
     def test_non_maximized_size_preserved_through_maximize_cycle(self, app: WeezTermApp):
-        """The normal (non-maximized) size should survive a maximize/close/reopen cycle."""
+        """The normal (non-maximized) size should survive a maximize/close/reopen cycle.
+
+        Schema-v2 invariant: we save WINDOWPLACEMENT.rcNormalPosition (the
+        pre-maximize rect) plus a separate `maximized: true` flag, so the
+        first un-maximize after restart must land at the original normal
+        size, not at the maximized dimensions.
+        """
         app.start(timeout=30)
         settle(2.0)
 
@@ -215,3 +232,191 @@ class TestDimensionPersistence:
                 f"Normal height lost through maximize cycle: "
                 f"target={target_h}, got={after.height}"
             )
+
+    # ------------------------------------------------------------------
+    # schema-v2 rebuild tests
+    # ------------------------------------------------------------------
+    #
+    # These tests cover the failure modes the schema-v2 rewrite is meant
+    # to make impossible. They write `window-state.json` directly into
+    # the test app's isolated `XDG_CONFIG_HOME` so they don't need any
+    # real multi-monitor / DPI setup.
+
+    @staticmethod
+    def _write_state_file(app: WeezTermApp, content: dict):
+        """Write window-state.json into the isolated config dir."""
+        os.makedirs(app.config_dir, exist_ok=True)
+        with open(app.window_state_file, "w") as f:
+            json.dump(content, f, indent=2)
+
+    @staticmethod
+    def _v2_state(
+        x: int = 100,
+        y: int = 100,
+        w: int = 800,
+        h: int = 600,
+        dpi: int = 96,
+        monitor_name: str = "primary",
+        maximized: bool = False,
+    ) -> dict:
+        """Build a schema-v2 PersistedWindowState dict for one workspace."""
+        return {
+            "schema": 2,
+            "workspace": "default",
+            "monitor_name": monitor_name,
+            "workspace_relative_rect": {
+                "origin": {"x": x, "y": y},
+                "width": w,
+                "height": h,
+            },
+            "persistence_dpi": dpi,
+            "maximized": maximized,
+            "fullscreen": False,
+            "saved_at_unix_secs": 0,
+        }
+
+    def test_restart_with_disconnected_monitor_falls_back_gracefully(
+        self, app: WeezTermApp
+    ):
+        """Saved state references a monitor that doesn't exist anymore.
+
+        The persistence module's fallback chain (name → overlap → primary →
+        first) must place the window on a real monitor at sensible coords,
+        rather than off-screen or crashing.
+        """
+        # Inject a state file with an unresolvable monitor name and
+        # workspace-relative coords that fit any monitor.
+        self._write_state_file(
+            app,
+            {
+                "default": self._v2_state(
+                    x=120,
+                    y=140,
+                    w=820,
+                    h=620,
+                    monitor_name="nonexistent-monitor-xyz-12345",
+                )
+            },
+        )
+
+        app.start(timeout=30)
+        settle(2.0)
+
+        rect = get_window_rect(app.hwnd)
+        print(f"\n  After restart with disconnected monitor: {rect}")
+
+        # The window must be visible on *some* monitor — width/height > 0
+        # and the rect must intersect the primary monitor's work area.
+        assert rect.width > 0, "Window must have non-zero width"
+        assert rect.height > 0, "Window must have non-zero height"
+
+        # Check that the dimensions roughly match what we asked for. Even
+        # when fallback kicks in we expect the saved width/height to be
+        # honored on the resolved monitor.
+        tolerance = 60
+        width_diff = abs(rect.width - 820)
+        height_diff = abs(rect.height - 620)
+        if width_diff > tolerance or height_diff > tolerance:
+            pytest.fail(
+                f"After disconnected-monitor fallback, expected ~820x620, "
+                f"got {rect.width}x{rect.height}"
+            )
+
+    def test_restart_with_off_screen_rect_is_centered(self, app: WeezTermApp):
+        """A saved rect that doesn't intersect any monitor must not place
+        the window off-screen — restore_window() should center on a real
+        monitor instead."""
+        # Massively negative x means the rect lives way off-screen for
+        # every reasonable monitor configuration.
+        self._write_state_file(
+            app,
+            {
+                "default": self._v2_state(
+                    x=-100000,
+                    y=-100000,
+                    w=820,
+                    h=620,
+                    monitor_name="primary",
+                )
+            },
+        )
+
+        app.start(timeout=30)
+        settle(2.0)
+
+        rect = get_window_rect(app.hwnd)
+        print(f"\n  After restart with off-screen rect: {rect}")
+
+        # The window must be visible — i.e. its top-left must be inside
+        # the visible virtual screen area. We can't predict the exact
+        # monitor without enumerating monitors here, but a CenteredOnMonitor
+        # result will leave x/y at non-extreme values.
+        assert rect.width > 0 and rect.height > 0
+        assert rect.x > -10000, (
+            f"Window x={rect.x} is still wildly off-screen — off-screen "
+            f"validation didn't trigger"
+        )
+        assert rect.y > -10000, (
+            f"Window y={rect.y} is still wildly off-screen — off-screen "
+            f"validation didn't trigger"
+        )
+
+    def test_restart_with_schema_v1_file_does_not_crash(self, app: WeezTermApp):
+        """A schema-v1 (legacy) file must be migrated to defaults without
+        crashing. The window appears with the config-driven default geometry
+        rather than reusing the buggy v1 coords."""
+        # Schema-v1 shape: flat x/y/width/height + monitor + monitor_position.
+        # Crucially, no `schema` field at all.
+        self._write_state_file(
+            app,
+            {
+                "default": {
+                    "x": 12345,
+                    "y": 67890,
+                    "width": 800,
+                    "height": 600,
+                    "maximized": False,
+                    "fullscreen": False,
+                    "monitor": "some-old-monitor",
+                    "monitor_position": "top-left",
+                }
+            },
+        )
+
+        # Should not crash on startup. Window should appear at default geometry.
+        app.start(timeout=30)
+        settle(2.0)
+
+        rect = get_window_rect(app.hwnd)
+        print(f"\n  After restart with schema-v1 file: {rect}")
+
+        # The buggy v1 coords (12345, 67890) must NOT be used.
+        assert rect.x < 10000, (
+            f"Schema-v1 coords leaked through: x={rect.x} — migration is broken"
+        )
+        assert rect.y < 10000, (
+            f"Schema-v1 coords leaked through: y={rect.y} — migration is broken"
+        )
+        assert rect.width > 0 and rect.height > 0, (
+            "Window should be visible after schema-v1 migration"
+        )
+
+    @pytest.mark.skip(
+        reason="needs harness extension: simulating a different DPI requires "
+        "changing the system display scale, which the test runner can't do "
+        "in-process. Covered by Rust unit test "
+        "`window_state_persistence::tests::restore_rescales_for_dpi_change`."
+    )
+    def test_restart_at_different_dpi_rescales_window(self, app: WeezTermApp):
+        """Save state at one DPI, restart on a monitor with a different DPI;
+        the persisted rect should be rescaled so the visible content area
+        matches.
+
+        TODO: requires a way to simulate the second monitor having a
+        different effective DPI than what was captured. The Rust unit test
+        covers the rescale math; this end-to-end test would exercise the
+        Win32 placement path. Add when we have a way to drive
+        `SetThreadDpiAwarenessContext` on the test process or to spoof
+        `GetDpiForMonitor`.
+        """
+        pass
