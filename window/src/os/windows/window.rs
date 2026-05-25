@@ -1602,6 +1602,34 @@ fn enable_blur_behind(hwnd: HWND) {
     if crate::render_mode::is_dcomp() {
         return;
     }
+
+    // On the OpenGL+Mesa-llvmpipe path used in RDP sessions, the WGL
+    // pixel format always has 8 alpha bits (Mesa does not honour
+    // ChoosePixelFormatARB requests for 0 alpha bits), and any
+    // framebuffer pixel that the layer renderer fails to fully cover
+    // with opaque content (e.g. dual-source-blend glyph cells with
+    // sub-pixel alpha < 1, transparent edges of antialiased glyphs,
+    // brief one-frame races between window resize and terminal-size
+    // updates, or empty overlay panes that have not yet been written
+    // to by their bg thread) ends up < 1.0 alpha. With blur-behind
+    // enabled, DWM treats those pixels as semi-transparent and
+    // composites the desktop / windows behind them through, producing
+    // the visible "ghost text from another app" flash users reported
+    // when opening the kill-window confirmation overlay. Skip the
+    // blur-behind call on the swrast path so DWM ignores the alpha
+    // channel entirely and the window is treated as opaque.
+    //
+    // This intentionally disables `window_background_opacity < 1.0`
+    // for OpenGL+Mesa+RDP users; transparent windows on RDP+software
+    // rendering are an extreme corner case and previously did not work
+    // correctly anyway (full-frame readback every paint).
+    if crate::configuration::prefer_swrast() {
+        log::debug!(
+            "skipping DwmEnableBlurBehindWindow (prefer_swrast=true; \
+             OpenGL+Mesa-llvmpipe path needs DWM to ignore framebuffer alpha)"
+        );
+        return;
+    }
     // --- end weezterm remote features ---
     use winapi::shared::minwindef::*;
     use winapi::um::dwmapi::*;

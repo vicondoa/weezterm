@@ -1,6 +1,6 @@
 use crate::colorease::ColorEaseUniform;
-use crate::termwindow::RenderFrame;
 use crate::termwindow::webgpu::ShaderUniform;
+use crate::termwindow::RenderFrame;
 use crate::uniforms::UniformBuilder;
 use ::window::glium;
 use ::window::glium::uniforms::{
@@ -323,7 +323,30 @@ impl crate::TermWindow {
         let tex = gl_state.glyph_cache.borrow().atlas.texture();
         let tex = tex.downcast_ref::<SrgbTexture2d>().unwrap();
 
-        frame.clear_color(0., 0., 0., 0.);
+        // --- weezterm remote features ---
+        // The OpenGL pixel format requests 8 alpha bits and the window
+        // calls `DwmEnableBlurBehindWindow`, which together cause DWM
+        // to honour the framebuffer alpha channel for compositing.
+        // If we cleared with alpha=0, every pixel not subsequently
+        // written by a draw call (e.g. window-resize that races the
+        // terminal-size update, or the brief one-frame window between
+        // `assign_overlay` and the overlay's bg thread writing its
+        // first prompt) would be transparent — exposing the desktop or
+        // any window behind us. On the wgpu / DXGI HWND-swapchain path
+        // this never showed up because HWND swapchains are forced opaque
+        // by DXGI; on the OpenGL+Mesa path (now the default on RDP) it
+        // is very visible.
+        //
+        // Use alpha=1.0 when the user wants an opaque window so the
+        // cleared framebuffer is opaque-black even where the renderer
+        // doesn't paint over it. Translucent users (window_background_
+        // opacity < 1.0 or a window_background_image) keep alpha=0 so
+        // their compositing behaves as before.
+        let window_is_transparent =
+            !self.window_background.is_empty() || self.config.window_background_opacity != 1.0;
+        let clear_alpha = if window_is_transparent { 0. } else { 1. };
+        frame.clear_color(0., 0., 0., clear_alpha);
+        // --- end weezterm remote features ---
 
         let projection = euclid::Transform3D::<f32, f32, f32>::ortho(
             -(self.dimensions.pixel_width as f32) / 2.0,

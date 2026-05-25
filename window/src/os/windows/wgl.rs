@@ -92,20 +92,34 @@ impl WglWrapper {
     }
 
     fn create() -> anyhow::Result<Self> {
-        if crate::configuration::prefer_swrast() {
-            let mesa_dir = std::env::current_exe()
-                .unwrap()
-                .parent()
-                .unwrap()
-                .join("mesa");
-            let mesa_dir = wide_string(mesa_dir.to_str().unwrap());
-
-            unsafe {
-                AddDllDirectory(mesa_dir.as_ptr());
-                SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-            }
+        // --- weezterm remote features ---
+        // `opengl32.dll` is a Windows "Known DLL", so the loader
+        // would normally always pull it from System32 regardless of
+        // any LoadLibrary path tricks. We override that via a
+        // `<file name="opengl32.dll"/>` entry in the application
+        // SxS manifest (assets/windows/manifest.manifest), which
+        // tells the loader that opengl32 is a private assembly file
+        // and to load it from the application directory instead.
+        // The build script (wezterm-gui/build.rs) places our bundled
+        // Mesa 26.x build there (opengl32.dll + libgallium_wgl.dll),
+        // so this `LoadLibraryW` ends up pulling Mesa's loader, which
+        // in turn loads `libgallium_wgl.dll` for the actual driver.
+        //
+        // When we're routing GL via Mesa for the RDP/WARP path we
+        // also want llvmpipe (pure-CPU rasterizer) rather than the
+        // default GLonD3D12 — under RDP, GLonD3D12 would just send
+        // commands to D3D12 → WARP and we'd be back where we started.
+        // Set GALLIUM_DRIVER before the first WGL call so Mesa picks
+        // up the override at gallium initialization time.
+        if crate::configuration::prefer_swrast() && std::env::var_os("GALLIUM_DRIVER").is_none() {
+            // SAFETY: set_var is only `unsafe` from Rust 2024+ in a
+            // multithreaded process. This is called from the GUI
+            // thread very early in window setup (before any other
+            // thread reads GALLIUM_DRIVER).
+            std::env::set_var("GALLIUM_DRIVER", "llvmpipe");
+            log::debug!("set GALLIUM_DRIVER=llvmpipe for Mesa SW rendering on RDP");
         }
-
+        // --- end weezterm remote features ---
         let lib = unsafe { libloading::Library::new("opengl32.dll") }.map_err(|e| {
             log::error!("{:?}", e);
             e
@@ -182,7 +196,25 @@ impl GlState {
             log::trace!("opengl extensions: {:?}", extensions);
 
             if has_extension(&extensions, "WGL_ARB_pixel_format") {
-                return match Self::create_ext(wgl, extensions, hdc) {
+                // --- weezterm remote features ---
+                // First try with full attributes (incl. 4x MSAA).
+                // Mesa llvmpipe's WGL backend on RDP does not advertise
+                // multisample formats, so retry without MSAA before
+                // falling back to the legacy `create_basic` path —
+                // `create_basic` uses ChoosePixelFormat (1.x) which
+                // can land on a transparent-composed pixel format on
+                // Mesa, leaving the window invisible.
+                match Self::create_ext_with_msaa(wgl, extensions.clone(), hdc, true) {
+                    Ok(state) => return Ok(state),
+                    Err(err_msaa) => {
+                        log::warn!(
+                            "create_ext (with MSAA) failed ({}); retrying without MSAA",
+                            err_msaa
+                        );
+                    }
+                }
+                let wgl_retry = WglWrapper::load()?;
+                return match Self::create_ext_with_msaa(wgl_retry, extensions, hdc, false) {
                     Ok(state) => Ok(state),
                     Err(err) => {
                         log::warn!(
@@ -194,13 +226,21 @@ impl GlState {
                         Self::create_basic(wgl, window)
                     }
                 };
+                // --- end weezterm remote features ---
             }
         }
 
         Self::create_basic(wgl, window)
     }
 
-    fn create_ext(wgl: WglWrapper, extensions: String, hdc: HDC) -> anyhow::Result<Self> {
+    // --- weezterm remote features ---
+    fn create_ext_with_msaa(
+        wgl: WglWrapper,
+        extensions: String,
+        hdc: HDC,
+        msaa: bool,
+    ) -> anyhow::Result<Self> {
+        // --- end weezterm remote features ---
         use ffiextra::*;
 
         let mut attribs: Vec<i32> = vec![
@@ -220,11 +260,15 @@ impl GlState {
             24,
             STENCIL_BITS_ARB as i32,
             8,
-            SAMPLE_BUFFERS_ARB as i32,
-            1,
-            SAMPLES_ARB as i32,
-            4,
         ];
+        // --- weezterm remote features ---
+        if msaa {
+            attribs.push(SAMPLE_BUFFERS_ARB as i32);
+            attribs.push(1);
+            attribs.push(SAMPLES_ARB as i32);
+            attribs.push(4);
+        }
+        // --- end weezterm remote features ---
 
         if has_extension(&extensions, "WGL_ARB_framebuffer_sRGB") {
             log::trace!("will request FRAMEBUFFER_SRGB_CAPABLE_ARB");
@@ -258,6 +302,13 @@ impl GlState {
         if num_formats == 0 {
             anyhow::bail!("ChoosePixelFormatARB returned 0 formats");
         }
+        // --- weezterm remote features ---
+        log::debug!(
+            "ChoosePixelFormatARB returned format_id={} (msaa={})",
+            format_id,
+            msaa
+        );
+        // --- end weezterm remote features ---
 
         let mut pfd: PIXELFORMATDESCRIPTOR = unsafe { std::mem::zeroed() };
 
@@ -270,10 +321,24 @@ impl GlState {
             )
         };
         if res == 0 {
-            anyhow::bail!(
-                "DescribePixelFormat function failed: {}",
+            // --- weezterm remote features ---
+            // Mesa llvmpipe's WGL ICD invents pixel format IDs that
+            // don't exist in the system GDI format database, so the
+            // Win32 DescribePixelFormat call returns ERROR_INVALID_PARAMETER
+            // (87). SetPixelFormat itself only uses the format ID
+            // (the PFD argument is informational), so we can skip
+            // the describe step and pass a zeroed PFD. Fill in
+            // nSize/nVersion to keep SetPixelFormat happy.
+            log::debug!(
+                "DescribePixelFormat({}) failed ({}); proceeding with zeroed PFD \
+                 (Mesa-WGL ICD path)",
+                format_id,
                 std::io::Error::last_os_error()
             );
+            pfd = unsafe { std::mem::zeroed() };
+            pfd.nSize = std::mem::size_of::<PIXELFORMATDESCRIPTOR>() as u16;
+            pfd.nVersion = 1;
+            // --- end weezterm remote features ---
         }
 
         let res = unsafe { SetPixelFormat(hdc, format_id, &pfd) };
@@ -284,39 +349,69 @@ impl GlState {
             );
         }
 
-        let mut attribs = vec![
-            CONTEXT_MAJOR_VERSION_ARB as i32,
-            4,
-            CONTEXT_MINOR_VERSION_ARB as i32,
-            5,
-            CONTEXT_PROFILE_MASK_ARB as i32,
-            CONTEXT_CORE_PROFILE_BIT_ARB as i32,
-        ];
+        // --- weezterm remote features ---
+        // Try the requested OpenGL version first (4.5 core), then fall
+        // back to lower versions. Mesa llvmpipe builds for Windows
+        // (mesa.fdossena.com) only support up to OpenGL 3.3, so we
+        // need this fallback in any setup where Mesa is the
+        // OpenGL driver. glium itself only requires 3.0.
+        let candidates: &[(i32, i32)] = &[(4, 5), (3, 3), (3, 2), (3, 0)];
+        let mut last_err: Option<u32> = None;
+        let mut rc = std::ptr::null();
+        for &(maj, min) in candidates {
+            let mut attribs = vec![
+                CONTEXT_MAJOR_VERSION_ARB as i32,
+                maj,
+                CONTEXT_MINOR_VERSION_ARB as i32,
+                min,
+                CONTEXT_PROFILE_MASK_ARB as i32,
+                CONTEXT_CORE_PROFILE_BIT_ARB as i32,
+            ];
 
-        if has_extension(&extensions, "WGL_ARB_create_context_robustness") {
-            log::trace!("requesting robustness features");
-            attribs.push(CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB as i32);
-            attribs.push(LOSE_CONTEXT_ON_RESET_ARB as i32);
-            attribs.push(CONTEXT_FLAGS_ARB as i32);
-            attribs.push(CONTEXT_ROBUST_ACCESS_BIT_ARB as i32);
-        }
-        attribs.push(0);
+            if has_extension(&extensions, "WGL_ARB_create_context_robustness") {
+                log::trace!("requesting robustness features");
+                attribs.push(CONTEXT_RESET_NOTIFICATION_STRATEGY_ARB as i32);
+                attribs.push(LOSE_CONTEXT_ON_RESET_ARB as i32);
+                attribs.push(CONTEXT_FLAGS_ARB as i32);
+                attribs.push(CONTEXT_ROBUST_ACCESS_BIT_ARB as i32);
+            }
+            attribs.push(0);
 
-        let rc = unsafe {
-            wgl.ext
-                .as_ref()
-                .unwrap()
-                .CreateContextAttribsARB(hdc as _, null(), attribs.as_ptr())
-        };
+            rc = unsafe {
+                wgl.ext.as_ref().unwrap().CreateContextAttribsARB(
+                    hdc as _,
+                    null(),
+                    attribs.as_ptr(),
+                )
+            };
 
-        if rc.is_null() {
+            if !rc.is_null() {
+                log::debug!(
+                    "CreateContextAttribsARB succeeded for OpenGL {}.{} core",
+                    maj,
+                    min
+                );
+                break;
+            }
             let err = unsafe { winapi::um::errhandlingapi::GetLastError() };
-            anyhow::bail!(
-                "CreateContextAttribsARB failed, GetLastError={} {:x}",
+            last_err = Some(err);
+            log::debug!(
+                "CreateContextAttribsARB({}.{} core) failed, GetLastError={} {:x}",
+                maj,
+                min,
                 err,
                 err
             );
         }
+
+        if rc.is_null() {
+            anyhow::bail!(
+                "CreateContextAttribsARB failed for all candidate \
+                 OpenGL versions (last GetLastError={:?})",
+                last_err
+            );
+        }
+        // --- end weezterm remote features ---
 
         unsafe {
             wgl.wgl.MakeCurrent(hdc as *mut _, rc);

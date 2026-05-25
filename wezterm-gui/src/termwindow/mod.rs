@@ -972,8 +972,43 @@ impl TermWindow {
         // `config.front_end`. We treat that case as if the user picked
         // `Auto` so the regular Auto routing below resolves it.
         let env_override_active = ::window::diagnostics::render_mode_override().is_some();
+        // RDP/virtual-GPU short-circuit (2026-05): wgpu/WARP's
+        // `CreateSwapChainForHwnd` and `ResizeBuffers` both block for
+        // 3.6 s+ on a virtual GPU, leaving the user staring at a
+        // DWM-stretched OLD frame for the entire resize. The Mesa
+        // llvmpipe (`opengl32.dll` shipped in `assets/windows/mesa/`)
+        // path through glium has no DXGI swap chain at all and
+        // resizes in milliseconds even under RDP. When the user has
+        // not explicitly picked a backend (i.e. they are on the
+        // default `Auto`) and we detect an RDP session or only
+        // virtual GPUs, override `Auto` → `OpenGL` so the
+        // `_ => enable_opengl()` arm below loads Mesa via
+        // `prefer_swrast()` (see `window/src/configuration.rs`).
+        // Explicit `WebGpu`, `WebGpuHwnd`, or `WEEZTERM_RENDER_MODE`
+        // still take precedence so power users can opt back in.
+        let force_swrast_for_rdp = !env_override_active
+            && config.front_end == FrontEndSelection::Auto
+            && ({
+                #[cfg(windows)]
+                {
+                    ::window::os::windows::is_running_in_rdp_session()
+                        || ::window::os::windows::only_virtual_gpus_available()
+                }
+                #[cfg(not(windows))]
+                {
+                    false
+                }
+            });
+        #[allow(deprecated)]
         let effective_front_end = if env_override_active {
             FrontEndSelection::Auto
+        } else if force_swrast_for_rdp {
+            log::info!(
+                "[render] RDP/virtual-GPU detected with front_end=Auto; \
+                 routing to OpenGL+Mesa to avoid wgpu/WARP swap-chain \
+                 latency on resize"
+            );
+            FrontEndSelection::OpenGL
         } else {
             config.front_end
         };

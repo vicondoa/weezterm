@@ -30,6 +30,18 @@
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/>
     </application>
   </compatibility>
+  <!-- weezterm remote features -->
+  <!--
+    Override the Windows "Known DLLs" entry for opengl32.dll so that
+    the loader picks up our bundled Mesa llvmpipe build (placed next
+    to weezterm-gui.exe) instead of the System32 stub. This bypasses
+    the slow wgpu/WARP swap-chain on RDP sessions and gives us a
+    working OpenGL 4+ implementation that glium can use. The `<file>`
+    element makes opengl32 a private assembly file; that explicitly
+    takes precedence over the HKLM\SYSTEM\...\KnownDLLs registry list.
+  -->
+  <file name="opengl32.dll" />
+  <!-- end weezterm remote features -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
     <security>
       <requestedPrivileges>

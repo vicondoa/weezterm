@@ -115,6 +115,22 @@ cp assets/windows/conhost/OpenConsole.exe "$WIN_DIR/" 2>/dev/null || true
 cp assets/windows/angle/libEGL.dll       "$WIN_DIR/" 2>/dev/null || true
 cp assets/windows/angle/libGLESv2.dll    "$WIN_DIR/" 2>/dev/null || true
 
+# --- weezterm remote features ---
+# Mesa's opengl32.dll AND its gallium megadriver
+# (libgallium_wgl.dll) must sit next to weezterm-gui.exe so the SxS
+# manifest <file name="opengl32.dll"/> redirection picks them up in
+# preference to the System32 KnownDLLs entry. Both files are
+# required: since Mesa 21.3.0 the megadriver was split out of
+# opengl32.dll. wezterm-gui/build.rs copies them into
+# `target/$PROFILE/` next to the .exe; we mirror that into the
+# cross-pkg so `wezterm.exe connect` and direct
+# `weezterm-gui.exe` invocations both work out of the package.
+cp "target/$PROFILE/opengl32.dll"        "$WIN_DIR/" 2>/dev/null || \
+    cp assets/windows/mesa/opengl32.dll  "$WIN_DIR/"
+cp "target/$PROFILE/libgallium_wgl.dll"  "$WIN_DIR/" 2>/dev/null || \
+    cp assets/windows/mesa/libgallium_wgl.dll "$WIN_DIR/"
+# --- end weezterm remote features ---
+
 # Linux binaries — read from WSL's build output
 WSL_TARGET="$WSL_ROOT/target/$PROFILE"
 wsl.exe -d "$WSL_DISTRO" -- bash -c "

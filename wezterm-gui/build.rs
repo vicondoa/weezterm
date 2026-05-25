@@ -46,11 +46,23 @@ fn main() {
             }
         }
 
-        {
-            let dest_mesa = exe_output_dir.join("mesa");
-            let _ = std::fs::create_dir(&dest_mesa);
-            let dest_name = dest_mesa.join("opengl32.dll");
-            let src_name = windows_dir.join("mesa").join("opengl32.dll");
+        // --- weezterm remote features ---
+        // Place Mesa's WGL runtime (opengl32.dll) AND its gallium
+        // megadriver (libgallium_wgl.dll) directly next to
+        // weezterm-gui.exe (NOT in a `mesa/` subfolder). The
+        // application manifest declares `<file name="opengl32.dll"/>`,
+        // which tells the Windows loader to bypass the KnownDLLs
+        // registry entry for opengl32 and load our bundled Mesa
+        // build from the application directory instead. This is the
+        // only reliable way to override a KnownDLL on modern Windows;
+        // AddDllDirectory / SetDefaultDllDirectories / .local files
+        // do not work for opengl32 because it is a Known DLL.
+        //
+        // Since Mesa 21.3.0 the gallium megadriver was split out of
+        // `opengl32.dll`, so both files must be deployed together.
+        for name in &["opengl32.dll", "libgallium_wgl.dll"] {
+            let dest_name = exe_output_dir.join(name);
+            let src_name = windows_dir.join("mesa").join(name);
             if !dest_name.exists() {
                 std::fs::copy(&src_name, &dest_name)
                     .context(format!(
@@ -61,6 +73,7 @@ fn main() {
                     .unwrap();
             }
         }
+        // --- end weezterm remote features ---
 
         // If a file named `.tag` is present, we'll take its contents for the
         // version number that we report in wezterm -h.

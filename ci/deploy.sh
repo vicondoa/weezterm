@@ -170,9 +170,15 @@ case $OSTYPE in
       assets/windows/angle/libEGL.dll \
       assets/windows/angle/libGLESv2.dll \
       $zipdir
-    mkdir $zipdir/mesa
-    cp $TARGET_DIR/release/mesa/opengl32.dll \
-        $zipdir/mesa
+    # --- weezterm remote features ---
+    # Mesa's opengl32.dll AND its gallium megadriver
+    # (libgallium_wgl.dll) must sit next to weezterm-gui.exe so
+    # that the SxS manifest <file name="opengl32.dll"/> redirection
+    # picks them up in preference to the System32 KnownDLLs entry.
+    # Both files are required: since Mesa 21.3.0 the megadriver was
+    # split out of opengl32.dll.
+    cp $TARGET_DIR/release/opengl32.dll $TARGET_DIR/release/libgallium_wgl.dll $zipdir
+    # --- end weezterm remote features ---
     7z a -tzip $zipname $zipdir
     iscc.exe -DMyAppVersion=${TAG_NAME#nightly} -F${instname} ci/windows-installer.iss
     ;;
