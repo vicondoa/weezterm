@@ -850,6 +850,24 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
+            // --- weezterm remote features ---
+            let hide_client_decorations = window_config.decoration_mode == DecorationMode::Server;
+            if self.window_frame.is_hidden() != hide_client_decorations {
+                self.window_frame.set_hidden(hide_client_decorations);
+                if !hide_client_decorations {
+                    let width = NonZeroU32::new(
+                        self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32,
+                    )
+                    .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(
+                        self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32,
+                    )
+                    .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    self.window_frame.resize(width, height);
+                }
+                pending.refresh_decorations = true;
+            }
+            // --- end weezterm remote features ---
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);
