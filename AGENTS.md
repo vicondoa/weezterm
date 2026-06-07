@@ -183,6 +183,24 @@ For each phase:
    every selected reviewer returns `signoff: true`.
 5. **Advance/merge** — only then may the next phase begin or the PR merge.
 
+A phase closes only on **unanimous (N/N)** sign-off. Each reviewer returns a
+JSON record:
+
+```json
+{
+  "engineer": "security",
+  "signoff": true,
+  "summary": "What was reviewed and the overall posture.",
+  "recommendations": []
+}
+```
+
+By policy, `signoff` is `true` **iff** `recommendations` is `[]`. If any
+reviewer returns findings, land the fixes, rerun tests, and start another panel
+round. Green tests do not waive this gate. See
+[ADR 0009](docs/adr/0009-panel-review-and-adr-methodology.md) for the binding
+methodology decision.
+
 Use the nixling default panel roster unless a plan explicitly narrows the panel:
 
 | Engineer | Focus |
@@ -203,6 +221,63 @@ hotfixes may skip the pre-fix panel but need a post-fix panel; documentation-onl
 changes may skip unless they describe load-bearing behavior. Autopilot mode does
 not waive the panel gate.
 
+## Architecture Decision Records (ADRs)
+
+Load-bearing fork decisions are recorded as ADRs under
+[`docs/adr/`](docs/adr/README.md). An ADR explains **why** the fork diverges
+from upstream WezTerm where it does, so future contributors (and upstream-merge
+work) can tell intentional divergence from accidental drift.
+
+- **When to write one:** a change that diverges from upstream in a way that must
+  survive merges, establishes/changes a fork-wide policy, or that a reviewer
+  would later ask "why was it done this way?". Trivial, reversible, or
+  purely-internal changes don't need one.
+- **How:** copy [`docs/adr/TEMPLATE.md`](docs/adr/TEMPLATE.md) to
+  `NNNN-short-title.md`, fill in context / decision / consequences, and add a row
+  to the [index](docs/adr/README.md). ADRs are immutable once `Accepted`; change
+  a decision by writing a new ADR that supersedes the old one.
+- **Current ADRs** cover: clean-merge discipline (0001), upstream-sync policy
+  (0002), remote SSH extensions (0003), the rebrand + binary compat (0004),
+  unified SemVer versioning (0005), the open-url security policy (0006), Windows
+  rendering modes + state persistence (0007), CI/CD unification (0008), and this
+  panel-review + ADR methodology (0009).
+
+## Commit conventions
+
+WeezTerm uses a **hybrid** convention:
+
+- **Subject.** Short, imperative, with a conventional-commit prefix naming the
+  area: `feat:`, `fix:`, `chore:`, `docs:`, `build:`, `ci:`, `refactor:`.
+- **Body.** Wrap at ~72 cols; explain *why*, not what.
+- **Panel-finding tag (optional).** Commits produced in a panel-fix round may end
+  the subject with a parenthesized nixling-style tag, e.g. `( W1fu1 H3 )` —
+  wave 1, follow-up round 1, addressing HIGH-3 (`C`/`H`/`M`/`L` = finding
+  severity). Use this only for panel-fix rounds; everyday commits don't need it.
+- **`ADR:` trailer (scoped).** A commit that implements or changes an
+  ADR-governed decision carries an `ADR:` trailer line in the body, e.g.
+  `ADR: 0007` (comma-separate multiples: `ADR: 0007, 0009`). This keeps the
+  subject tag clean while staying `grep`-able. Only commits touching an
+  ADR-governed decision need it — not every commit.
+- **Co-author trailer.** Keep the `Co-authored-by: Copilot <…>` trailer on
+  agent-assisted commits.
+
+Example:
+
+```
+fix: clamp restored window to the target monitor work area ( W2fu1 H1 )
+
+WINDOWPLACEMENT restore could place the window off-screen when the
+saved monitor is gone. Clamp to the nearest monitor's work area.
+
+ADR: 0007
+Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+```
+
+**Merge policy.** Feature PRs to `main` are **squash-merge only**. The one
+exception is an upstream sync, which lands as a **true merge commit** so the
+merge-base advances; see
+[ADR 0002](docs/adr/0002-upstream-sync-policy.md).
+
 ## WeezTerm Remote Features
 
 All WeezTerm-specific additions (as opposed to upstream WezTerm code) are marked with:
@@ -211,6 +286,9 @@ All WeezTerm-specific additions (as opposed to upstream WezTerm code) are marked
 ```
 
 This makes merge conflicts with upstream easy to identify and resolve.
+
+> Decision record: [ADR 0003 — Remote SSH extensions](docs/adr/0003-remote-ssh-extensions.md);
+> full design in [`docs/remote-extensions.md`](docs/remote-extensions.md).
 
 ### New files (fork-only, no merge risk):
 - `mux/src/port_detect.rs` — Remote port detection
@@ -227,6 +305,9 @@ and always delimited with the `// --- weezterm remote features ---` comment.
 
 WeezTerm is a fork of WezTerm. All fork-specific code must be structured for easy merging.
 Follow these rules strictly:
+
+> Decision records: [ADR 0001 — Fork strategy and clean-merge discipline](docs/adr/0001-fork-strategy-and-clean-merge-discipline.md)
+> and [ADR 0002 — Upstream sync policy](docs/adr/0002-upstream-sync-policy.md).
 
 ### Rule 1: Mark every change with begin AND end sentinel comments
 Every block of WeezTerm-specific code in an upstream file **must** be wrapped
@@ -332,6 +413,8 @@ real `weezterm-gui.exe` binary, manipulates windows via Win32 API, captures
 screenshots, and asserts on behavior. **Run these tests after any changes to
 window management, resize, DPI handling, or startup code.**
 
+> Decision record: [ADR 0007 — Windows rendering modes and window-state persistence](docs/adr/0007-windows-rendering-modes-and-state-persistence.md).
+
 ### Automated Tests
 
 ```bash
@@ -404,6 +487,8 @@ DPI scaling).
 
 ## CI/CD Pipelines
 
+> Decision record: [ADR 0008 — CI/CD unification](docs/adr/0008-cicd-unification.md).
+
 ### Active workflows (WeezTerm fork)
 
 | Workflow | File | Triggers | Purpose |
@@ -419,7 +504,9 @@ DPI scaling).
 
 ### Disabled workflows (upstream, kept for merge compatibility)
 
-All `gen_*.yml` workflows (33 files) are **disabled via the GitHub Actions API**.
+All `gen_*.yml` workflows (21 files, after upstream dropped the EOL
+debian11/fedora39/fedora40/ubuntu20.04 sets) are **disabled via the GitHub
+Actions API**.
 They are upstream WezTerm per-platform build workflows that our unified
 `weezterm_build.yml` replaces. The files are **kept identical to upstream** so
 that `git merge upstream/main` produces no conflicts.
@@ -431,6 +518,8 @@ Also disabled: `nix_continuous.yml`, `nix-update-flake.yml`, `pages.yml`,
 `verify-pages.yml`.
 
 ### Release process
+
+> Decision record: [ADR 0005 — Unified SemVer versioning](docs/adr/0005-unified-semver-versioning.md).
 
 1. Bump `version` in `wezterm-version/Cargo.toml` (e.g., `0.2.0` → `0.3.0`)
 2. Commit: `git commit -am "chore: bump version to 0.3.0"`
