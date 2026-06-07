@@ -652,7 +652,9 @@ impl WaylandWindowInner {
 
     fn refresh_frame(&mut self) {
         if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-            self.window_frame.draw();
+            if self.window_frame.draw() {
+                self.surface().commit();
+            }
         }
     }
 
@@ -907,7 +909,7 @@ impl WaylandWindowInner {
             }
             if pending.configure.is_none() {
                 self.apply_current_window_geometry();
-                self.surface().commit();
+                pending.refresh_decorations = true;
             }
             // --- end weezterm remote features ---
             self.window_frame.update_state(window_config.state);
