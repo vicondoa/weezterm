@@ -249,17 +249,23 @@ impl WaylandWindow {
 
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
+        } else if decorations == WindowDecorations::default() {
+            Some(DecorationMode::Server)
         // --- weezterm remote features ---
-        // Niri does not provide server-side titlebars; use WeezTerm's
-        // client-side frame whenever a titlebar is requested.
+        // Non-default titlebar modes need WeezTerm's client-side frame.
         } else if decorations.contains(WindowDecorations::TITLE) {
             Some(DecorationMode::Client)
         // --- end weezterm remote features ---
-        } else if decorations == WindowDecorations::default() {
-            Some(DecorationMode::Server)
         } else {
             Some(DecorationMode::Client)
         };
+        // --- weezterm remote features ---
+        log::debug!(
+            "Wayland requested decoration mode {:?} for {:?}",
+            decor_mode,
+            decorations
+        );
+        // --- end weezterm remote features ---
         window.request_decoration_mode(decor_mode);
 
         let mut window_frame = {
@@ -851,8 +857,14 @@ impl WaylandWindowInner {
 
         if let Some(ref window_config) = pending.window_configure {
             // --- weezterm remote features ---
-            let hide_client_decorations = window_config.decoration_mode == DecorationMode::Server;
+            let hide_client_decorations = self.config.window_decorations == WindowDecorations::NONE
+                || window_config.decoration_mode == DecorationMode::Server;
             if self.window_frame.is_hidden() != hide_client_decorations {
+                log::debug!(
+                    "Wayland compositor decoration mode {:?}; client frame hidden={}",
+                    window_config.decoration_mode,
+                    hide_client_decorations
+                );
                 self.window_frame.set_hidden(hide_client_decorations);
                 if !hide_client_decorations {
                     let width = NonZeroU32::new(

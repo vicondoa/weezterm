@@ -38,19 +38,24 @@ For more details, see:
 `wezterm` will look for a [lua](https://www.lua.org/manual/5.3/manual.html)
 configuration file using the logic shown below.
 
+<!-- --- weezterm remote features --- -->
 !!! tip
-    The recommendation is to place your configuration file at `$HOME/.wezterm.lua`
-    (`%USERPROFILE%/.wezterm.lua` on Windows) to get started.
-
-More complex configurations that need to span multiple files can be placed in
-`$XDG_CONFIG_HOME/wezterm/wezterm.lua` (for X11/Wayland) or
-`$HOME/.config/wezterm/wezterm.lua` (for all other systems).
+    For WeezTerm, the recommendation is to place your configuration file at
+    `$HOME/.weezterm.lua`, or at `$XDG_CONFIG_HOME/weezterm/weezterm.lua` for
+    configurations that span multiple files. Legacy upstream-compatible
+    `.wezterm.lua` and `wezterm.lua` locations are still supported as fallbacks.
+<!-- --- end weezterm remote features --- -->
 
 <!-- --- weezterm remote features --- -->
-For WeezTerm, branded config names are preferred:
-`$XDG_CONFIG_HOME/weezterm/weezterm.lua` or
-`$HOME/.config/weezterm/weezterm.lua`. If those files do not exist, WeezTerm
-falls back to upstream-compatible `wezterm.lua` locations.
+More complex configurations that need to span multiple files can be placed in
+`$XDG_CONFIG_HOME/weezterm/weezterm.lua` (or
+`$HOME/.config/weezterm/weezterm.lua` when `XDG_CONFIG_HOME` is unset).
+<!-- --- end weezterm remote features --- -->
+
+<!-- --- weezterm remote features --- -->
+WeezTerm looks for branded config names first, then falls back to
+upstream-compatible WezTerm names. Explicit CLI and environment overrides still
+take precedence over automatic discovery.
 <!-- --- end weezterm remote features --- -->
 
 {% raw %}
@@ -60,16 +65,21 @@ graph TD
   A -->|Yes| B{{Can that file be loaded?}}
   B -->|Yes| C[Use it]
   B -->|No| D[Use built-in default configuration]
-  A -->|No| E{{$WEZTERM_CONFIG_FILE<br/>environment set?}}
+  A -->|No| E{{$WEEZTERM_CONFIG_FILE or<br/>$WEZTERM_CONFIG_FILE<br/>environment set?}}
   E -->|Yes| B
-  E -->|No| F{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as wezterm.exe?<br/>(Thumb drive mode)"}}
+  E -->|No| F{{"Running on Windows and<br/>weezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(Thumb drive mode)"}}
   F -->|Yes| B
-  F -->|No| H{{Is $XDG_CONFIG_HOME<br/>environment set and<br/>wezterm/wezterm.lua<br/>exists inside it?}}
+  F -->|No| G{{"$HOME/.weezterm.lua<br/>exists?"}}
+  G -->|Yes| B
+  G -->|No| H{{Does<br/>$XDG_CONFIG_HOME/weezterm/weezterm.lua<br/>or<br/>$HOME/.config/weezterm/weezterm.lua<br/>exist?}}
   H -->|Yes| B
-  J --> B
-  H -->|No| K{{Does $HOME/.config/wezterm/wezterm.lua exist?}}
+  H -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive mode)"}}
+  I -->|Yes| B
+  I -->|No| J{{"$HOME/.wezterm.lua<br/>exists?"}}
+  J -->|Yes| B
+  J -->|No| K{{Does a legacy<br/>wezterm/wezterm.lua<br/>config file exist?}}
   K -->|Yes| B
-  K -->|No| J[Use $HOME/.wezterm.lua]
+  K -->|No| L[Use built-in default configuration]
 ```
 {% endraw %}
 
