@@ -344,6 +344,7 @@ impl WaylandWindow {
             gl_state: None,
             // --- weezterm remote features ---
             current_monitor_name: None,
+            last_reported_decoration_state: None,
             // --- end weezterm remote features ---
         }));
 
@@ -613,6 +614,7 @@ pub struct WaylandWindowInner {
     gl_state: Option<Rc<glium::backend::Context>>,
     // --- weezterm remote features ---
     current_monitor_name: Option<String>,
+    last_reported_decoration_state: Option<(DecorationMode, bool)>,
     // --- end weezterm remote features ---
 }
 
@@ -859,12 +861,16 @@ impl WaylandWindowInner {
             // --- weezterm remote features ---
             let hide_client_decorations = self.config.window_decorations == WindowDecorations::NONE
                 || window_config.decoration_mode == DecorationMode::Server;
-            if self.window_frame.is_hidden() != hide_client_decorations {
+            let decoration_state = (window_config.decoration_mode, hide_client_decorations);
+            if self.last_reported_decoration_state != Some(decoration_state) {
                 log::debug!(
                     "Wayland compositor decoration mode {:?}; client frame hidden={}",
                     window_config.decoration_mode,
                     hide_client_decorations
                 );
+                self.last_reported_decoration_state = Some(decoration_state);
+            }
+            if self.window_frame.is_hidden() != hide_client_decorations {
                 self.window_frame.set_hidden(hide_client_decorations);
                 if !hide_client_decorations {
                     let width = NonZeroU32::new(
@@ -876,6 +882,14 @@ impl WaylandWindowInner {
                     )
                     .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
                     self.window_frame.resize(width, height);
+                }
+                let (x, y) = self.window_frame.location();
+                let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
+                let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
+                if let Some(window) = self.window.as_mut() {
+                    window
+                        .xdg_surface()
+                        .set_window_geometry(x, y, surface_width, surface_height);
                 }
                 pending.refresh_decorations = true;
             }

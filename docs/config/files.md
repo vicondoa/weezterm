@@ -1,8 +1,10 @@
 
 ## Quick Start
 
-Create a file named `.wezterm.lua` in your home directory, with the following
+<!-- --- weezterm remote features --- -->
+Create a file named `.weezterm.lua` in your home directory, with the following
 contents:
+<!-- --- end weezterm remote features --- -->
 
 ```lua
 -- Pull in the wezterm API
@@ -58,6 +60,7 @@ upstream-compatible WezTerm names. Explicit CLI and environment overrides still
 take precedence over automatic discovery.
 <!-- --- end weezterm remote features --- -->
 
+<!-- --- weezterm remote features --- -->
 {% raw %}
 ```mermaid
 graph TD
@@ -73,7 +76,9 @@ graph TD
   G -->|Yes| B
   G -->|No| H{{Does<br/>$XDG_CONFIG_HOME/weezterm/weezterm.lua<br/>or<br/>$HOME/.config/weezterm/weezterm.lua<br/>exist?}}
   H -->|Yes| B
-  H -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive mode)"}}
+  H -->|No| H2{{Does a branded config dir<br/>compat file<br/>weezterm/wezterm.lua exist?}}
+  H2 -->|Yes| B
+  H2 -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive mode)"}}
   I -->|Yes| B
   I -->|No| J{{"$HOME/.wezterm.lua<br/>exists?"}}
   J -->|Yes| B
@@ -82,6 +87,7 @@ graph TD
   K -->|No| L[Use built-in default configuration]
 ```
 {% endraw %}
+<!-- --- end weezterm remote features --- -->
 
 Prior to version 20210314-114017-04b7cedd, if the candidate file exists but
 failed to parse, wezterm would treat it as though it didn't exist and continue
@@ -94,6 +100,11 @@ error will be shown and the default configuration will be used instead.
     the same location as wezterm.exe.  That is shown in the chart above as thumb
     drive mode.  It is **not** recommended to store your configs in that
     location if you are not running off a thumb drive.
+
+<!-- --- weezterm remote features --- -->
+For WeezTerm, thumb-drive mode checks `weezterm.lua` next to `weezterm.exe`
+first, then falls back to the upstream-compatible `wezterm.lua` name.
+<!-- --- end weezterm remote features --- -->
 
 `wezterm` will watch the config file that it loads; if/when it changes, the
 configuration will be automatically reloaded and the majority of options will
@@ -188,18 +199,23 @@ config.color_scheme = 'Batman'
 If you'd like to break apart your configuration into multiple files, you'll
 be interested in this information.
 
-The Lua `package.path` is configured with the following paths in this order:
+<!-- --- weezterm remote features --- -->
+The Lua `package.path` is configured to include these WeezTerm locations:
 
-* On Windows: a `wezterm_modules` dir in the same directory as `wezterm.exe`. This is for thumb drive mode, and is not recommended to be used otherwise.
-* `~/.config/wezterm`
-* `~/.wezterm`
-* A system specific set of paths which may (or may not!) find locally installed lua modules
+* `$XDG_CONFIG_HOME/weezterm` or `~/.config/weezterm`
+* `~/.weezterm`
+* Legacy upstream-compatible `~/.config/wezterm` and `~/.wezterm` locations
+* On Windows: a `wezterm_modules` dir in the same directory as `weezterm.exe`. This is for thumb drive mode, and is not recommended to be used otherwise.
+* A system-specific set of paths which may (or may not!) find locally installed Lua modules
+<!-- --- end weezterm remote features --- -->
 
-That means that if you wanted to break your config up into a `helpers.lua` file
-you would place it in `~/.config/wezterm/helpers.lua` with contents like this:
+<!-- --- weezterm remote features --- -->
+That means that if you wanted to break your config up into a `helpers.lua` file,
+you would place it in `~/.config/weezterm/helpers.lua` with contents like this:
+<!-- --- end weezterm remote features --- -->
 
 ```lua
--- I am helpers.lua and I should live in ~/.config/wezterm/helpers.lua
+-- I am helpers.lua and I should live in ~/.config/weezterm/helpers.lua
 
 local wezterm = require 'wezterm'
 
@@ -228,8 +244,9 @@ end
 return module
 ```
 
-and then in your `wezterm.lua`
-you would use it like this:
+<!-- --- weezterm remote features --- -->
+and then in your `weezterm.lua` you would use it like this:
+<!-- --- end weezterm remote features --- -->
 
 ```lua
 local helpers = require 'helpers'

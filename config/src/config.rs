@@ -2107,14 +2107,21 @@ fn add_default_config_file_candidates(
     for dir in config_dirs {
         paths.push(PathPossibility::optional(dir.join("weezterm.lua")));
     }
+    for dir in config_dirs.iter().filter(|dir| is_branded_config_dir(dir)) {
+        paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
+    }
 
     if let Some(dir) = portable_config_dir {
         paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
     }
     paths.push(PathPossibility::optional(home_dir.join(".wezterm.lua")));
-    for dir in config_dirs {
+    for dir in config_dirs.iter().filter(|dir| !is_branded_config_dir(dir)) {
         paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
     }
+}
+
+fn is_branded_config_dir(dir: &Path) -> bool {
+    dir.file_name().and_then(OsStr::to_str) == Some("weezterm")
 }
 
 #[cfg(test)]
@@ -2141,9 +2148,9 @@ mod weezterm_config_file_tests {
                 PathBuf::from("/home/user/.weezterm.lua"),
                 PathBuf::from("/xdg/weezterm/weezterm.lua"),
                 PathBuf::from("/xdg/wezterm/weezterm.lua"),
+                PathBuf::from("/xdg/weezterm/wezterm.lua"),
                 PathBuf::from("/portable/wezterm.lua"),
                 PathBuf::from("/home/user/.wezterm.lua"),
-                PathBuf::from("/xdg/weezterm/wezterm.lua"),
                 PathBuf::from("/xdg/wezterm/wezterm.lua"),
             ]
         );
