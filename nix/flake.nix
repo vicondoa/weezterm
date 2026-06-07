@@ -125,33 +125,31 @@
 
             # hash does not work well with NixOS
             substituteInPlace assets/shell-integration/wezterm.sh \
-              --replace-fail 'hash wezterm 2>/dev/null' 'command type -P wezterm &>/dev/null' \
+              --replace-fail 'hash wezterm 2>/dev/null' 'command type -P weezterm &>/dev/null' \
+              --replace-fail 'wezterm set-working-directory' 'weezterm set-working-directory' \
               --replace-fail 'hash base64 2>/dev/null' 'command type -P base64 &>/dev/null' \
               --replace-fail 'hash hostname 2>/dev/null' 'command type -P hostname &>/dev/null' \
               --replace-fail 'hash hostnamectl 2>/dev/null' 'command type -P hostnamectl &>/dev/null'
+
+            # --- weezterm remote features ---
+            substituteInPlace assets/shell-completion/bash \
+              --replace-fail 'wezterm' 'weezterm'
+            substituteInPlace assets/shell-completion/fish \
+              --replace-fail 'wezterm' 'weezterm'
+            substituteInPlace assets/shell-completion/zsh \
+              --replace-fail 'wezterm' 'weezterm'
+            # --- end weezterm remote features ---
           '';
 
           # Disable cargo-auditable until https://github.com/rust-secure-code/cargo-auditable/issues/124 is fixed
           auditable = false;
 
           preFixup =
-            # --- weezterm remote features ---
-            # The [[bin]] sections rename outputs to weezterm*; create compat
-            # symlinks so patchelf / macOS bundle logic still works.
-            ''
-              for old in wezterm wezterm-gui wezterm-mux-server; do
-                new="''${old/wezterm/weezterm}"
-                if [ -f "$out/bin/$new" ] && [ ! -e "$out/bin/$old" ]; then
-                  ln -s "$new" "$out/bin/$old"
-                fi
-              done
-            ''
-            # --- end weezterm remote features ---
-            + lib.optionalString stdenv.isLinux /* bash */ ''
+            lib.optionalString stdenv.isLinux /* bash */ ''
               patchelf \
                 --add-needed "${pkgs.libGL}/lib/libEGL.so.1" \
                 --add-needed "${pkgs.vulkan-loader}/lib/libvulkan.so.1" \
-                $out/bin/wezterm-gui
+                $out/bin/weezterm-gui
             ''
             + lib.optionalString stdenv.isDarwin /* bash */ ''
               mkdir -p "$out/Applications"
@@ -159,11 +157,13 @@
               cp -r assets/macos/WezTerm.app "$OUT_APP"
               rm $OUT_APP/*.dylib
               cp -r assets/shell-integration/* "$OUT_APP"
+              substituteInPlace "$OUT_APP/Contents/Info.plist" \
+                --replace-fail '<string>wezterm-gui</string>' '<string>weezterm-gui</string>'
               # macOS will only recognize our application bundle
               # if the binaries are inside of it. Move them there
               # and create symbolic links for them in bin/.
-              mv $out/bin/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$OUT_APP"
-              ln -s "$OUT_APP"/{wezterm,wezterm-mux-server,wezterm-gui,strip-ansi-escapes} "$out/bin"
+              mv $out/bin/{weezterm,weezterm-mux-server,weezterm-gui,strip-ansi-escapes} "$OUT_APP"
+              ln -s "$OUT_APP"/{weezterm,weezterm-mux-server,weezterm-gui,strip-ansi-escapes} "$out/bin"
             '';
 
           postInstall = ''
@@ -190,7 +190,7 @@
             # --- end weezterm remote features ---
 
             install -Dm644 assets/shell-integration/wezterm.sh -t $out/etc/profile.d
-            installShellCompletion --cmd wezterm \
+            installShellCompletion --cmd weezterm \
               --bash assets/shell-completion/bash \
               --fish assets/shell-completion/fish \
               --zsh assets/shell-completion/zsh
@@ -240,8 +240,16 @@
                 '';
           };
 
-          meta.mainProgram = "wezterm";
+          # --- weezterm remote features ---
+          meta.mainProgram = "weezterm";
         };
+
+        # --- weezterm remote features ---
+        apps.default = {
+          type = "app";
+          program = "${self.packages.${system}.default}/bin/weezterm";
+        };
+        # --- end weezterm remote features ---
 
         devShell = pkgs.mkShell {
           name = "wezterm-shell";
@@ -263,6 +271,9 @@
 
           LD_LIBRARY_PATH = libPath;
         };
+
+        # --- weezterm remote features ---
+        devShells.default = self.devShell.${system};
 
         formatter = pkgs.nixfmt-rfc-style;
       }

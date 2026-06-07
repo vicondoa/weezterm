@@ -7,6 +7,8 @@ on:
     paths:
       - '**/*.rs'
       - '.github/workflows/nix.yml'
+      - 'flake.lock'
+      - 'flake.nix'
       - 'nix/**'
   workflow_dispatch:
   push:
@@ -15,6 +17,8 @@ on:
     paths:
       - '**/*.rs'
       - '.github/workflows/nix.yml'
+      - 'flake.lock'
+      - 'flake.nix'
       - 'nix/**'
 
 jobs:
@@ -30,7 +34,7 @@ jobs:
       - name: Check flake inputs
         uses: DeterminateSystems/flake-checker-action@main
         with:
-          flake-lock-path: ./nix/flake.lock
+          flake-lock-path: ./flake.lock
           ignore-missing-flake-lock: false
       - name: Build default package
-        run: nix build ./nix
+        run: nix build .

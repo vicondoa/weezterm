@@ -172,6 +172,25 @@ config.devcontainer_domains = {
 Same as WezTerm: see [wezterm.org/installation](https://wezterm.org/installation).
 Build from this fork's source for the remote extensions.
 
+### Nix / NixOS
+
+WeezTerm exposes a root flake:
+
+```bash
+nix build github:vicondoa/weezterm
+nix run github:vicondoa/weezterm -- --version
+```
+
+In a NixOS or Home Manager flake:
+
+```nix
+inputs.weezterm.url = "github:vicondoa/weezterm";
+inputs.weezterm.inputs.nixpkgs.follows = "nixpkgs";
+```
+
+Use `inputs.weezterm.packages.${pkgs.stdenv.hostPlatform.system}.default` as the
+package.
+
 ## Getting help
 
 - [WezTerm documentation](https://wezterm.org/) — for all core terminal features

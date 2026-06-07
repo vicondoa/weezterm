@@ -327,7 +327,24 @@ hide:
 
 
     ### Flake
-    
+
+    <!-- --- weezterm remote features --- -->
+
+    For WeezTerm, use the fork's root flake:
+
+    ```nix
+    {
+        inputs.weezterm.url = "github:vicondoa/weezterm";
+        inputs.weezterm.inputs.nixpkgs.follows = "nixpkgs";
+        # ...
+    }
+    ```
+
+    The legacy `github:vicondoa/weezterm?dir=nix` entry point is retained only
+    for compatibility; new configurations should use the root flake.
+
+    <!-- --- end weezterm remote features --- -->
+
     If you need a newer version use the flake. Use the cachix if you want to avoid building WezTerm from source.
 
     The flake is in the `nix` directory, so the url will be something like `github:wezterm/wezterm?dir=nix`
@@ -404,5 +421,3 @@ hide:
 
     [Raw Linux Binary :material-tray-arrow-down:]({{ linux_raw_bin_stable }}){ .md-button }
     [Nightly Raw Linux Binary :material-tray-arrow-down:]({{ linux_raw_bin_nightly }}){ .md-button }
-
-
