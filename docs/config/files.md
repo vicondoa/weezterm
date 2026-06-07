@@ -78,11 +78,11 @@ graph TD
   H -->|Yes| B
   H -->|No| H2{{Does a user config-dir<br/>compat file exist?<br/>weezterm/wezterm.lua,<br/>wezterm/weezterm.lua,<br/>or wezterm/wezterm.lua}}
   H2 -->|Yes| B
-  H2 -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive mode)"}}
+  H2 -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive fallback)"}}
   I -->|Yes| B
   I -->|No| J{{"$HOME/.wezterm.lua<br/>exists?"}}
   J -->|Yes| B
-  J -->|No| K{{Does a legacy<br/>wezterm/wezterm.lua<br/>config file exist?}}
+  J -->|No| K{{Does a system config-dir<br/>candidate exist?<br/>weezterm/weezterm.lua,<br/>weezterm/wezterm.lua,<br/>wezterm/weezterm.lua,<br/>or wezterm/wezterm.lua}}
   K -->|Yes| B
   K -->|No| L[Use built-in default configuration]
 ```
@@ -103,7 +103,8 @@ error will be shown and the default configuration will be used instead.
 
 <!-- --- weezterm remote features --- -->
 For WeezTerm, thumb-drive mode checks `weezterm.lua` next to `weezterm.exe`
-first, then falls back to the upstream-compatible `wezterm.lua` name.
+first. The upstream-compatible portable `wezterm.lua` name remains supported as
+a legacy fallback after branded user config locations.
 <!-- --- end weezterm remote features --- -->
 
 `wezterm` will watch the config file that it loads; if/when it changes, the
@@ -207,12 +208,8 @@ The Lua `package.path` is configured to include these WeezTerm locations:
 * Legacy upstream-compatible `~/.config/wezterm` and `~/.wezterm` locations
 * On Windows: a `wezterm_modules` dir in the same directory as `weezterm.exe`. This is for thumb drive mode, and is not recommended to be used otherwise.
 * A system-specific set of paths which may (or may not!) find locally installed Lua modules
-<!-- --- end weezterm remote features --- -->
-
-<!-- --- weezterm remote features --- -->
 That means that if you wanted to break your config up into a `helpers.lua` file,
 you would place it in `~/.config/weezterm/helpers.lua` with contents like this:
-<!-- --- end weezterm remote features --- -->
 
 ```lua
 -- I am helpers.lua and I should live in ~/.config/weezterm/helpers.lua
@@ -243,6 +240,7 @@ end
 -- return our module table
 return module
 ```
+<!-- --- end weezterm remote features --- -->
 
 <!-- --- weezterm remote features --- -->
 and then in your `weezterm.lua` you would use it like this:

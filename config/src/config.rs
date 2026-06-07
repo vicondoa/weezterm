@@ -2103,12 +2103,14 @@ fn add_default_config_file_candidates(
 ) {
     if let Some(dir) = portable_config_dir {
         paths.push(PathPossibility::optional(dir.join("weezterm.lua")));
-        paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
     }
 
     let (user_dirs, system_dirs) = split_user_and_system_config_dirs(config_dirs);
     paths.push(PathPossibility::optional(home_dir.join(".weezterm.lua")));
     add_config_dir_candidates(paths, &user_dirs);
+    if let Some(dir) = portable_config_dir {
+        paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
+    }
     paths.push(PathPossibility::optional(home_dir.join(".wezterm.lua")));
     add_config_dir_candidates(paths, &system_dirs);
 }
@@ -2195,12 +2197,12 @@ mod weezterm_config_file_tests {
             actual,
             vec![
                 PathBuf::from("/portable/weezterm.lua"),
-                PathBuf::from("/portable/wezterm.lua"),
                 PathBuf::from("/home/user/.weezterm.lua"),
                 PathBuf::from("/xdg/weezterm/weezterm.lua"),
                 PathBuf::from("/xdg/weezterm/wezterm.lua"),
                 PathBuf::from("/xdg/wezterm/weezterm.lua"),
                 PathBuf::from("/xdg/wezterm/wezterm.lua"),
+                PathBuf::from("/portable/wezterm.lua"),
                 PathBuf::from("/home/user/.wezterm.lua"),
                 PathBuf::from("/etc/xdg/weezterm/weezterm.lua"),
                 PathBuf::from("/etc/xdg/weezterm/wezterm.lua"),

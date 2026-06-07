@@ -656,6 +656,19 @@ impl WaylandWindowInner {
         }
     }
 
+    // --- weezterm remote features ---
+    fn apply_current_window_geometry(&self) {
+        let (x, y) = self.window_frame.location();
+        let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
+        let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
+        if let Some(window) = self.window.as_ref() {
+            window
+                .xdg_surface()
+                .set_window_geometry(x, y, surface_width, surface_height);
+        }
+    }
+    // --- end weezterm remote features ---
+
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
         let wayland_conn = Connection::get().unwrap().wayland();
         let mut wegl_surface = None;
@@ -890,16 +903,11 @@ impl WaylandWindowInner {
                     .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
                     self.window_frame.resize(width, height);
                 }
-                let (x, y) = self.window_frame.location();
-                let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
-                let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
-                if let Some(window) = self.window.as_mut() {
-                    window
-                        .xdg_surface()
-                        .set_window_geometry(x, y, surface_width, surface_height);
-                    self.surface().commit();
-                }
                 pending.refresh_decorations = true;
+            }
+            if pending.configure.is_none() {
+                self.apply_current_window_geometry();
+                self.surface().commit();
             }
             // --- end weezterm remote features ---
             self.window_frame.update_state(window_config.state);
