@@ -10,7 +10,7 @@ use mlua::{FromLua, IntoLuaMulti, Lua, Table, Value, Variadic};
 use ordered_float::NotNan;
 use portable_pty::CommandBuilder;
 use std::convert::TryFrom;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use wezterm_dynamic::{
     FromDynamic, FromDynamicOptions, ToDynamic, UnknownFieldAction, Value as DynValue,
@@ -228,12 +228,68 @@ pub fn make_lua_context(config_file: &Path) -> anyhow::Result<Lua> {
         }
 
         // --- weezterm remote features ---
-        prefix_path(&mut path_array, &crate::HOME_DIR.join(".weezterm"));
-        prefix_path(&mut path_array, &crate::HOME_DIR.join(".wezterm"));
-        // --- end weezterm remote features ---
-        for dir in crate::CONFIG_DIRS.iter() {
-            prefix_path(&mut path_array, dir);
+        fn is_named_dir(path: &Path, name: &str) -> bool {
+            path.file_name().and_then(|file_name| file_name.to_str()) == Some(name)
         }
+
+        fn split_user_and_system_dirs(dirs: &[PathBuf]) -> (Vec<PathBuf>, Vec<PathBuf>) {
+            let mut user_dirs = vec![];
+            let mut system_dirs = vec![];
+            let mut saw_weezterm = false;
+            let mut saw_wezterm = false;
+
+            for dir in dirs {
+                if is_named_dir(dir, "weezterm") && !saw_weezterm {
+                    saw_weezterm = true;
+                    user_dirs.push(dir.clone());
+                } else if is_named_dir(dir, "wezterm") && !saw_wezterm {
+                    saw_wezterm = true;
+                    user_dirs.push(dir.clone());
+                } else {
+                    system_dirs.push(dir.clone());
+                }
+            }
+
+            (user_dirs, system_dirs)
+        }
+
+        fn prefix_paths(array: &mut Vec<String>, paths: &[PathBuf]) {
+            for path in paths.iter().rev() {
+                prefix_path(array, path);
+            }
+        }
+
+        let (user_config_dirs, system_config_dirs) =
+            split_user_and_system_dirs(&crate::CONFIG_DIRS);
+        let mut module_dirs = vec![];
+        module_dirs.extend(
+            user_config_dirs
+                .iter()
+                .filter(|dir| is_named_dir(dir, "weezterm"))
+                .cloned(),
+        );
+        module_dirs.push(crate::HOME_DIR.join(".weezterm"));
+        module_dirs.extend(
+            user_config_dirs
+                .iter()
+                .filter(|dir| is_named_dir(dir, "wezterm"))
+                .cloned(),
+        );
+        module_dirs.push(crate::HOME_DIR.join(".wezterm"));
+        module_dirs.extend(
+            system_config_dirs
+                .iter()
+                .filter(|dir| is_named_dir(dir, "weezterm"))
+                .cloned(),
+        );
+        module_dirs.extend(
+            system_config_dirs
+                .iter()
+                .filter(|dir| is_named_dir(dir, "wezterm"))
+                .cloned(),
+        );
+        prefix_paths(&mut path_array, &module_dirs);
+        // --- end weezterm remote features ---
         path_array.insert(
             2,
             format!("{}/plugins/?/plugin/init.lua", crate::DATA_DIR.display()),

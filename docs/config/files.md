@@ -76,7 +76,7 @@ graph TD
   G -->|Yes| B
   G -->|No| H{{Does<br/>$XDG_CONFIG_HOME/weezterm/weezterm.lua<br/>or<br/>$HOME/.config/weezterm/weezterm.lua<br/>exist?}}
   H -->|Yes| B
-  H -->|No| H2{{Does a branded config dir<br/>compat file<br/>weezterm/wezterm.lua exist?}}
+  H -->|No| H2{{Does a user config-dir<br/>compat file exist?<br/>weezterm/wezterm.lua,<br/>wezterm/weezterm.lua,<br/>or wezterm/wezterm.lua}}
   H2 -->|Yes| B
   H2 -->|No| I{{"Running on Windows and<br/>wezterm.lua exists in same<br/>dir as weezterm.exe?<br/>(legacy thumb drive mode)"}}
   I -->|Yes| B

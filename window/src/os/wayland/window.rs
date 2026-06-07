@@ -238,14 +238,21 @@ impl WaylandWindow {
             dpi: config.dpi.unwrap_or(crate::DEFAULT_DPI) as usize,
         };
 
+        let decorations = config.window_decorations;
+        // --- weezterm remote features ---
+        let initial_decorations = if decorations == WindowDecorations::NONE {
+            Decorations::None
+        } else {
+            Decorations::RequestServer
+        };
+        // --- end weezterm remote features ---
         let window = {
             let xdg_shell = &conn.wayland_state.borrow().xdg;
-            xdg_shell.create_window(surface.clone(), Decorations::RequestServer, &qh)
+            xdg_shell.create_window(surface.clone(), initial_decorations, &qh)
         };
 
         window.set_app_id(class_name.to_string());
         window.set_title(name.to_string());
-        let decorations = config.window_decorations;
 
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
@@ -890,6 +897,7 @@ impl WaylandWindowInner {
                     window
                         .xdg_surface()
                         .set_window_geometry(x, y, surface_width, surface_height);
+                    self.surface().commit();
                 }
                 pending.refresh_decorations = true;
             }
