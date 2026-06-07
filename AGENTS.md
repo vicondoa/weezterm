@@ -471,19 +471,21 @@ DPI scaling).
 
 ### Known Issues (tracked in `tests/ux/FINDINGS.md`)
 
-1. **Window position saved as (0,0)** — `save_current_window_state()` in
-   `termwindow/mod.rs:2015-2023` never populates x/y coordinates
-2. **Oversized window after maximize→close→reopen→restore** — saves maximized
-   dimensions instead of normal (restored) dimensions from WINDOWPLACEMENT
-3. **Missing `WM_DPICHANGED` handler** — `window/src/os/windows/window.rs`
-   does not handle `WM_DPICHANGED`, causing window to balloon when dragged
-   between monitors with different DPI instead of using the Windows-suggested rect
-4. **`connect --workspace` crashes SSH mux** — using `--workspace` flag with `connect`
-   subcommand causes the SSH mux connection to drop after ~6-8s with PDU decode EOF.
-   Without `--workspace`, connections are stable. Root cause is in spawn_tab_in_domain_if_mux_is_empty.
-5. **Content stretching during resize** — terminal content is visually stretched
-   during window resize before being redrawn at the correct dimensions. Multiple
-   intermediate redraws create a jarring experience.
+`tests/ux/FINDINGS.md` is the source of truth for current status. As of this
+writing the only open item is:
+
+1. **`connect --workspace` crashes SSH mux** — using `--workspace` with a
+   non-default workspace on the `connect` subcommand drops the SSH mux
+   connection after ~6–8s with a PDU decode EOF. Without `--workspace`,
+   connections are stable. Suspected root cause in
+   `spawn_tab_in_domain_if_mux_is_empty()` (`wezterm-gui/src/main.rs`). The UX
+   tests work around it by sharing the default workspace.
+
+Previously-tracked issues now **resolved** (see `FINDINGS.md` for the fixing
+commits): window position saved as (0,0); oversized window after
+maximize→close→reopen→restore; content stretching during resize; and the
+missing `WM_DPICHANGED` handler (fixed, but still wants manual verification on a
+multi-monitor/mixed-DPI setup).
 
 ## CI/CD Pipelines
 
