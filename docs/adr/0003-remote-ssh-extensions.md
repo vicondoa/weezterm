@@ -30,8 +30,14 @@ protocol changes:
   and `$BROWSER` is injected into remote SSH shells so CLI tools route through
   the client. URL opening is gated by [ADR 0006](0006-open-url-security-policy.md).
 - **Transport** — new PDU types are appended to the `codec/` `pdu!` macro for
-  port forwarding and remote URL opening, handled on both the server
-  (`wezterm-mux-server-impl`) and client (`wezterm-client`).
+  port forwarding (`GetDetectedPorts`, `RequestPortForward`, `StopPortForward`,
+  …) and remote URL opening, and dispatched on both the server
+  (`wezterm-mux-server-impl`) and client (`wezterm-client`). The remote-URL PDU
+  path is live; the **mux-server-side port-forward handlers are currently stubs**
+  (they return empty/`success: false` with "not yet implemented in mux server
+  mode"). Active port forwarding today runs through the local
+  `PortForwardManager`/proxy against SSH domains directly, not via the mux
+  server.
 
 Every touch to an upstream-owned file follows
 [ADR 0001](0001-fork-strategy-and-clean-merge-discipline.md). The full design,
@@ -45,5 +51,8 @@ configuration, and usage are documented in
 - **Negative / trade-offs:** new PDUs expand the mux protocol surface and must
   preserve `CODEC_VERSION` compatibility; SSH backends (`ssh2`, `libssh-rs`)
   must both support the channel work.
-- **Follow-ups:** remote URL opening's trust boundary is owned by
+- **Follow-ups:** implement the mux-server-side port-forward PDU handlers
+  (`GetDetectedPorts` / `RequestPortForward` / `StopPortForward`) so forwarding
+  works in mux-server mode, not just against direct SSH domains; remote URL
+  opening's trust boundary is owned by
   [ADR 0006](0006-open-url-security-policy.md).
