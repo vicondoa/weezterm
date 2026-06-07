@@ -1031,14 +1031,14 @@ impl Config {
         // so we do this bit "by-hand"
 
         // --- weezterm remote features ---
-        // Check .weezterm.lua first, then fall back to .wezterm.lua.
-        // CONFIG_DIRS already includes both weezterm and wezterm directories,
-        // so we just search for wezterm.lua in each (the dir name provides the branding).
+        // Check branded WeezTerm config names first, then fall back to
+        // upstream-compatible WezTerm config names.
         let mut paths = vec![
             PathPossibility::optional(HOME_DIR.join(".weezterm.lua")),
             PathPossibility::optional(HOME_DIR.join(".wezterm.lua")),
         ];
         for dir in CONFIG_DIRS.iter() {
+            paths.push(PathPossibility::optional(dir.join("weezterm.lua")));
             paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
         }
         // --- end weezterm remote features ---
@@ -1055,6 +1055,9 @@ impl Config {
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
                     paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
+                    // --- weezterm remote features ---
+                    paths.insert(0, PathPossibility::optional(exe_dir.join("weezterm.lua")));
+                    // --- end weezterm remote features ---
                 }
             }
         }

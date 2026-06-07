@@ -46,6 +46,13 @@ More complex configurations that need to span multiple files can be placed in
 `$XDG_CONFIG_HOME/wezterm/wezterm.lua` (for X11/Wayland) or
 `$HOME/.config/wezterm/wezterm.lua` (for all other systems).
 
+<!-- --- weezterm remote features --- -->
+For WeezTerm, branded config names are preferred:
+`$XDG_CONFIG_HOME/weezterm/weezterm.lua` or
+`$HOME/.config/weezterm/weezterm.lua`. If those files do not exist, WeezTerm
+falls back to upstream-compatible `wezterm.lua` locations.
+<!-- --- end weezterm remote features --- -->
+
 {% raw %}
 ```mermaid
 graph TD
