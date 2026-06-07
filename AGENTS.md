@@ -141,7 +141,7 @@ The following checks run in CI on every PR to `main`. All must pass before merge
 | **weezterm-build / windows** (required gate) | Full build + `cargo nextest run` on Windows | `ci/build-cross.sh` (Windows part) |
 | **weezterm-build / macos** | Build ARM64 + x86_64, run tests | macOS only (CI covers this) |
 | **weezterm-build / linux** ×8 distros | Build + test in Docker containers | `ci/build-cross.sh` (Linux/WSL part) |
-| **Nix** (`nix.yml`) | `nix build .` | If you changed root `flake.nix`, `flake.lock`, or `nix/**` |
+| **Nix** (`nix.yml`) | `nix build .` | If you changed Rust files, `.github/workflows/nix.yml`, root `flake.nix`, `flake.lock`, or `nix/**` |
 | **termwiz** (`termwiz.yml`) | `cargo build/test -p termwiz --all-features` | Only if you changed `termwiz/**` |
 | **wezterm-ssh** (`wezterm_ssh.yml`) | Build + test SSH crate | Only if you changed `wezterm-ssh/**` |
 | **CodeQL** | Security analysis (actions + rust) | N/A (CI only) |
