@@ -249,6 +249,12 @@ impl WaylandWindow {
 
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
+        // --- weezterm remote features ---
+        // Niri does not provide server-side titlebars; use WeezTerm's
+        // client-side frame whenever a titlebar is requested.
+        } else if decorations.contains(WindowDecorations::TITLE) {
+            Some(DecorationMode::Client)
+        // --- end weezterm remote features ---
         } else if decorations == WindowDecorations::default() {
             Some(DecorationMode::Server)
         } else {
