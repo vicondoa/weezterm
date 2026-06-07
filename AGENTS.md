@@ -166,6 +166,43 @@ surface warnings/errors that don't appear on Windows (e.g., unused code
 warnings that trigger rustc ICEs on certain Linux compiler versions). Always
 verify both platforms compile cleanly.
 
+## Panel review
+
+WeezTerm uses the same panel-review contract as `vicondoa/nixling` for
+plan-driven or multi-phase work. Green tests and CI are necessary but not
+sufficient to advance or merge that kind of work: the relevant phase must receive
+unanimous panel sign-off.
+
+For each phase:
+
+1. **Plan review** — panel reviews the plan; iterate until every selected
+   reviewer returns `signoff: true`.
+2. **Implementation** — perform the work.
+3. **Integration** — merge or consolidate the implementation output.
+4. **Work review** — panel reviews the integrated diff; iterate on findings until
+   every selected reviewer returns `signoff: true`.
+5. **Advance/merge** — only then may the next phase begin or the PR merge.
+
+Use the nixling default panel roster unless a plan explicitly narrows the panel:
+
+| Engineer | Focus |
+|----------|-------|
+| `software` | Shell, Nix/package shape, idempotency, and error handling. |
+| `test` | Coverage of new behavior, invisible regressions, and validation gaps. |
+| `nixos` | NixOS/Home Manager module wiring, `lib.mkForce` / `lib.mkDefault`, activation ordering, and host integration. |
+| `networking` | SSH/mux/network surface changes, forwarding behavior, firewall posture, and routing assumptions. |
+| `security` | Attack surface, trust boundaries, capability/secret handling, URL/open-browser safety, and telemetry/audit hygiene. |
+| `rust` | Rust API shape, error propagation, unsafe/FFI boundaries, dependency direction, and testability. |
+| `product` | Operator UX, naming, migration/deprecation policy, defaults, and actionable errors. |
+| `docs` | Docs accuracy, Diataxis fit where relevant, release notes, and AGENTS.md updates landing with load-bearing behavior changes. |
+| `observability` | Log/metric/span shape, cardinality, retention/defaults, and diagnostic usefulness without leaking secrets. |
+| `kernel` | PTY, process, signal, filesystem, windowing, GPU/driver, and Linux/Windows/macOS API edge cases. |
+
+Escape hatches match nixling: trivial fixes may skip the panel; time-critical
+hotfixes may skip the pre-fix panel but need a post-fix panel; documentation-only
+changes may skip unless they describe load-bearing behavior. Autopilot mode does
+not waive the panel gate.
+
 ## WeezTerm Remote Features
 
 All WeezTerm-specific additions (as opposed to upstream WezTerm code) are marked with:
