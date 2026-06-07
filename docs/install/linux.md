@@ -330,7 +330,8 @@ hide:
 
     <!-- --- weezterm remote features --- -->
 
-    For WeezTerm, use the fork's root flake:
+    For WeezTerm, use the fork's root flake. The package exposes
+    `weezterm`, `weezterm-gui`, and `weezterm-mux-server`:
 
     ```nix
     {
@@ -343,17 +344,12 @@ hide:
     The legacy `github:vicondoa/weezterm?dir=nix` entry point is retained only
     for compatibility; new configurations should use the root flake.
 
-    <!-- --- end weezterm remote features --- -->
-
-    If you need a newer version use the flake. Use the cachix if you want to avoid building WezTerm from source.
-
-    The flake is in the `nix` directory, so the url will be something like `github:wezterm/wezterm?dir=nix`
-
     Here's an example for NixOS configurations:
     
     ```nix
     {
-        inputs.wezterm.url = "github:wezterm/wezterm?dir=nix";
+        inputs.weezterm.url = "github:vicondoa/weezterm";
+        inputs.weezterm.inputs.nixpkgs.follows = "nixpkgs";
         # ...
 
         outputs = inputs @ {nixpkgs, ...}:{
@@ -372,7 +368,8 @@ hide:
     # flake.nix
     
     {
-        inputs.wezterm.url = "github:wezterm/wezterm?dir=nix";
+        inputs.weezterm.url = "github:vicondoa/weezterm";
+        inputs.weezterm.inputs.nixpkgs.follows = "nixpkgs";
         # ...
 
         outputs = inputs @ {nixpkgs, home-manager, ...}:{
@@ -390,12 +387,13 @@ hide:
     # home.nix
     
     {inputs, pkgs, ...}:{
-        programs.wezterm = {
-            enable = true;
-            package = inputs.wezterm.packages.${pkgs.system}.default;
-        };
+        home.packages = [
+            inputs.weezterm.packages.${pkgs.stdenv.hostPlatform.system}.default
+        ];
     }
     ```
+
+    <!-- --- end weezterm remote features --- -->
 
 
     ### Cachix

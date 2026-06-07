@@ -99,7 +99,9 @@
         packages.default = rustPlatform.buildRustPackage rec {
           inherit buildInputs nativeBuildInputs;
 
-          name = "wezterm";
+          # --- weezterm remote features ---
+          name = "weezterm";
+          # --- end weezterm remote features ---
           src = ./..;
           version = self.shortRev or "dev";
 
@@ -138,6 +140,9 @@
               --replace-fail 'wezterm' 'weezterm'
             substituteInPlace assets/shell-completion/zsh \
               --replace-fail 'wezterm' 'weezterm'
+            substituteInPlace assets/wezterm-nautilus.py \
+              --replace-fail "cmd = ['wezterm', 'start', '--cwd', path]" "cmd = ['weezterm', 'start', '--cwd', path]" \
+              --replace-fail 'org.wezfurlong.wezterm' 'com.vicondoa.weezterm'
             # --- end weezterm remote features ---
           '';
 
