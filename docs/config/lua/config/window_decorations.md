@@ -52,6 +52,14 @@ The value is a set of flags:
 
 On X11 and Wayland, the windowing system may override the window decorations.
 
+<!-- --- weezterm remote features --- -->
+On Wayland, WeezTerm requests server-side decorations for the default
+`TITLE | RESIZE` mode, but follows the compositor's negotiated decoration mode.
+If the compositor does not provide server-side titlebars, WeezTerm draws its
+client-side titlebar instead. If the compositor does provide server-side
+decorations, WeezTerm hides its client-side frame to avoid double titlebars.
+<!-- --- end weezterm remote features --- -->
+
 When the titlebar is disabled you can drag the window using the tab bar if it
 is enabled, or by holding down `SUPER` and dragging the window (on Windows:
 CTRL-SHIFT and drag the window).  You can map this dragging function for
@@ -76,4 +84,3 @@ desktop environment to resize the window.  Windows users may wish to consider
 
 !!! tip
     You probably always want `RESIZE` to be listed in your `window_decorations`.
-

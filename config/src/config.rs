@@ -1031,18 +1031,8 @@ impl Config {
         // so we do this bit "by-hand"
 
         // --- weezterm remote features ---
-        // Check .weezterm.lua first, then fall back to .wezterm.lua.
-        // CONFIG_DIRS already includes both weezterm and wezterm directories,
-        // so we just search for wezterm.lua in each (the dir name provides the branding).
-        let mut paths = vec![
-            PathPossibility::optional(HOME_DIR.join(".weezterm.lua")),
-            PathPossibility::optional(HOME_DIR.join(".wezterm.lua")),
-        ];
-        for dir in CONFIG_DIRS.iter() {
-            paths.push(PathPossibility::optional(dir.join("wezterm.lua")))
-        }
-        // --- end weezterm remote features ---
-
+        let mut paths = vec![];
+        let mut portable_config_dir = None;
         if cfg!(windows) {
             // On Windows, a common use case is to maintain a thumb drive
             // with a set of portable tools that don't need to be installed
@@ -1054,10 +1044,18 @@ impl Config {
             // dir as the executable that will take precedence.
             if let Ok(exe_name) = std::env::current_exe() {
                 if let Some(exe_dir) = exe_name.parent() {
-                    paths.insert(0, PathPossibility::optional(exe_dir.join("wezterm.lua")));
+                    portable_config_dir = Some(exe_dir.to_path_buf());
                 }
             }
         }
+        add_default_config_file_candidates(
+            &mut paths,
+            &HOME_DIR,
+            &CONFIG_DIRS,
+            portable_config_dir.as_deref(),
+        );
+        // --- end weezterm remote features ---
+
         // --- weezterm remote features ---
         if let Some(path) = crate::branding::get_env_with_compat("CONFIG_FILE") {
             log::trace!(
@@ -1087,7 +1085,14 @@ impl Config {
                     }
                 }
                 Ok(None) => continue,
-                Ok(Some(loaded)) => return loaded,
+                Ok(Some(loaded)) => {
+                    // --- weezterm remote features ---
+                    if let Some(path) = loaded.file_name.as_ref() {
+                        log::debug!("Loaded configuration from {}", config_path_for_log(path));
+                    }
+                    // --- end weezterm remote features ---
+                    return loaded;
+                }
             }
         }
 
@@ -2088,6 +2093,126 @@ impl PathPossibility {
         }
     }
 }
+
+// --- weezterm remote features ---
+fn add_default_config_file_candidates(
+    paths: &mut Vec<PathPossibility>,
+    home_dir: &Path,
+    config_dirs: &[PathBuf],
+    portable_config_dir: Option<&Path>,
+) {
+    if let Some(dir) = portable_config_dir {
+        paths.push(PathPossibility::optional(dir.join("weezterm.lua")));
+    }
+
+    let (user_dirs, system_dirs) = split_user_and_system_config_dirs(config_dirs);
+    paths.push(PathPossibility::optional(home_dir.join(".weezterm.lua")));
+    add_config_dir_candidates(paths, &user_dirs);
+    if let Some(dir) = portable_config_dir {
+        paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
+    }
+    paths.push(PathPossibility::optional(home_dir.join(".wezterm.lua")));
+    add_config_dir_candidates(paths, &system_dirs);
+}
+
+fn split_user_and_system_config_dirs(config_dirs: &[PathBuf]) -> (Vec<&Path>, Vec<&Path>) {
+    let mut user_dirs = vec![];
+    let mut system_dirs = vec![];
+    let mut saw_branded_user = false;
+    let mut saw_legacy_user = false;
+
+    for dir in config_dirs {
+        if is_branded_config_dir(dir) && !saw_branded_user {
+            saw_branded_user = true;
+            user_dirs.push(dir.as_path());
+        } else if is_legacy_config_dir(dir) && !saw_legacy_user {
+            saw_legacy_user = true;
+            user_dirs.push(dir.as_path());
+        } else {
+            system_dirs.push(dir.as_path());
+        }
+    }
+
+    (user_dirs, system_dirs)
+}
+
+fn add_config_dir_candidates(paths: &mut Vec<PathPossibility>, dirs: &[&Path]) {
+    for dir in dirs {
+        paths.push(PathPossibility::optional(dir.join("weezterm.lua")));
+        paths.push(PathPossibility::optional(dir.join("wezterm.lua")));
+    }
+}
+
+fn is_branded_config_dir(dir: &Path) -> bool {
+    dir.file_name().and_then(OsStr::to_str) == Some("weezterm")
+}
+
+fn is_legacy_config_dir(dir: &Path) -> bool {
+    dir.file_name().and_then(OsStr::to_str) == Some("wezterm")
+}
+
+fn config_path_for_log(path: &Path) -> String {
+    if let Ok(rel) = path.strip_prefix(&*HOME_DIR) {
+        return format!("~/{}", rel.display());
+    }
+
+    for dir in CONFIG_DIRS.iter() {
+        if let Ok(rel) = path.strip_prefix(dir) {
+            let label = if is_branded_config_dir(dir) {
+                "weezterm-config-dir"
+            } else if is_legacy_config_dir(dir) {
+                "wezterm-config-dir"
+            } else {
+                "config-dir"
+            };
+            return format!("{label}/{}", rel.display());
+        }
+    }
+
+    path.file_name()
+        .map(|name| format!("<{}>", name.to_string_lossy()))
+        .unwrap_or_else(|| "<config>".to_string())
+}
+
+#[cfg(test)]
+mod weezterm_config_file_tests {
+    use super::*;
+
+    #[test]
+    fn branded_config_paths_precede_legacy_paths() {
+        let home = Path::new("/home/user");
+        let dirs = vec![
+            PathBuf::from("/xdg/weezterm"),
+            PathBuf::from("/etc/xdg/weezterm"),
+            PathBuf::from("/xdg/wezterm"),
+            PathBuf::from("/etc/xdg/wezterm"),
+        ];
+        let portable = Path::new("/portable");
+        let mut paths = vec![];
+
+        add_default_config_file_candidates(&mut paths, home, &dirs, Some(portable));
+
+        let actual: Vec<PathBuf> = paths.into_iter().map(|path| path.path).collect();
+        assert_eq!(
+            actual,
+            vec![
+                PathBuf::from("/portable/weezterm.lua"),
+                PathBuf::from("/home/user/.weezterm.lua"),
+                PathBuf::from("/xdg/weezterm/weezterm.lua"),
+                PathBuf::from("/xdg/weezterm/wezterm.lua"),
+                PathBuf::from("/xdg/wezterm/weezterm.lua"),
+                PathBuf::from("/xdg/wezterm/wezterm.lua"),
+                PathBuf::from("/portable/wezterm.lua"),
+                PathBuf::from("/home/user/.wezterm.lua"),
+                PathBuf::from("/etc/xdg/weezterm/weezterm.lua"),
+                PathBuf::from("/etc/xdg/weezterm/wezterm.lua"),
+                PathBuf::from("/etc/xdg/wezterm/weezterm.lua"),
+                PathBuf::from("/etc/xdg/wezterm/wezterm.lua"),
+            ]
+        );
+    }
+}
+// --- end weezterm remote features ---
 
 /// Behavior when the program spawned by wezterm terminates
 #[derive(Debug, FromDynamic, ToDynamic, Clone, Copy, PartialEq, Eq, Default)]

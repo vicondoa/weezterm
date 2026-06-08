@@ -238,22 +238,41 @@ impl WaylandWindow {
             dpi: config.dpi.unwrap_or(crate::DEFAULT_DPI) as usize,
         };
 
+        let decorations = config.window_decorations;
+        // --- weezterm remote features ---
+        let initial_decorations = if decorations == WindowDecorations::NONE {
+            Decorations::None
+        } else {
+            Decorations::RequestServer
+        };
+        // --- end weezterm remote features ---
         let window = {
             let xdg_shell = &conn.wayland_state.borrow().xdg;
-            xdg_shell.create_window(surface.clone(), Decorations::RequestServer, &qh)
+            xdg_shell.create_window(surface.clone(), initial_decorations, &qh)
         };
 
         window.set_app_id(class_name.to_string());
         window.set_title(name.to_string());
-        let decorations = config.window_decorations;
 
         let decor_mode = if decorations == WindowDecorations::NONE {
             None
         } else if decorations == WindowDecorations::default() {
             Some(DecorationMode::Server)
+        // --- weezterm remote features ---
+        // Non-default titlebar modes need WeezTerm's client-side frame.
+        } else if decorations.contains(WindowDecorations::TITLE) {
+            Some(DecorationMode::Client)
+        // --- end weezterm remote features ---
         } else {
             Some(DecorationMode::Client)
         };
+        // --- weezterm remote features ---
+        log::debug!(
+            "Wayland requested decoration mode {:?} for {:?}",
+            decor_mode,
+            decorations
+        );
+        // --- end weezterm remote features ---
         window.request_decoration_mode(decor_mode);
 
         let mut window_frame = {
@@ -332,6 +351,7 @@ impl WaylandWindow {
             gl_state: None,
             // --- weezterm remote features ---
             current_monitor_name: None,
+            last_reported_decoration_state: None,
             // --- end weezterm remote features ---
         }));
 
@@ -601,6 +621,7 @@ pub struct WaylandWindowInner {
     gl_state: Option<Rc<glium::backend::Context>>,
     // --- weezterm remote features ---
     current_monitor_name: Option<String>,
+    last_reported_decoration_state: Option<(DecorationMode, bool)>,
     // --- end weezterm remote features ---
 }
 
@@ -631,9 +652,24 @@ impl WaylandWindowInner {
 
     fn refresh_frame(&mut self) {
         if self.window_frame.is_dirty() && !self.window_frame.is_hidden() {
-            self.window_frame.draw();
+            if self.window_frame.draw() {
+                self.surface().commit();
+            }
         }
     }
+
+    // --- weezterm remote features ---
+    fn apply_current_window_geometry(&self) {
+        let (x, y) = self.window_frame.location();
+        let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
+        let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
+        if let Some(window) = self.window.as_ref() {
+            window
+                .xdg_surface()
+                .set_window_geometry(x, y, surface_width, surface_height);
+        }
+    }
+    // --- end weezterm remote features ---
 
     fn enable_opengl(&mut self) -> anyhow::Result<Rc<glium::backend::Context>> {
         let wayland_conn = Connection::get().unwrap().wayland();
@@ -844,6 +880,38 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
+            // --- weezterm remote features ---
+            let hide_client_decorations = self.config.window_decorations == WindowDecorations::NONE
+                || window_config.decoration_mode == DecorationMode::Server;
+            let decoration_state = (window_config.decoration_mode, hide_client_decorations);
+            if self.last_reported_decoration_state != Some(decoration_state) {
+                log::debug!(
+                    "Wayland compositor decoration mode {:?}; client frame hidden={}",
+                    window_config.decoration_mode,
+                    hide_client_decorations
+                );
+                self.last_reported_decoration_state = Some(decoration_state);
+            }
+            if self.window_frame.is_hidden() != hide_client_decorations {
+                self.window_frame.set_hidden(hide_client_decorations);
+                if !hide_client_decorations {
+                    let width = NonZeroU32::new(
+                        self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32,
+                    )
+                    .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(
+                        self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32,
+                    )
+                    .unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    self.window_frame.resize(width, height);
+                }
+                pending.refresh_decorations = true;
+            }
+            if pending.configure.is_none() {
+                self.apply_current_window_geometry();
+                pending.refresh_decorations = true;
+            }
+            // --- end weezterm remote features ---
             self.window_frame.update_state(window_config.state);
             self.window_frame
                 .update_wm_capabilities(window_config.capabilities);

@@ -7,6 +7,8 @@ on:
     paths:
       - '**/*.rs'
       - '.github/workflows/nix.yml'
+      - 'flake.lock'
+      - 'flake.nix'
       - 'nix/**'
   workflow_dispatch:
   push:
@@ -15,6 +17,8 @@ on:
     paths:
       - '**/*.rs'
       - '.github/workflows/nix.yml'
+      - 'flake.lock'
+      - 'flake.nix'
       - 'nix/**'
 
 jobs:
@@ -30,7 +34,19 @@ jobs:
       - name: Check flake inputs
         uses: DeterminateSystems/flake-checker-action@main
         with:
-          flake-lock-path: ./nix/flake.lock
+          flake-lock-path: ./flake.lock
           ignore-missing-flake-lock: false
       - name: Build default package
-        run: nix build ./nix
+        run: nix build . -o result
+      - name: Smoke test flake outputs
+        run: |
+          test -x result/bin/weezterm
+          test -x result/bin/weezterm-gui
+          test -x result/bin/weezterm-mux-server
+          test ! -e result/bin/wezterm
+          test ! -e result/bin/wezterm-gui
+          test ! -e result/bin/wezterm-mux-server
+          grep -F "cmd = ['weezterm', 'start', '--cwd', path]" result/share/nautilus-python/extensions/wezterm-nautilus.py
+          ! grep -F "cmd = ['wezterm', 'start', '--cwd', path]" result/share/nautilus-python/extensions/wezterm-nautilus.py
+          test "$(nix eval .#packages.x86_64-linux.default.meta.mainProgram --raw)" = "weezterm"
+          nix run . -- --version
