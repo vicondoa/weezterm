@@ -8,7 +8,7 @@ use crate::utilsprites::RenderMetrics;
 use config::{Dimension, DimensionContext, RgbaColor, TabBarColor, TabBarColors};
 use std::rc::Rc;
 use wezterm_font::LoadedFont;
-use wezterm_term::color::{ColorAttribute, ColorPalette, SrgbaTuple};
+use wezterm_term::color::{ColorPalette, SrgbaTuple};
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
 // --- weezterm remote features ---
@@ -203,23 +203,6 @@ impl crate::TermWindow {
         let item_to_elem = |item: &TabEntry| -> Element {
             let element = Element::with_line(&font, &item.title, palette);
 
-            let bg_color = item
-                .title
-                .get_cell(0)
-                .and_then(|c| match c.attrs().background() {
-                    ColorAttribute::Default => None,
-                    col => Some(palette.resolve_bg(col)),
-                });
-            let fg_color = item
-                .title
-                .get_cell(0)
-                .and_then(|c| match c.attrs().foreground() {
-                    ColorAttribute::Default => None,
-                    col => Some(palette.resolve_fg(col)),
-                });
-
-            let new_tab = colors.new_tab();
-            let new_tab_hover = colors.new_tab_hover();
             let active_tab = colors.active_tab();
 
             match item.item {

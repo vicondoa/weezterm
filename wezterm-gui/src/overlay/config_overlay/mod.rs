@@ -19,7 +19,7 @@ pub mod theme;
 
 pub use data::{FieldDef, FieldKind, Section, SshDomainConfig};
 // --- weezterm remote features ---
-pub use data::{DevContainerOverlayConfig, MonitorOverrideEntry};
+pub use data::MonitorOverrideEntry;
 // --- end weezterm remote features ---
 
 /// Result returned by the config overlay to the caller.

@@ -242,6 +242,7 @@ pub fn run_port_forward_overlay(
 
 /// Actions that can result from the overlay interaction
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum PortForwardAction {
     Close,
     StartForward {

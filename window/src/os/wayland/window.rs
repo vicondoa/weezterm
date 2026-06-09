@@ -28,7 +28,6 @@ use smithay_client_toolkit::reexports::csd_frame::{
 };
 use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplevel::ResizeEdge as XdgResizeEdge;
 use smithay_client_toolkit::seat::pointer::CursorIcon;
-use smithay_client_toolkit::shell::xdg::fallback_frame::FallbackFrame;
 use smithay_client_toolkit::shell::xdg::window::{
     DecorationMode, Window as XdgWindow, WindowConfigure, WindowDecorations as Decorations,
     WindowHandler,
@@ -52,6 +51,9 @@ use wezterm_input_types::{
 
 use crate::wayland::WaylandConnection;
 use crate::x11::KeyboardWithFallback;
+// --- weezterm remote features ---
+use super::titlebar_frame::TitleBarFrame;
+// --- end weezterm remote features ---
 use crate::{
     Appearance, Clipboard, Connection, ConnectionOps, Dimensions, MouseCursor, Point, Rect,
     RequestedWindowGeometry, ResizeIncrement, ResolvedGeometry, Window, WindowEvent,
@@ -279,7 +281,7 @@ impl WaylandWindow {
             let wayland_state = &conn.wayland_state.borrow();
             let shm = &wayland_state.shm;
             let subcompositor = wayland_state.subcompositor.clone();
-            FallbackFrame::new(&window, shm, subcompositor, qh.clone())
+            TitleBarFrame::new(&window, shm, subcompositor, qh.clone())
                 .expect("failed to create csd frame")
         };
         let hidden = match decor_mode {
@@ -296,13 +298,19 @@ impl WaylandWindow {
             );
         }
 
-        window.set_min_size(Some((32, 32)));
+        let (min_width, min_height) = window_frame.add_borders(32, 32);
+        window.set_min_size(Some((min_width, min_height)));
         let (x, y) = window_frame.location();
-        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32);
-        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32);
-        window
-            .xdg_surface()
-            .set_window_geometry(x, y, surface_width, surface_height);
+        let surface_width = dimensions.pixels_to_surface(dimensions.pixel_width as i32) as u32;
+        let surface_height = dimensions.pixels_to_surface(dimensions.pixel_height as i32) as u32;
+        let (geometry_width, geometry_height) =
+            window_frame.add_borders(surface_width, surface_height);
+        window.xdg_surface().set_window_geometry(
+            x,
+            y,
+            geometry_width as i32,
+            geometry_height as i32,
+        );
         window.commit();
 
         let copy_and_paste = CopyAndPaste::create();
@@ -541,10 +549,35 @@ pub(crate) struct PendingEvent {
     refresh_decorations: bool,
     // XXX: configure and window_configure could probably be combined, but right now configure only
     // queues a new size, so it can be out of sync. Example would be maximizing and minimizing winodw
-    pub(crate) configure: Option<(u32, u32)>,
+    pub(crate) configure: Option<PendingConfigureSize>,
     pub(crate) window_configure: Option<WindowConfigure>,
     pub(crate) dpi: Option<i32>,
     pub(crate) window_state: Option<WindowState>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct PendingConfigureSize {
+    width: u32,
+    height: u32,
+    is_window_geometry: bool,
+}
+
+impl PendingConfigureSize {
+    fn content(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            is_window_geometry: false,
+        }
+    }
+
+    fn window_geometry(width: u32, height: u32) -> Self {
+        Self {
+            width,
+            height,
+            is_window_geometry: true,
+        }
+    }
 }
 
 pub(crate) fn read_pipe_with_timeout(mut file: ReadPipe) -> anyhow::Result<String> {
@@ -591,7 +624,7 @@ pub struct WaylandWindowInner {
     surface_factor: f64,
     copy_and_paste: Arc<Mutex<CopyAndPaste>>,
     window: Option<XdgWindow>,
-    pub(super) window_frame: FallbackFrame<WaylandState>,
+    pub(super) window_frame: TitleBarFrame<WaylandState>,
     dimensions: Dimensions,
     resize_increments: Option<ResizeIncrement>,
     window_state: WindowState,
@@ -659,15 +692,24 @@ impl WaylandWindowInner {
     }
 
     // --- weezterm remote features ---
-    fn apply_current_window_geometry(&self) {
+    fn set_window_geometry_for_content(&self, surface_width: u32, surface_height: u32) {
         let (x, y) = self.window_frame.location();
-        let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32);
-        let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32);
+        let (geometry_width, geometry_height) =
+            self.window_frame.add_borders(surface_width, surface_height);
         if let Some(window) = self.window.as_ref() {
-            window
-                .xdg_surface()
-                .set_window_geometry(x, y, surface_width, surface_height);
+            window.xdg_surface().set_window_geometry(
+                x,
+                y,
+                geometry_width as i32,
+                geometry_height as i32,
+            );
         }
+    }
+
+    fn apply_current_window_geometry(&self) {
+        let surface_width = self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32;
+        let surface_height = self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32;
+        self.set_window_geometry_for_content(surface_width, surface_height);
     }
     // --- end weezterm remote features ---
 
@@ -871,7 +913,7 @@ impl WaylandWindowInner {
         if pending.configure.is_none() {
             if pending.dpi.is_some() {
                 // Synthesize a pending configure event for the dpi change
-                pending.configure.replace((
+                pending.configure.replace(PendingConfigureSize::content(
                     self.pixels_to_surface(self.dimensions.pixel_width as i32) as u32,
                     self.pixels_to_surface(self.dimensions.pixel_height as i32) as u32,
                 ));
@@ -880,6 +922,9 @@ impl WaylandWindowInner {
         }
 
         if let Some(ref window_config) = pending.window_configure {
+            self.window_frame.update_state(window_config.state);
+            self.window_frame
+                .update_wm_capabilities(window_config.capabilities);
             // --- weezterm remote features ---
             let hide_client_decorations = self.config.window_decorations == WindowDecorations::NONE
                 || window_config.decoration_mode == DecorationMode::Server;
@@ -912,12 +957,11 @@ impl WaylandWindowInner {
                 pending.refresh_decorations = true;
             }
             // --- end weezterm remote features ---
-            self.window_frame.update_state(window_config.state);
-            self.window_frame
-                .update_wm_capabilities(window_config.capabilities);
         }
 
-        if let Some((mut w, mut h)) = pending.configure.take() {
+        if let Some(configure) = pending.configure.take() {
+            let mut w = configure.width;
+            let mut h = configure.height;
             log::trace!("Pending configure: w:{w}, h{h} -- {:?}", self.window);
             if self.window.is_some() {
                 let surface_udata = SurfaceUserData::from_wl(self.surface());
@@ -929,6 +973,20 @@ impl WaylandWindowInner {
 
                 // Do this early because this affects surface_to_pixels/pixels_to_surface
                 self.dimensions.dpi = dpi;
+
+                if configure.is_window_geometry {
+                    let width = NonZeroU32::new(w).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    let height = NonZeroU32::new(h).unwrap_or_else(|| NonZeroU32::new(1).unwrap());
+                    let (content_width, content_height) =
+                        self.window_frame.subtract_borders(width, height);
+                    w = content_width
+                        .unwrap_or_else(|| NonZeroU32::new(1).unwrap())
+                        .get();
+                    h = content_height
+                        .unwrap_or_else(|| NonZeroU32::new(1).unwrap())
+                        .get();
+                    log::trace!("Pending configure content size after frame subtraction: {w}x{h}");
+                }
 
                 let mut pixel_width = self.surface_to_pixels(w.try_into().unwrap());
                 let mut pixel_height = self.surface_to_pixels(h.try_into().unwrap());
@@ -958,14 +1016,7 @@ impl WaylandWindowInner {
                     self.window_frame.resize(width, height);
                     pending.refresh_decorations = true
                 }
-                let (x, y) = self.window_frame.location();
-                let surface_width = self.pixels_to_surface(pixel_width);
-                let surface_height = self.pixels_to_surface(pixel_height);
-                self.window
-                    .as_mut()
-                    .unwrap()
-                    .xdg_surface()
-                    .set_window_geometry(x, y, surface_width, surface_height);
+                self.set_window_geometry_for_content(w, h);
                 // Compute the new pixel dimensions
                 let new_dimensions = Dimensions {
                     pixel_width: pixel_width.try_into().unwrap(),
@@ -1140,7 +1191,7 @@ impl WaylandWindowInner {
             .lock()
             .unwrap()
             .configure
-            .replace((surface_width, surface_height));
+            .replace(PendingConfigureSize::content(surface_width, surface_height));
         // apply the synthetic configure event to the inner surfaces
         self.dispatch_pending_event();
 
@@ -1394,7 +1445,9 @@ impl WaylandState {
                 pending_event.had_configure_event = true;
                 if let (Some(w), Some(h)) = configure.new_size {
                     changed = pending_event.configure.is_none();
-                    pending_event.configure.replace((w.get(), h.get()));
+                    pending_event
+                        .configure
+                        .replace(PendingConfigureSize::window_geometry(w.get(), h.get()));
                 } else {
                     changed = true;
                 }
@@ -1479,7 +1532,6 @@ impl CompositorHandler for WaylandState {
         // --- weezterm remote features ---
         // When the surface enters an output, detect the monitor name and
         // emit ScreenChanged if it differs from the current monitor.
-        use smithay_client_toolkit::output::OutputState;
         let output_name = self.output.info(output).and_then(|info| {
             info.name
                 .clone()
