@@ -909,6 +909,7 @@ pub fn value_to_display_string(v: &Value) -> String {
 }
 
 /// Compare two `Value`s for display equality (ignoring numeric type differences).
+#[allow(dead_code)]
 pub fn values_equal(a: &Value, b: &Value) -> bool {
     match (a, b) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
@@ -1333,6 +1334,7 @@ pub fn devcontainers_from_config() -> Vec<DevContainerEntry> {
         .collect()
 }
 
+#[allow(dead_code)]
 pub fn to_config_devcontainer_domain(
     dc: &DevContainerOverlayConfig,
 ) -> config::devcontainer::DevContainerDomainConfig {

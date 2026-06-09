@@ -4,7 +4,7 @@
 //! Displays discovered devcontainers with interactive controls.
 //! Follows the TermWiz overlay pattern used by port_forward.rs.
 
-use mux::devcontainer_discover::{ContainerStatus, DevContainerInfo};
+use mux::devcontainer_discover::DevContainerInfo;
 use termwiz::cell::AttributeChange;
 use termwiz::color::AnsiColor;
 use termwiz::input::{InputEvent, KeyCode, KeyEvent, Modifiers};
@@ -13,6 +13,7 @@ use termwiz::terminal::Terminal;
 
 /// Actions that can result from the overlay interaction
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub enum DevContainerAction {
     Close,
     /// Connect to a container (open new tab)
@@ -45,7 +46,7 @@ pub enum DevContainerAction {
 pub fn run_devcontainer_overlay(
     mut term: impl Terminal,
     entries: Vec<DevContainerInfo>,
-    domain_name: String,
+    _domain_name: String,
     host_label: String,
     primary_container_id: Option<String>,
     default_workspace_folder: Option<String>,
@@ -55,7 +56,7 @@ pub fn run_devcontainer_overlay(
         selected: 0,
         filter: String::new(),
         primary_container_id,
-        domain_name,
+        _domain_name,
         host_label,
         expanded: None,
         create_input: None,
@@ -287,7 +288,7 @@ struct OverlayState {
     selected: usize,
     filter: String,
     primary_container_id: Option<String>,
-    domain_name: String,
+    _domain_name: String,
     host_label: String,
     expanded: Option<String>,
     create_input: Option<String>,

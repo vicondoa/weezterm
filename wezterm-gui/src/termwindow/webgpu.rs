@@ -1159,8 +1159,6 @@ impl WebGpuState {
             RawWindowHandle::Win32(h) => h.hwnd.get() as usize,
             _ => 0,
         };
-        #[cfg(not(windows))]
-        let wake_hwnd: usize = 0;
 
         let spawn_res = std::thread::Builder::new()
             .name("wgpu-async-configure".into())

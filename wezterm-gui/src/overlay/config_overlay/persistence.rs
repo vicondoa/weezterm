@@ -114,6 +114,7 @@ pub fn load_overlay_data() -> anyhow::Result<OverlayData> {
 }
 
 /// Load saved proposals from disk (backward-compatible wrapper).
+#[allow(dead_code)]
 pub fn load_proposals() -> anyhow::Result<HashMap<String, Value>> {
     Ok(load_overlay_data()?.proposals)
 }
@@ -186,6 +187,7 @@ pub fn save_overlay_data(
 }
 
 /// Save proposals to disk as JSON (backward-compatible wrapper).
+#[allow(dead_code)]
 pub fn save_proposals(proposals: &HashMap<String, Value>) -> anyhow::Result<()> {
     // Load existing data to preserve domains and monitor overrides
     let existing = load_overlay_data().unwrap_or(OverlayData {
