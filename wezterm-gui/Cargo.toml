@@ -108,7 +108,7 @@ window-funcs.workspace = true
 window.workspace = true
 
 # --- weezterm remote features ---
-ratatui = { version = "0.29", default-features = false }
+ratatui = { version = "0.30.1", default-features = false }
 # --- end weezterm remote features ---
 
 [target.'cfg(windows)'.dependencies]

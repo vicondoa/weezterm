@@ -74,6 +74,7 @@ pub struct WebGpuState {
     /// `get_current_texture` in the render path. This naturally
     /// coalesces N WM_SIZE events into 1 ResizeBuffers per frame.
     pub pending_resize: RefCell<Option<Dimensions>>,
+    pub force_configure: RefCell<bool>,
     /// Time of the most recent `resize()` call. Kept as a diagnostic
     /// — exposed for debug/log call sites and may inform future
     /// debounce policy. The current `apply_pending_resize` does NOT
@@ -127,7 +128,7 @@ pub struct PendingConfigure {
 }
 // --- end weezterm remote features ---
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RawHandlePair {
     window: RawWindowHandle,
     display: RawDisplayHandle,
@@ -146,6 +147,16 @@ impl RawHandlePair {
         Self {
             window: window.window_handle().expect("window handle").as_raw(),
             display: window.display_handle().expect("display handle").as_raw(),
+        }
+    }
+
+    fn instance_descriptor(self) -> wgpu::InstanceDescriptor {
+        match self.display {
+            // wgpu-hal 29's EGL path doesn't support XCB display handles for
+            // instance creation yet. Surface creation still receives the XCB
+            // window handle below.
+            RawDisplayHandle::Xcb(_) => wgpu::InstanceDescriptor::new_without_display_handle(),
+            _ => wgpu::InstanceDescriptor::new_with_display_handle(Box::new(self)),
         }
     }
 }
@@ -379,14 +390,15 @@ impl WebGpuState {
             },
             ..Default::default()
         };
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends,
-            backend_options,
-            ..Default::default()
-        });
+        let mut instance_descriptor = handle.instance_descriptor();
+        instance_descriptor.backends = backends;
+        instance_descriptor.backend_options = backend_options;
+        let instance = wgpu::Instance::new(instance_descriptor);
         // --- end weezterm remote features ---
         let surface = unsafe {
-            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_window(&handle)?)?
+            instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::from_display_and_window(
+                &handle, &handle,
+            )?)?
         };
 
         let mut adapter: Option<wgpu::Adapter> = None;
@@ -769,9 +781,9 @@ impl WebGpuState {
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
                 bind_group_layouts: &[
-                    &shader_uniform_bind_group_layout,
-                    &texture_bind_group_layout,
-                    &texture_bind_group_layout,
+                    Some(&shader_uniform_bind_group_layout),
+                    Some(&texture_bind_group_layout),
+                    Some(&texture_bind_group_layout),
                 ],
                 immediate_size: 0,
             });
@@ -835,6 +847,7 @@ impl WebGpuState {
             #[cfg(windows)]
             frame_latency_waitable,
             pending_resize: RefCell::new(None),
+            force_configure: RefCell::new(false),
             last_resize_request: RefCell::new(None),
             live_resize_active: RefCell::new(false),
             pending_configure: RefCell::new(None),
@@ -892,6 +905,14 @@ impl WebGpuState {
         *self.pending_resize.borrow_mut() = Some(dims);
         *self.last_resize_request.borrow_mut() = Some(std::time::Instant::now());
         // --- end weezterm remote features ---
+    }
+
+    pub fn recover_surface(&self, dims: Dimensions) {
+        *self.dimensions.borrow_mut() = dims;
+        *self.pending_resize.borrow_mut() = Some(dims);
+        *self.last_resize_request.borrow_mut() = Some(std::time::Instant::now());
+        *self.force_configure.borrow_mut() = true;
+        self.apply_pending_resize();
     }
 
     // --- weezterm remote features ---
@@ -1048,7 +1069,9 @@ impl WebGpuState {
             return configured_change;
         };
 
-        if live {
+        let force_configure = *self.force_configure.borrow();
+
+        if live && !force_configure {
             // Don't start a new configure during interactive drag.
             // Stale stretched frame is preferable to per-pixel
             // configure churn on a slow GPU.
@@ -1067,7 +1090,7 @@ impl WebGpuState {
             let cfg = self.config.borrow();
             (cfg.width, cfg.height)
         };
-        if cur_w == new_w && cur_h == new_h {
+        if cur_w == new_w && cur_h == new_h && !force_configure {
             self.pending_resize.borrow_mut().take();
             self.queued_configure_dims.borrow_mut().take();
             return configured_change;
@@ -1088,6 +1111,7 @@ impl WebGpuState {
                 // Already configuring exactly these dims; just wait.
                 self.pending_resize.borrow_mut().take();
                 self.queued_configure_dims.borrow_mut().take();
+                *self.force_configure.borrow_mut() = false;
                 return configured_change;
             } else {
                 // In-flight is for stale dims. Queue the latest;
@@ -1117,6 +1141,7 @@ impl WebGpuState {
         // ---------------------------------------------------------
         self.pending_resize.borrow_mut().take();
         self.queued_configure_dims.borrow_mut().take();
+        *self.force_configure.borrow_mut() = false;
 
         // Take ownership of the OLD surface so the bg thread can
         // drop it before creating the new one. `self.surface` is
@@ -1195,8 +1220,9 @@ impl WebGpuState {
                     // Step 2: build a fresh SurfaceTargetUnsafe and
                     // a Surface object (no swap chain yet).
                     let raw_target = unsafe {
-                        wgpu::SurfaceTargetUnsafe::from_window(&handle)
-                            .expect("SurfaceTargetUnsafe::from_window failed in bg thread")
+                        wgpu::SurfaceTargetUnsafe::from_display_and_window(&handle, &handle).expect(
+                            "SurfaceTargetUnsafe::from_display_and_window failed in bg thread",
+                        )
                     };
                     let new_surface = unsafe {
                         instance
@@ -1263,10 +1289,14 @@ impl WebGpuState {
             // into the closure — but the closure didn't run, so
             // `old_surface` was dropped at the end of `spawn_res`'s
             // expression. Nothing more to do here.)
-            let raw_target = match unsafe { wgpu::SurfaceTargetUnsafe::from_window(&self.handle) } {
+            let raw_target = match unsafe {
+                wgpu::SurfaceTargetUnsafe::from_display_and_window(&self.handle, &self.handle)
+            } {
                 Ok(t) => t,
                 Err(e) => {
-                    log::error!("[render] inline SurfaceTargetUnsafe::from_window failed: {e}");
+                    log::error!(
+                        "[render] inline SurfaceTargetUnsafe::from_display_and_window failed: {e}"
+                    );
                     return configured_change;
                 }
             };

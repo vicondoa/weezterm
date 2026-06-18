@@ -106,7 +106,7 @@ futures-lite = "2.3"
 futures-util = "0.3"
 gethostname = "0.5"
 getrandom = "0.3.1"
-git2 = { version = "0.20", default-features = false, features = ["https"] }
+git2 = { version = "0.21", default-features = false, features = ["https"] }
 gl_generator = "0.14"
 glium = { version = "0.35", default-features = false }
 governor = {version="0.5", default-features=false, features=["std"]}
@@ -120,7 +120,23 @@ http_req = "0.11"
 human-sort = "0.2"
 humansize = "2.1"
 humantime = "2.1"
-image = "0.25"
+image = { version = "0.25.10", default-features = false, features = [
+    "rayon",
+    "bmp",
+    "dds",
+    "exr",
+    "ff",
+    "gif",
+    "hdr",
+    "ico",
+    "jpeg",
+    "png",
+    "pnm",
+    "qoi",
+    "tga",
+    "tiff",
+    "webp",
+] }
 intrusive-collections = "0.9"
 k9 = "0.12.0"
 lazy_static = "1.4"
@@ -139,7 +155,7 @@ maplit = "1.0"
 memmap2 = "0.9"
 memmem = "0.1"
 metrics = "0.23"
-miniz_oxide = "0.7"
+miniz_oxide = "0.8"
 mio = "0.8"
 mlua = "0.9"
 mux = { path = "mux" }
@@ -261,7 +277,7 @@ wezterm-term = { path = "term" }
 wezterm-toast-notification = { path = "wezterm-toast-notification" }
 wezterm-uds = { path = "wezterm-uds" }
 wezterm-version = { path = "wezterm-version" }
-wgpu = "28"
+wgpu = "29"
 whoami = "1.5"
 winapi = "0.3.9"
 window = {path="window"}

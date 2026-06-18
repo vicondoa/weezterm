@@ -155,7 +155,21 @@ impl crate::TermWindow {
                 return Ok(());
             }
         };
-        let output = surface_ref.get_current_texture()?;
+        let (output, suboptimal) = match surface_ref.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(output) => (output, false),
+            wgpu::CurrentSurfaceTexture::Suboptimal(output) => (output, true),
+            wgpu::CurrentSurfaceTexture::Lost | wgpu::CurrentSurfaceTexture::Outdated => {
+                drop(surface_borrow);
+                webgpu.recover_surface(self.dimensions);
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
+                return Ok(());
+            }
+            wgpu::CurrentSurfaceTexture::Validation => {
+                anyhow::bail!("wgpu surface validation error while acquiring current texture")
+            }
+        };
         drop(surface_borrow);
         // --- weezterm remote features ---
         log::debug!(
@@ -166,7 +180,7 @@ impl crate::TermWindow {
             self.dimensions.pixel_height,
             output.texture.width(),
             output.texture.height(),
-            output.suboptimal,
+            suboptimal,
         );
         // --- end weezterm remote features ---
         let view = output

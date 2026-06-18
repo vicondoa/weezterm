@@ -238,7 +238,6 @@ mod test {
     #[test]
     fn test_proxy_connection_copies_data() {
         // Test the bidirectional copy using socketpairs
-        let (mut a_read, mut a_write) = filedescriptor::socketpair().unwrap();
         let (mut b_read, mut b_write) = filedescriptor::socketpair().unwrap();
 
         // Write data from "SSH side"

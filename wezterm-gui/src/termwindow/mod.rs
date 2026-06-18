@@ -1478,19 +1478,7 @@ impl TermWindow {
 
     fn do_paint_webgpu(&mut self) -> anyhow::Result<bool> {
         self.backend.webgpu().unwrap().resize(self.dimensions);
-        match self.do_paint_webgpu_impl() {
-            Ok(ok) => Ok(ok),
-            Err(err) => {
-                match err.downcast_ref::<wgpu::SurfaceError>() {
-                    Some(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
-                        self.backend.webgpu().unwrap().resize(self.dimensions);
-                        return self.do_paint_webgpu_impl();
-                    }
-                    _ => {}
-                }
-                Err(err)
-            }
-        }
+        self.do_paint_webgpu_impl()
     }
 
     fn do_paint_webgpu_impl(&mut self) -> anyhow::Result<bool> {
