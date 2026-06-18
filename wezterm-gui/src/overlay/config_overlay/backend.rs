@@ -6,7 +6,7 @@
 //!
 //! --- weezterm remote features ---
 
-use ratatui::backend::{Backend, WindowSize};
+use ratatui::backend::{Backend, ClearType, WindowSize};
 use ratatui::buffer::Cell;
 use ratatui::layout::{Position, Size};
 use std::io;
@@ -52,6 +52,8 @@ impl<T: Terminal> TermwizOverlayBackend<T> {
 }
 
 impl<T: Terminal> Backend for TermwizOverlayBackend<T> {
+    type Error = io::Error;
+
     fn draw<'a, I>(&mut self, content: I) -> io::Result<()>
     where
         I: Iterator<Item = (u16, u16, &'a Cell)>,
@@ -137,6 +139,24 @@ impl<T: Terminal> Backend for TermwizOverlayBackend<T> {
     fn clear(&mut self) -> io::Result<()> {
         self.terminal
             .render(&[Change::ClearScreen(ColorAttribute::Default)])
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    }
+
+    fn clear_region(&mut self, clear_type: ClearType) -> io::Result<()> {
+        let change = match clear_type {
+            ClearType::All => return self.clear(),
+            ClearType::AfterCursor => Change::ClearToEndOfScreen(ColorAttribute::Default),
+            ClearType::UntilNewLine => Change::ClearToEndOfLine(ColorAttribute::Default),
+            ClearType::BeforeCursor | ClearType::CurrentLine => {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    format!("unsupported clear region: {clear_type}"),
+                ));
+            }
+        };
+
+        self.terminal
+            .render(&[change])
             .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
     }
 
