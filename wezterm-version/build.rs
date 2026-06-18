@@ -38,7 +38,7 @@ fn git_dev_suffix() -> String {
         if let Ok(ref_head) = repo.find_reference("HEAD") {
             let repo_path = repo.path().to_path_buf();
             if let Ok(resolved) = ref_head.resolve() {
-                if let Some(name) = resolved.name() {
+                if let Ok(name) = resolved.name() {
                     let path = repo_path.join(name);
                     if path.exists() {
                         println!(

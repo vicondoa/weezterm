@@ -176,10 +176,7 @@ impl MappedVertexBuffer {
     fn slice_mut(&mut self, range: std::ops::Range<usize>) -> &mut [Vertex] {
         match self {
             Self::Glium(g) => &mut g.mapping[range],
-            Self::WebGpu(g) => {
-                let mapping: &mut [Vertex] = bytemuck::cast_slice_mut(&mut g.mapping);
-                &mut mapping[range]
-            }
+            Self::WebGpu(g) => &mut g.staging[range],
         }
     }
 }
@@ -192,8 +189,16 @@ pub struct MappedQuads<'a> {
 
 pub struct WebGpuMappedVertexBuffer {
     mapping: wgpu::BufferViewMut,
+    staging: Vec<Vertex>,
     // Owner mapping, must be dropped after mapping
     _slice: wgpu::BufferSlice<'static>,
+}
+
+impl Drop for WebGpuMappedVertexBuffer {
+    fn drop(&mut self) {
+        self.mapping
+            .copy_from_slice(bytemuck::cast_slice(&self.staging));
+    }
 }
 
 pub struct WebGpuVertexBuffer {
@@ -230,6 +235,7 @@ impl WebGpuVertexBuffer {
 
             WebGpuMappedVertexBuffer {
                 mapping,
+                staging: vec![Vertex::default(); self.num_vertices],
                 _slice: slice,
             }
         }

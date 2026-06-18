@@ -1,0 +1,13 @@
+[[PackageOverrides]]
+name = "paste"
+version = "1.0.15"
+ecosystem = "crates.io"
+vulnerability.ignore = true
+reason = "paste is present only as an inactive optional dependency of image's disabled AVIF feature; cargo metadata shows no active path with image default-features disabled."
+
+[[PackageOverrides]]
+name = "filesystem"
+version = "0.1.0"
+ecosystem = "crates.io"
+vulnerability.ignore = true
+reason = "This is WezTerm's local lua-api-crates/filesystem workspace crate, not the vulnerable crates.io filesystem package."

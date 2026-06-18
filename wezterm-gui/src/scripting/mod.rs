@@ -82,10 +82,9 @@ pub fn register(lua: &Lua) -> anyhow::Result<()> {
         "enumerate_gpus",
         lua.create_function(|_, _: ()| {
             let backends = wgpu::Backends::all();
-            let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-                backends,
-                ..Default::default()
-            });
+            let mut instance_descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+            instance_descriptor.backends = backends;
+            let instance = wgpu::Instance::new(instance_descriptor);
             let adapters = smol::block_on(instance.enumerate_adapters(backends));
             let gpus: Vec<GpuInfo> = adapters
                 .into_iter()

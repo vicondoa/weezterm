@@ -44,7 +44,7 @@ fn compute_repo_dir(url: &str) -> String {
 fn get_remote(repo: &Repository) -> anyhow::Result<Option<Remote<'_>>> {
     let remotes = repo.remotes()?;
     for remote in remotes.iter() {
-        if let Some(name) = remote {
+        if let Ok(Some(name)) = remote {
             let remote = repo.find_remote(name)?;
             return Ok(Some(remote));
         }
@@ -81,7 +81,7 @@ impl RepoSpec {
         let repo = Repository::open(&path)?;
         let remote = get_remote(&repo)?.ok_or_else(|| anyhow!("no remotes!?"))?;
         let url = remote.url();
-        if let Some(url) = url {
+        if let Ok(url) = url {
             let url = url.to_string();
             return Ok(Self {
                 component,
@@ -113,7 +113,7 @@ impl RepoSpec {
             .default_branch()
             .context("get default branch")?
             .as_str()
-            .ok_or_else(|| anyhow!("default branch is not utf8"))?
+            .context("default branch is not utf8")?
             .to_string();
 
         remote.fetch(&[branch], None, None).context("fetch")?;
