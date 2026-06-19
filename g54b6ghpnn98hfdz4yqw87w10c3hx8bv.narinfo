@@ -6,6 +6,6 @@ FileSize: 72780
 NarHash: sha256:09myb8jiscr644s4ypsavqs4jlzzcj4vyvvfr1ja2kn2mi106s5v
 NarSize: 197672
 References: 
-Sig: cache.flakehub.com-3:em6mP1eztraMrOzVAl3uAA+C2Q59KiNJRDlWXyB4Liv07g+X0U8rd3eNwygMAZMw3sZlkfMieS+snanCdtcjDw==
-Sig: cache.flakehub.com-4:brBjDNUMs5SPuoqtBTZk9ji9fH0Z70Dfn9pVwsjQUe6CstL1+oOdQfiQ+vJQnC0RwqL3zsO16E4kl1uNptypCw==
+Deriver: wzhb336rh5z7c4fmp4fgf0hl6akn539r-xgcc-15.2.0.drv
+Sig: cache.nixos.org-1:CBjvqaI4eCILfBYBnRbxNHIZw1pmnfg4xlFRSLTWTFCkOOeIVIRZCI1r+BSLdQ5P7sTJfZi5SP/1Rl94KiuMAw==
 Sig: vicondoa-weezterm:/oXGf+hvFWpp0Cij6xnVmPSrvDWbYR7DCq9nEu66zoUQ5iYTpv6BvByK9eutF77AEnY9ztZjyEqx+5xaciBGDw==

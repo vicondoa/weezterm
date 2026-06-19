@@ -1,0 +1,10 @@
+StorePath: /nix/store/4yf3yh2m05vrsil10wgigcqx2ssnhd78-wezterm-terminfo
+URL: nar/1bqwp2d2c298f4yvagzwwf81dn63yqdfs1c77zj6kx6xz4zczm75.nar.xz
+Compression: xz
+FileHash: sha256:1bqwp2d2c298f4yvagzwwf81dn63yqdfs1c77zj6kx6xz4zczm75
+FileSize: 1468
+NarHash: sha256:034f70a44ivmk60pfwqwi87k8l6qfl8ph7055kpzmkm5w9gb9mh2
+NarSize: 3816
+References: 
+Deriver: f5dx53mksl86nzc07q3l5ibdkq2mxjsr-wezterm-terminfo.drv
+Sig: vicondoa-weezterm:AsGH1kIn/V8cgZzNXZts/Gs1azV5Tli7q/Jiv0Zp/RTVDgS9PcZlHC/wz3XsTZ97b+FDaOiCpsPHpu12Ta1BAQ==
