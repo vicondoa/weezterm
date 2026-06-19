@@ -116,6 +116,7 @@ jobs:
           REPO="${{ github.repository }}"
 
           mkdir -p nix
+          chmod u+w nix/prebuilt.json 2>/dev/null || true
           tarball=$(find release/ -name "*nix.tar.gz" | head -1)
           if [ -z "$tarball" ]; then
             tarball=$(find release/ -name "*.tar.gz" | head -1)
@@ -125,18 +126,8 @@ jobs:
             sri=$(nix hash file --type sha256 --sri "$tarball")
             url="https://github.com/${REPO}/releases/download/v${VERSION}/$(basename "$tarball")"
 
-            cat > nix/prebuilt.json <<EOF
-          {
-            "version": "$VERSION",
-            "system": "x86_64-linux",
-            "binaries": {
-              "weezterm": {
-                "url": "$url",
-                "hash": "$sri"
-              }
-            }
-          }
-          EOF
+            printf '{\n  "version": "%s",\n  "system": "x86_64-linux",\n  "binaries": {\n    "weezterm": {\n      "url": "%s",\n      "hash": "%s"\n    }\n  }\n}\n' \
+              "$VERSION" "$url" "$sri" > nix/prebuilt.json
           fi
 
       - name: Commit prebuilt manifest
