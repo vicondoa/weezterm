@@ -94,10 +94,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           VERSION="v${{ needs.detect-version.outputs.version }}"
-          NOTES="${{ needs.detect-version.outputs.notes }}"
 
           git tag -a "$VERSION" -m "Release $VERSION"
           git push origin "$VERSION"
+
+          # Extract notes fresh from file to avoid shell backtick interpretation
+          NOTES=$(awk "/^## \[${{ needs.detect-version.outputs.version }}\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md)
 
           gh release create "$VERSION" release/* \
             --title "$VERSION" \
