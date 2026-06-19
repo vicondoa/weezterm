@@ -94,9 +94,28 @@
           cargo = pkgs.rust-bin.stable.latest.minimal;
           rustc = pkgs.rust-bin.stable.latest.minimal;
         };
-      in
-      {
-        packages.default = rustPlatform.buildRustPackage rec {
+
+        prebuiltManifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
+        hasPrebuilt = prebuiltManifest.version != null
+          && prebuiltManifest.binaries ? weezterm
+          && system == prebuiltManifest.system;
+
+        prebuiltPackage = pkgs.stdenv.mkDerivation {
+          pname = "weezterm";
+          version = prebuiltManifest.version;
+          src = pkgs.fetchurl {
+            inherit (prebuiltManifest.binaries.weezterm) url hash;
+          };
+          dontUnpack = false;
+          sourceRoot = ".";
+          dontFixup = true;
+          installPhase = ''
+            cp -a . $out
+            chmod -R u+w $out
+          '';
+        };
+
+        sourcePackage = rustPlatform.buildRustPackage rec {
           inherit buildInputs nativeBuildInputs;
 
           # --- weezterm remote features ---
@@ -248,6 +267,10 @@
           # --- weezterm remote features ---
           meta.mainProgram = "weezterm";
         };
+      in
+      {
+        packages.default = if hasPrebuilt then prebuiltPackage else sourcePackage;
+        packages.source = sourcePackage;
 
         # --- weezterm remote features ---
         apps.default = {
