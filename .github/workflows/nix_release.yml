@@ -1,0 +1,149 @@
+name: Nix Release
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  detect-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.detect.outputs.version }}
+      skip: ${{ steps.detect.outputs.skip }}
+      notes: ${{ steps.detect.outputs.notes }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Detect version from CHANGELOG.md
+        id: detect
+        run: |
+          # Extract latest non-Unreleased version header
+          version=$(grep -m1 -oP '(?<=^## \[)[0-9]+\.[0-9]+\.[0-9]+(?=\])' CHANGELOG.md || true)
+          if [ -z "$version" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "No version found in CHANGELOG.md"
+            exit 0
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+          # Check if tag already exists
+          if git tag -l "v$version" | grep -q .; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Tag v$version already exists, skipping release"
+            exit 0
+          fi
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+          # Extract release notes for this version
+          notes=$(awk "/^## \[$version\]/{found=1; next} /^## \[/{if(found) exit} found{print}" CHANGELOG.md)
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$notes"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: [detect-version]
+    if: needs.detect-version.outputs.skip != 'true'
+    runs-on: ubuntu-latest
+    permissions: {}
+    env:
+      GITHUB_TOKEN: ""
+      ACTIONS_RUNTIME_TOKEN: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@main
+      - name: Nix store cache
+        uses: DeterminateSystems/flakehub-cache-action@main
+      - name: Build weezterm (nix)
+        run: nix build ./nix -o result-nix
+      - name: Package nix build
+        run: |
+          VERSION="v${{ needs.detect-version.outputs.version }}"
+          mkdir -p release
+
+          # Package the full nix output (bin + terminfo + shell completions + icons)
+          tar czf "release/weezterm-${VERSION}-x86_64-linux-nix.tar.gz" \
+            -C result-nix .
+
+          cd release && sha256sum *.tar.gz > SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-binaries
+          path: release/
+
+  release:
+    needs: [detect-version, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-binaries
+          path: release/
+      - name: Create tag and release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          VERSION="v${{ needs.detect-version.outputs.version }}"
+          NOTES="${{ needs.detect-version.outputs.notes }}"
+
+          git tag -a "$VERSION" -m "Release $VERSION"
+          git push origin "$VERSION"
+
+          gh release create "$VERSION" release/* \
+            --title "$VERSION" \
+            --notes "$NOTES"
+
+      - name: Install Nix (for hash computation)
+        uses: cachix/install-nix-action@v4
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Compute SRI hashes and commit prebuilt manifest
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.detect-version.outputs.version }}"
+          REPO="${{ github.repository }}"
+
+          mkdir -p nix
+          tarball=$(find release/ -name "*nix.tar.gz" | head -1)
+          if [ -z "$tarball" ]; then
+            tarball=$(find release/ -name "*.tar.gz" | head -1)
+          fi
+
+          if [ -n "$tarball" ] && [ -f "$tarball" ]; then
+            sri=$(nix hash file --type sha256 --sri "$tarball")
+            url="https://github.com/${REPO}/releases/download/v${VERSION}/$(basename "$tarball")"
+
+            cat > nix/prebuilt.json <<EOF
+          {
+            "version": "$VERSION",
+            "system": "x86_64-linux",
+            "binaries": {
+              "weezterm": {
+                "url": "$url",
+                "hash": "$sri"
+              }
+            }
+          }
+          EOF
+          fi
+
+      - name: Commit prebuilt manifest
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add nix/prebuilt.json
+          git diff --cached --quiet && exit 0
+          git commit -m "release: update prebuilt manifest for v${{ needs.detect-version.outputs.version }}"
+          git push origin main
