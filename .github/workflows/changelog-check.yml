@@ -1,0 +1,30 @@
+name: Changelog Check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  changelog-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check CHANGELOG.md updated
+        run: |
+          # If any code files changed, CHANGELOG.md must be updated too
+          code_changed=$(git diff --name-only origin/main...HEAD | grep -E '\.(rs|toml|nix|yml)$' | grep -v CHANGELOG || true)
+          changelog_changed=$(git diff --name-only origin/main...HEAD | grep 'CHANGELOG.md' || true)
+
+          if [ -n "$code_changed" ] && [ -z "$changelog_changed" ]; then
+            echo "ERROR: Code files changed but CHANGELOG.md was not updated."
+            echo "Changed code files:"
+            echo "$code_changed"
+            echo ""
+            echo "Please add an entry under '## [Unreleased]' in CHANGELOG.md."
+            exit 1
+          fi
+          echo "OK: CHANGELOG.md updated (or no code changes)"
+      - name: Validate CHANGELOG.md format
+        run: bash scripts/changelog-check.sh CHANGELOG.md
