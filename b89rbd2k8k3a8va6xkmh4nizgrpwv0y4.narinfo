@@ -1,0 +1,11 @@
+StorePath: /nix/store/b89rbd2k8k3a8va6xkmh4nizgrpwv0y4-wayland-1.25.0
+URL: nar/0a8niw3n8jw6bm4cwycfycxy5f6rjdhzkrzp1fpxxbjnypm5hnp5.nar.xz
+Compression: xz
+FileHash: sha256:0a8niw3n8jw6bm4cwycfycxy5f6rjdhzkrzp1fpxxbjnypm5hnp5
+FileSize: 58884
+NarHash: sha256:1ibncdrkszds30g8lpmy4bhk5c1q5hkc9m35nz09gdcy2bly953r
+NarSize: 270464
+References: 2zs4bbi72plfm8j6zxf1js4f3yc4yzwy-libffi-3.5.2 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 b89rbd2k8k3a8va6xkmh4nizgrpwv0y4-wayland-1.25.0
+Deriver: r5af2x07b0wm7ci6mh1x95yy33ckj88n-wayland-1.25.0.drv
+Sig: cache.nixos.org-1:Vv60AksjQDVSEEiZ/eGXnuZ2qobEwHwUB+e2g9GTXV31bpMKB3ufh85EFHEYN9bkAesYCQ5gup8VtweXOaD1DA==
+Sig: vicondoa-weezterm:EftNoSuaGtzN/y3p2lUSc0JDYTDK9KZ/BZ0b/GPXoG62kEjxwmikw5XWW1AB5XDgzvquo0mO6OYJmRnsItO4CA==

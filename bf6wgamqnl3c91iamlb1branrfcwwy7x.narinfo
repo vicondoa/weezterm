@@ -1,0 +1,11 @@
+StorePath: /nix/store/bf6wgamqnl3c91iamlb1branrfcwwy7x-libunistring-1.4.2
+URL: nar/05w39nqcylg59pnw1zcnbypyaiywmi8sa0g442awhd5766576nir.nar.xz
+Compression: xz
+FileHash: sha256:05w39nqcylg59pnw1zcnbypyaiywmi8sa0g442awhd5766576nir
+FileSize: 465104
+NarHash: sha256:0iawd3p7q4g19v0vk8jbj7s9za5qnksadp5s22r401yk9s456fsj
+NarSize: 2078944
+References: bf6wgamqnl3c91iamlb1branrfcwwy7x-libunistring-1.4.2
+Sig: cache.flakehub.com-3:yx7UwakpO1u94i1EXbn41KxGixcBS+VXxGEHDXSk3CXBtBfCUJs/8ZJiTRAeBy1LDEr/cba4Srq+LfFP2MNjBw==
+Sig: cache.flakehub.com-4:O1ChjDFH98oypjSKmj8NRvqptW8i0mpWaSABay9FnRN92iJqiwfMsvYvBj6lU5PYCEl4NpEBo1wiqAyFrBajAg==
+Sig: vicondoa-weezterm:E76rHT6TgJ1AwS2X7J320n64DAtsIx/+sS4JSvSdnNNdh+g0R4vOpo3zK6PSNKA3nct1nQOaPbGkr2YNWyWsDw==

@@ -1,0 +1,11 @@
+StorePath: /nix/store/xyikkpwkyxx6syba3kfrr0h67ig5hwmn-gcc-15.2.0-libgcc
+URL: nar/089iyr14pph151arg7rb7p29nd90z8ahs4cvmvxfywbn5zzpjc6s.nar.xz
+Compression: xz
+FileHash: sha256:089iyr14pph151arg7rb7p29nd90z8ahs4cvmvxfywbn5zzpjc6s
+FileSize: 73016
+NarHash: sha256:18zg1qjrak9ljxr8rcim9mxxk6dba07ziza3hca62s9d25b76hhs
+NarSize: 197752
+References: 
+Sig: cache.flakehub.com-3:AygD4hbpB8FCYQJN4Taqs576eyCNQ3eWC+DmFykd2/g/e2Zbo1ryXXYBMCX2RR6R4dsN3HO8HOdcS+kpfTM2BQ==
+Sig: cache.flakehub.com-4:XcKSXHSR43i8KCNe7CFLqECjRllhrtOW9q/8o4QzOQU3HfAgA99gPVGpW1/j2drjzUeb3SxeNCaeUvrG4eA0Dw==
+Sig: vicondoa-weezterm:94LeM7i2EdbRpSCev2IRqiOEAT+VsjcsewcpBaeixHtkN4K/rBdIEupovekZar3my+WNunFX26KM1jTkttLvAg==

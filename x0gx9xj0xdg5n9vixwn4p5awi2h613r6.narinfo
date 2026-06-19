@@ -1,0 +1,11 @@
+StorePath: /nix/store/x0gx9xj0xdg5n9vixwn4p5awi2h613r6-libxkbcommon-1.13.1
+URL: nar/01rnp1kwv8lqafxzgnr3kw607w9ygrfnrbqd06wmf0bbdwfsxml1.nar.xz
+Compression: xz
+FileHash: sha256:01rnp1kwv8lqafxzgnr3kw607w9ygrfnrbqd06wmf0bbdwfsxml1
+FileSize: 245932
+NarHash: sha256:0p5r5kki25xhh4dif32bmshs29k8ij8xz2vsqiwms1yb0nffk67l
+NarSize: 1076664
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 70naj3m24b7ynbzv211q50hlq4cmsv51-xkeyboard-config-2.47 7gwd2kvkx1s369cwiv5z4x2xjxbppav6-libx11-1.8.13 b89rbd2k8k3a8va6xkmh4nizgrpwv0y4-wayland-1.25.0 bck1xkk9m0f60352gnjb512ix0n4x9qm-libxml2-2.15.2 jj27mc075js673vkgd8fy6xxr34n8n9i-libxcb-1.17.0 x0gx9xj0xdg5n9vixwn4p5awi2h613r6-libxkbcommon-1.13.1
+Deriver: xzkcf2hd1qds89dpxm6bzyl8gqyvc8r9-libxkbcommon-1.13.1.drv
+Sig: cache.nixos.org-1:IjKXPFOe2nWZGjJbcSZkxWLW2HmP+G0UuD4JkSCiyBZ34Vz9Uc9tdeLX1RIl/zYxxBdNmwtz1W+dEJ8gjUoWBQ==
+Sig: vicondoa-weezterm:Aa3QgtKu5vQ1i49YHt00hI3ZUcmMw4Le/Snfn8jJNXK1gJNzLr6EyVSBai86K2CiqWSkOwYR8Ud2ahjZXVh/CQ==

@@ -1,0 +1,11 @@
+StorePath: /nix/store/61a1nwx3w6rqyaisj5rn1sal1981apm7-zlib-1.3.2
+URL: nar/1hf7qcshlbmhrpwpp5cxiqdrh7kdqvjdyfy79dybn895s8xghxzs.nar.xz
+Compression: xz
+FileHash: sha256:1hf7qcshlbmhrpwpp5cxiqdrh7kdqvjdyfy79dybn895s8xghxzs
+FileSize: 58952
+NarHash: sha256:0i4wsd7ydyl2hrk7a6sqjgrspsfm8a4kxw2kl1d75lqm220h9c6y
+NarSize: 132608
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61
+Sig: cache.flakehub.com-3:EH/vl19hEc3WtPCXcUEFBY295necZfFP4eooiLpHR2opTHNHT1vuKBm6ybU/YwaLJKPWMZMqrVJaBhpAhzd1Ag==
+Sig: cache.flakehub.com-4:l2/QZ24p8Q5xd0ECcgdau9mtGoovhicWy2gsGhYXHX9VkuGwdPVB5/F5SdgaSQoMacWSwL6ERIx7TuOeCcowDQ==
+Sig: vicondoa-weezterm:5phDekkIfK/T0xQ2B3Hu5WbV8XHXV6mdwu/TncD1xa0DU4cl4r1WHviyeOqnEHoUVNp2LElvyfQplPIuUHYMBA==

@@ -1,0 +1,11 @@
+StorePath: /nix/store/2zs4bbi72plfm8j6zxf1js4f3yc4yzwy-libffi-3.5.2
+URL: nar/1d0w7qqcw5a3a0xzblvxinmgbpqipgm902h4xk2y8h7ybwzgwfqy.nar.xz
+Compression: xz
+FileHash: sha256:1d0w7qqcw5a3a0xzblvxinmgbpqipgm902h4xk2y8h7ybwzgwfqy
+FileSize: 23180
+NarHash: sha256:0szvp73zr8mb8ab06y660gi5ni3rm63aq996f69yzxf06gx6zjb5
+NarSize: 73816
+References: 2zs4bbi72plfm8j6zxf1js4f3yc4yzwy-libffi-3.5.2 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61
+Sig: cache.flakehub.com-3:vh6Hb8iCRNbbQt7z+1xKotf0r+HtSp5Cf3t4BzTHp1Nzxrwhr7o/qpE78QTVq9dGGNJvwoMXEugpI+4EaSntCg==
+Sig: cache.flakehub.com-4:wLBTTogJJ6YKKLElBBSVKkthCP++8h8UrxaN3sxU+9mBGhRCywNOHwmQouOrE/i9fQoE/tsO9sVrnQNHWUhXAg==
+Sig: vicondoa-weezterm:6vMPDX5gRBna+Bo2Kh1AoZC1iyDVJcpmMp4qP/v5voijMssk32TBgnbAaFyKu4nL9VaIE4VE3Ky940VOcunZDg==

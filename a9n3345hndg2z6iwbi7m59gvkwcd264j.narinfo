@@ -1,0 +1,11 @@
+StorePath: /nix/store/a9n3345hndg2z6iwbi7m59gvkwcd264j-freetype-2.14.2
+URL: nar/1wkx2kdhf67kbks7jssmanmqpxyysl8859hq8ga85cmhhj6zgbn7.nar.xz
+Compression: xz
+FileHash: sha256:1wkx2kdhf67kbks7jssmanmqpxyysl8859hq8ga85cmhhj6zgbn7
+FileSize: 484056
+NarHash: sha256:03xnsgijjyj57fyq7a1swiwdhrkvzyn2k7715wlhd3vl3pm46j1i
+NarSize: 2271600
+References: 3lnvi6r17y9kki4r9klzvavranaz3131-bzip2-1.0.8 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 61a1nwx3w6rqyaisj5rn1sal1981apm7-zlib-1.3.2 a9n3345hndg2z6iwbi7m59gvkwcd264j-freetype-2.14.2 k1shjmzyzw8bf7vp8gyrqn4dn70xpdxx-brotli-1.2.0-lib vqyqaaar0dvcdbmzsap60r96n1va0idd-libpng-apng-1.6.56 xn70pn0qd5jhdvp5rikgn1yl9bbmyxiq-zlib-1.3.2-static
+Deriver: 1clj9rvjzla8lyc82dq80xlhrw0769f7-freetype-2.14.2.drv
+Sig: cache.nixos.org-1:Ed632uURd5VQk99JYydv39IKBqUNZZR9uT/dMAbPywQiCidqxgpzwgm9t8IkyoPJc/4tqrMsLn9TZVJK3gSFDQ==
+Sig: vicondoa-weezterm:AX/5uqzmS6w964PHwHuqK7l0ANVYiqccJuviVqcqmpKPJJvpxqty9DzXF8rtMLUQ2xVtBG1NlMCKRJK+b1UyAg==

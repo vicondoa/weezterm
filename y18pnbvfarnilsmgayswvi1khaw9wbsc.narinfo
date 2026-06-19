@@ -1,0 +1,11 @@
+StorePath: /nix/store/y18pnbvfarnilsmgayswvi1khaw9wbsc-openssl-3.6.2
+URL: nar/08jh37fflw4nafsr189bncv4qk61p4x05hqp3y9yn3bqmg3y2gpm.nar.xz
+Compression: xz
+FileHash: sha256:08jh37fflw4nafsr189bncv4qk61p4x05hqp3y9yn3bqmg3y2gpm
+FileSize: 2520584
+NarHash: sha256:0qlyzr45q4am9x9mng8npal35d224faijy24yq0g701h4wyb7dfj
+NarSize: 9303968
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 y18pnbvfarnilsmgayswvi1khaw9wbsc-openssl-3.6.2
+Sig: cache.flakehub.com-3:NXCdnL1ZYOOWAkA6I8DIC41/hXd2hyytQgOXuLYGUf74EAK5buAPSMNeGLXPa+xMTcP1krUAYYYI6hPsCs71Dw==
+Sig: cache.flakehub.com-4:s8ty1/96Va8i6vkC8yzRHhdcDJOl5OIJs8DjIeFYIFg86Sp2nRhafV/lV6Yj4bREgrxt2F0VehnFpXTJjaqNCw==
+Sig: vicondoa-weezterm:Qkzwq9VysgcVQj63kmVR4fUyX4T9+9v5CSkHN1tlMwYbtXeWLD41OzONvVI3lU4pa+ZYTgvoNE/avRrkSnvqDw==

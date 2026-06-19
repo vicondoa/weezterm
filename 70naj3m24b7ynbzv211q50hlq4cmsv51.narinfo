@@ -1,0 +1,11 @@
+StorePath: /nix/store/70naj3m24b7ynbzv211q50hlq4cmsv51-xkeyboard-config-2.47
+URL: nar/1hb6pi1x3gfc8acdcga1payk64isk6zi0lc5nq769zajk7iyakv8.nar.xz
+Compression: xz
+FileHash: sha256:1hb6pi1x3gfc8acdcga1payk64isk6zi0lc5nq769zajk7iyakv8
+FileSize: 811084
+NarHash: sha256:0asxiydi963l35kmpa6zn3dsrdima7lfwm18djd0c34f6lll0dkk
+NarSize: 10815536
+References: 70naj3m24b7ynbzv211q50hlq4cmsv51-xkeyboard-config-2.47
+Deriver: zk5zpylxhpc3cc8090d1cra5znkic5h2-xkeyboard-config-2.47.drv
+Sig: cache.nixos.org-1:SI0I3bZdH87kjwWfLFDEAhyXY5LKVvr7J5baV4BZUOfYqoN9XRKFDk2G3ABmYKsXOJ04wZa0I9Bxov9IUg1VBA==
+Sig: vicondoa-weezterm:jj8dgl8kQe0WCVByOCEAZ9hXPaDXF+z/Qa3vhTjiPXW+MtmMXeM7RAIGjhEH3X2uxAB72c2xV74ZmchmLg5QAQ==

@@ -1,0 +1,11 @@
+StorePath: /nix/store/2mvdayy6h2s5z6cwq7c5spiaqnjbax4n-libxcb-image-0.4.1
+URL: nar/0xyni6qjg72qjlfwkhkdyahnnyyf99ppb9sfa1qwbhczy84np9b0.nar.xz
+Compression: xz
+FileHash: sha256:0xyni6qjg72qjlfwkhkdyahnnyyf99ppb9sfa1qwbhczy84np9b0
+FileSize: 7856
+NarHash: sha256:087lll1p35ywd2rv5i2z1j7cx9z4valkizdkwgiv6id00dri8d7p
+NarSize: 27696
+References: 2mvdayy6h2s5z6cwq7c5spiaqnjbax4n-libxcb-image-0.4.1 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 jj27mc075js673vkgd8fy6xxr34n8n9i-libxcb-1.17.0 pdy4va4m24xl8f0c792jzfz00g1knai4-libxcb-util-0.4.1
+Deriver: v2s9c6spgfqy8khcs0l8zgaig6332abv-libxcb-image-0.4.1.drv
+Sig: cache.nixos.org-1:AKNuxaQASCD8Y9AbwQfJaJXMxytYXlCDJ8bcaVSbaDoTrkkGIC5ztOHAORCSElTA2Znd6N8CgucoXAK567OYBQ==
+Sig: vicondoa-weezterm:bD5qRSDd9BR2JY0s+OWRrClIGEP9ajfB0D7xDwz4g6mLmVXci2KbdbicEDUzrA7e3nj0TR6GPkuqXTX9XCaRBA==

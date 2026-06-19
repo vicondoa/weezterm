@@ -1,0 +1,11 @@
+StorePath: /nix/store/48krja1dqwpsa0i3yw9v47hbcxn7agrh-fontconfig-2.17.1-lib
+URL: nar/0r61khfx5m4xmw2mp4fhzxnybn56bv1mr4aybcsnpxj4xi81rwp3.nar.xz
+Compression: xz
+FileHash: sha256:0r61khfx5m4xmw2mp4fhzxnybn56bv1mr4aybcsnpxj4xi81rwp3
+FileSize: 143412
+NarHash: sha256:0ds20zy2ihnnxbzgls36ndri3088l47j0g5lazrbfjcmvyrx9f5w
+NarSize: 424784
+References: 3lnvi6r17y9kki4r9klzvavranaz3131-bzip2-1.0.8 48krja1dqwpsa0i3yw9v47hbcxn7agrh-fontconfig-2.17.1-lib 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 a9n3345hndg2z6iwbi7m59gvkwcd264j-freetype-2.14.2 d8927sznk6qnqln6hl9p4d42h8pq49vg-expat-2.8.0 k1shjmzyzw8bf7vp8gyrqn4dn70xpdxx-brotli-1.2.0-lib s0v7cizdm8c5d3v1z9467lw33q1ksq44-dejavu-fonts-minimal-2.37 vqyqaaar0dvcdbmzsap60r96n1va0idd-libpng-apng-1.6.56 z2z1vyjz3rpa8rgpzssfsn0d8dnl663y-fontconfig-2.17.1
+Deriver: yi799y11n4w7f7z8ngpifdm5nav99ny4-fontconfig-2.17.1.drv
+Sig: cache.nixos.org-1:fWRuILjKmnXVmzOViq9PhoTJXbAkRGoOQ2jhc96XagtTyTTyqrcirzw8OP50aKfeAO7flRme8GIB2XCn/sjiCg==
+Sig: vicondoa-weezterm:tz1Qm/xNURazdqF7Br6qrizZQHlbx5nmLpdPe5MAz42tUZ9YgwGJncj5vWMfPA05kozGeGg0dzxy0J81VVcgDQ==

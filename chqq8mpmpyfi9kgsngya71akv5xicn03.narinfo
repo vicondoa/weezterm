@@ -1,0 +1,11 @@
+StorePath: /nix/store/chqq8mpmpyfi9kgsngya71akv5xicn03-gcc-15.2.0-lib
+URL: nar/0hi6xz32xkhp62l09rn0sqi557rn4l7z6vfax5fslc8q6dqn7y3f.nar.xz
+Compression: xz
+FileHash: sha256:0hi6xz32xkhp62l09rn0sqi557rn4l7z6vfax5fslc8q6dqn7y3f
+FileSize: 2096708
+NarHash: sha256:0yr0kk8zabv84bd9gy4nhy7ps544d6q7zqny8m5yr1cmd2w1a1wf
+NarSize: 10313656
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 chqq8mpmpyfi9kgsngya71akv5xicn03-gcc-15.2.0-lib xyikkpwkyxx6syba3kfrr0h67ig5hwmn-gcc-15.2.0-libgcc
+Sig: cache.flakehub.com-3:WD7e6XYd0gIzZ+NuYduWSaFs8a8STLT/OibTeQfWSpBgMyKVRvJD+EFEhrv6OEIrynMGZHd4Ci4zuTDlm8ZaBA==
+Sig: cache.flakehub.com-4:PzMKRGL9hw0g593T7g/dT069E2k2fDeZxDxZpeGOk15YmMGK3KM5x1bpfdUotyOgMB9zDjDT7/V8Im7axzb2Bw==
+Sig: vicondoa-weezterm:qn5xhLQ3gJXV1G8f/JBwLX4Pc9Du/nYlg/E70jYcFsiQreVT53ERXrlVTuIElBOu1U758VQVHD0WuieDuxLfCw==

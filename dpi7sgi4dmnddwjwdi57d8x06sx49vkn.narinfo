@@ -1,0 +1,11 @@
+StorePath: /nix/store/dpi7sgi4dmnddwjwdi57d8x06sx49vkn-libglvnd-1.7.0
+URL: nar/02g40yy4b55ihs78c86vfhz5xqp1bnvg5ngfg43wja9p1gypwgz3.nar.xz
+Compression: xz
+FileHash: sha256:02g40yy4b55ihs78c86vfhz5xqp1bnvg5ngfg43wja9p1gypwgz3
+FileSize: 309192
+NarHash: sha256:0aqyi5j9maic80gy7x8xgalwnh7sh1rg9fxh6fvada5n7n5ad2hz
+NarSize: 2620480
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 7gwd2kvkx1s369cwiv5z4x2xjxbppav6-libx11-1.8.13 dpi7sgi4dmnddwjwdi57d8x06sx49vkn-libglvnd-1.7.0 l1im0bii1ld332kcgg0gr72k6xla2dq1-libxext-1.3.7
+Deriver: w9dfb5k8r1jh1qfd3z49vgq9yi4ix2wm-libglvnd-1.7.0.drv
+Sig: cache.nixos.org-1:4f+83G8wTG3bbjWR7NtvGC7WbT2okIWaggnA2qg2JH7rhVceYCbJc0IbgJHtxJyivn7RsibcEUt5w452De2ZAQ==
+Sig: vicondoa-weezterm:ouykRhyHLVrLlZFHjtRz7hjDMojUd8B3X743x11QrP/+yFrEkUS4+z37oDIQaT4m7LdZMZpHpWxKCfuiQ8H2CA==

@@ -1,0 +1,11 @@
+StorePath: /nix/store/l1im0bii1ld332kcgg0gr72k6xla2dq1-libxext-1.3.7
+URL: nar/1yjz7zfrydc4br8fzs2vs5arrghkxq8br9aixx4gawdgpbycs2gz.nar.xz
+Compression: xz
+FileHash: sha256:1yjz7zfrydc4br8fzs2vs5arrghkxq8br9aixx4gawdgpbycs2gz
+FileSize: 26912
+NarHash: sha256:1y5yl9lahkd6chnnm9j93mq366jibnd99rm3c0mghx97w5n3zr2g
+NarSize: 95944
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 7gwd2kvkx1s369cwiv5z4x2xjxbppav6-libx11-1.8.13 l1im0bii1ld332kcgg0gr72k6xla2dq1-libxext-1.3.7
+Deriver: 8qw4lam7b03wgpj6xv2027yhc5i3j16q-libxext-1.3.7.drv
+Sig: cache.nixos.org-1:giMLcELfh591lzVHgj9DmLtRzolru0ShHG6cTvrsF44x9yLhi9jpzGOAkhAKWET+wVHH7XQID56r9G/Bd4l4BQ==
+Sig: vicondoa-weezterm:oW8HgJp2L7omnOYopG/Q5zU22appagVH+DFrzqFQIQ38hg+uFhmLZ1rzdaIQyBf9xQSF+/eyvQIVPmMXkF5fAw==

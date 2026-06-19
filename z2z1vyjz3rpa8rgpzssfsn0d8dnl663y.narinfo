@@ -1,0 +1,11 @@
+StorePath: /nix/store/z2z1vyjz3rpa8rgpzssfsn0d8dnl663y-fontconfig-2.17.1
+URL: nar/1r6nnp4msccpsnd2r718s4zzmi1h99pr7x1a6v9rsxyq5q3f9s6j.nar.xz
+Compression: xz
+FileHash: sha256:1r6nnp4msccpsnd2r718s4zzmi1h99pr7x1a6v9rsxyq5q3f9s6j
+FileSize: 617744
+NarHash: sha256:1swrsnld9gzf28vnfdhcsi602qbqrdr3dz6alpa29875d5lpwrdd
+NarSize: 1286064
+References: s0v7cizdm8c5d3v1z9467lw33q1ksq44-dejavu-fonts-minimal-2.37 z2z1vyjz3rpa8rgpzssfsn0d8dnl663y-fontconfig-2.17.1
+Deriver: yi799y11n4w7f7z8ngpifdm5nav99ny4-fontconfig-2.17.1.drv
+Sig: cache.nixos.org-1:rDDEDcXfYooEHnkM0mq7/wKWT5QxZfmHEMC5MdNvxRdUMemjrXZ77Pq4g5sukb0HyBTW9kICShDD1aG+sK+5Cw==
+Sig: vicondoa-weezterm:ciH5bUdh3C78wsJi1K0Bqkwr2weRdOsGOjvWGCqzs43m0B8HMzZFysLHPZq2114oxVBokhB+I7aoNW4DcQUSAw==

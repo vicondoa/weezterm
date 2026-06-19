@@ -1,0 +1,11 @@
+StorePath: /nix/store/vqyqaaar0dvcdbmzsap60r96n1va0idd-libpng-apng-1.6.56
+URL: nar/13590qbcpyfghz2smm1avwc7vvlinlggkz2bb3rsg8vi2xxdxyj0.nar.xz
+Compression: xz
+FileHash: sha256:13590qbcpyfghz2smm1avwc7vvlinlggkz2bb3rsg8vi2xxdxyj0
+FileSize: 109008
+NarHash: sha256:1ldm1vsr9ml29y6k2pgcfm7xskic2vjqw7nnmzcl9xjbljsp04z3
+NarSize: 279888
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 61a1nwx3w6rqyaisj5rn1sal1981apm7-zlib-1.3.2 vqyqaaar0dvcdbmzsap60r96n1va0idd-libpng-apng-1.6.56
+Deriver: awrbm03zwlx2im41ds8kxcwpb3zvzbr7-libpng-apng-1.6.56.drv
+Sig: cache.nixos.org-1:NnuXriTlGw1pRP4ebgezlaMgwkmTdYUgQhRRe6E8ENBHK+OMekzspkduCFIfcIl3koZHj7n8yHe9i4xc+C0pCQ==
+Sig: vicondoa-weezterm:3xnRrM8APLj2X7nL0QqePqwilW5rHnmzKN5WeAHatX/ftNmt1KBWsd64CL/3VsclehfAXVbGesDNahprgBfnDw==

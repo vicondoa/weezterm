@@ -1,0 +1,11 @@
+StorePath: /nix/store/d6vnmfmcz5b299180issiaad4m96wh8k-vulkan-loader-1.4.341.0
+URL: nar/0gm7ygy41kya5ls3p4d9yhr5m6kz9r5lmrn4p3g6zhancwcanikz.nar.xz
+Compression: xz
+FileHash: sha256:0gm7ygy41kya5ls3p4d9yhr5m6kz9r5lmrn4p3g6zhancwcanikz
+FileSize: 155144
+NarHash: sha256:05gys4v5acgh8h9dyxzmvrfivpdgnbpiamvcpb3mnziq6zs86da2
+NarSize: 700176
+References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61
+Deriver: d3brjpx0rh5dbr2hkaxxrcf1rphlhkdp-vulkan-loader-1.4.341.0.drv
+Sig: cache.nixos.org-1:sjx4+bLL6UOpHxCdxjgC7KqYlLSm7gOnNPBg4/jtSQvzXktPoONcBijavbmbx9KO+Y6iAJGSKU7xjly4FLHcDg==
+Sig: vicondoa-weezterm:PBZE0FP8ZfrH1+i4VDMYFzkGtj6d6+r4/rQgmAsduMi4mn5h72fOgVIJv70vLo5NLteEYL5qCPeYB/EfoA1/BA==

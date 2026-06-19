@@ -1,0 +1,11 @@
+StorePath: /nix/store/0hjbb0k3zn1y8fqm5sn0zfr2h5874qg1-libxdmcp-1.1.5
+URL: nar/0zb43r4169n4jk4izphc9784hi242s020mb38ajwdmiv9h3qj5ns.nar.xz
+Compression: xz
+FileHash: sha256:0zb43r4169n4jk4izphc9784hi242s020mb38ajwdmiv9h3qj5ns
+FileSize: 8572
+NarHash: sha256:01h60q52shzdmwsna02a0dpyjznppmsy94rqvrp2jgpdxp8ak4kc
+NarSize: 31912
+References: 0hjbb0k3zn1y8fqm5sn0zfr2h5874qg1-libxdmcp-1.1.5 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61
+Deriver: qn5yjn1z6n636l8gpqfjryr48v34hyjf-libxdmcp-1.1.5.drv
+Sig: cache.nixos.org-1:4WiYokdrmhF9bzdCfMRaI0RX4s6w8+ZTNwxebYPrR3Fh7sXs9hV4GA7FbaEei/VPFYNwMNMsvjDbnMd17UZvCQ==
+Sig: vicondoa-weezterm:C4a92wX/fekXONgxj3zaGn2rXw4DBVHH/g7nWbforIEdtNfZK//V9Xh/6AhFBRhtzxlSo4qmz3fn0YtvQL0xBA==

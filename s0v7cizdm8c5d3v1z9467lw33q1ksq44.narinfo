@@ -1,0 +1,11 @@
+StorePath: /nix/store/s0v7cizdm8c5d3v1z9467lw33q1ksq44-dejavu-fonts-minimal-2.37
+URL: nar/0c0866xrrsqimnq1bf13ffgzph7fbsrywdcz60788y1009xv9y4r.nar.xz
+Compression: xz
+FileHash: sha256:0c0866xrrsqimnq1bf13ffgzph7fbsrywdcz60788y1009xv9y4r
+FileSize: 302648
+NarHash: sha256:1fkxijysp5k0q49bai9b4wrmg85w4iix76cgq1kf7ph22qdjic5y
+NarSize: 760472
+References: 
+Deriver: i830cwnlw4vhs8zx9rsk5s1abvwjiwsh-dejavu-fonts-minimal-2.37.drv
+Sig: cache.nixos.org-1:Q5VOUENjhsO0Z5D/6mlzUTtbKtkfsZbwZaw0p5YCBzaFHrtDs4QjfXQXwtv0W3todpKcVrx1FrfOR6Jwf8gsAg==
+Sig: vicondoa-weezterm:3WrsZ9F2WNy+fTP/p4fugZ94feOgDaJDD1vxF3vUwYsO/AQ0J0QUTJujHQ15hXDRyBRtJmviSqYKqDB8Ziu3DQ==
