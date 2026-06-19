@@ -111,13 +111,22 @@
           src = pkgs.fetchurl {
             inherit (prebuiltManifest.binaries.weezterm) url hash;
           };
-          dontUnpack = false;
+          nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+          buildInputs = with pkgs; [
+            stdenv.cc.cc.lib openssl fontconfig libGL libxkbcommon wayland
+            vulkan-loader xorg.libxcb xorg.libX11 xorg.libXcursor
+            xorg.libXrandr xorg.libXi xorg.xcbutil xorg.xcbutilimage
+            xorg.xcbutilkeysyms xorg.xcbutilwm zlib
+          ];
           sourceRoot = ".";
-          dontFixup = true;
+          dontConfigure = true;
+          dontBuild = true;
           installPhase = ''
-            cp -a . $out
-            chmod -R u+w $out
+            mkdir -p $out
+            cp -a bin share $out/ 2>/dev/null || cp -a bin $out/
+            cp -a etc $out/ 2>/dev/null || true
           '';
+          meta.mainProgram = "weezterm";
         };
 
         sourcePackage = rustPlatform.buildRustPackage rec {
@@ -274,7 +283,7 @@
         };
       in
       {
-        packages.default = sourcePackage;
+        packages.default = if hasPrebuilt then prebuiltPackage else sourcePackage;
         packages.source = sourcePackage;
 
         # --- weezterm remote features ---
