@@ -108,10 +108,7 @@ jobs:
             --notes "$NOTES"
 
       - name: Install Nix (for hash computation)
-        uses: cachix/install-nix-action@v4
-        with:
-          extra_nix_config: |
-            experimental-features = nix-command flakes
+        uses: DeterminateSystems/nix-installer-action@main
 
       - name: Compute SRI hashes and commit prebuilt manifest
         run: |
