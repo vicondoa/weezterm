@@ -523,18 +523,35 @@ Also disabled: `nix_continuous.yml`, `nix-update-flake.yml`, `pages.yml`,
 
 > Decision record: [ADR 0005 — Unified SemVer versioning](docs/adr/0005-unified-semver-versioning.md).
 
-1. Bump `version` in `wezterm-version/Cargo.toml` (e.g., `0.2.0` → `0.3.0`)
-2. Commit: `git commit -am "chore: bump version to 0.3.0"`
-3. Tag: `git tag -a v0.3.0 -m "WeezTerm v0.3.0"  &&  git push origin v0.3.0`
-4. The `weezterm-build` workflow triggers on `v*` tags
-5. Writes `.tag` file with the version (e.g., `0.3.0`)
-6. Builds all platforms, runs tests, packages artifacts
-7. `release` job creates a GitHub Release titled `WeezTerm v0.3.0`
+Releases are **changelog-driven**. Merging to `main` with a new version
+header in `CHANGELOG.md` triggers an automatic release.
+
+**Workflow:**
+
+1. During development, add entries under `## [Unreleased]` in `CHANGELOG.md`
+2. When ready to release:
+   - Bump `version` in `wezterm-version/Cargo.toml`
+   - Rename `## [Unreleased]` entries to `## [X.Y.Z] - YYYY-MM-DD`
+   - Add a fresh empty `## [Unreleased]` section above
+3. Merge PR to `main`
+4. The `nix_release.yml` workflow detects the new version, auto-tags `vX.Y.Z`,
+   builds the Nix package, and publishes a GitHub Release with binaries
+
+**The CI changelog gate requires:**
+- Every PR that changes code must update CHANGELOG.md
+- Format must follow [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
+- Version headers: `## [X.Y.Z] - YYYY-MM-DD` (valid semver + ISO date)
 
 **Version format:**
-- Release builds: `0.3.0` (from `.tag` file)
-- Dev builds: `0.3.0-dev.YYYYMMDD.SHORTHASH` (auto-derived from git)
-- The single source of truth is `wezterm-version/Cargo.toml`
+- Release builds: `0.4.0` (from CHANGELOG.md + Cargo.toml)
+- Dev builds: `0.4.0-dev.YYYYMMDD.SHORTHASH` (auto-derived from git)
+- Single source of truth: `CHANGELOG.md` (determines when a release is cut);
+  `wezterm-version/Cargo.toml` provides the in-binary version string
+
+**Nix release assets (x86_64-linux):**
+- `weezterm-vX.Y.Z-x86_64-linux-nix.tar.gz` — full `nix build` output
+  (binaries + terminfo + shell completions + desktop entry)
+- `SHA256SUMS`
 
 ### Branch protection
 
