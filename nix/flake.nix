@@ -1,6 +1,11 @@
 {
   description = "A GPU-accelerated cross-platform terminal emulator and multiplexer written by @wez and implemented in Rust";
 
+  nixConfig = {
+    extra-substituters = [ "https://vicondoa.github.io/weezterm" ];
+    extra-trusted-public-keys = [ "vicondoa-weezterm:ngBOtTKVGlEGkoDHTpGQZFN/amcKwleX0XZH28HIM5s=" ];
+  };
+
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     flake-utils.url = "github:numtide/flake-utils";

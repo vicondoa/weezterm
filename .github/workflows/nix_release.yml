@@ -85,6 +85,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          submodules: recursive
       - uses: actions/download-artifact@v4
         with:
           name: release-binaries
@@ -107,8 +108,53 @@ jobs:
             --title "$VERSION" \
             --notes "$NOTES"
 
-      - name: Install Nix (for hash computation)
+      - name: Install Nix (for cache + hash computation)
         uses: DeterminateSystems/nix-installer-action@main
+
+      - name: Nix store cache
+        uses: DeterminateSystems/flakehub-cache-action@main
+
+      - name: Rebuild and export GitHub Pages binary cache
+        env:
+          NIX_CACHE_SIGNING_KEY: ${{ secrets.NIX_CACHE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          CACHE_DIR="$RUNNER_TEMP/nix-cache"
+          SIGNING_KEY="$RUNNER_TEMP/signing-key.pem"
+
+          nix build ./nix -o result
+
+          mkdir -p "$CACHE_DIR"
+          printf '%s\n' "$NIX_CACHE_SIGNING_KEY" > "$SIGNING_KEY"
+          nix store sign --key-file "$SIGNING_KEY" $(nix path-info -r ./result)
+          nix copy --to "file://$CACHE_DIR" ./result
+          if [ ! -f "$CACHE_DIR/nix-cache-info" ]; then
+            printf '{"storeDir":"/nix/store","wantMassQuery":true,"priority":40}\n' > "$CACHE_DIR/nix-cache-info"
+          fi
+          rm -f "$SIGNING_KEY"
+
+      - name: Push GitHub Pages binary cache
+        run: |
+          set -euo pipefail
+          VERSION="v${{ needs.detect-version.outputs.version }}"
+          CACHE_DIR="$RUNNER_TEMP/nix-cache"
+          PAGES_DIR="$RUNNER_TEMP/gh-pages"
+
+          git fetch origin gh-pages
+          git worktree add -B gh-pages "$PAGES_DIR" origin/gh-pages
+
+          mkdir -p "$PAGES_DIR/nar"
+          cp "$CACHE_DIR/nix-cache-info" "$PAGES_DIR/"
+          cp -R "$CACHE_DIR/nar/." "$PAGES_DIR/nar/"
+          find "$CACHE_DIR" -maxdepth 1 -name '*.narinfo' -exec cp {} "$PAGES_DIR/" \;
+
+          cd "$PAGES_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "cache: publish ${VERSION} closure"
+          git push origin gh-pages
 
       - name: Compute SRI hashes and commit prebuilt manifest
         run: |
