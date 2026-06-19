@@ -1,0 +1,10 @@
+StorePath: /nix/store/jr2fz7lx6q0bgkhy08a13xrp7k4yiqfc-weezterm
+URL: nar/0a12wc54s3dr2hdikg9c1kdqbgpk4kvd1fz03xf7q27igvkcnsi4.nar.xz
+Compression: xz
+FileHash: sha256:0a12wc54s3dr2hdikg9c1kdqbgpk4kvd1fz03xf7q27igvkcnsi4
+FileSize: 40626600
+NarHash: sha256:19i9lb5xm56c872absimwgc8in101kf1ffmb95x4gc2dz5alj47s
+NarSize: 174749016
+References: 2mvdayy6h2s5z6cwq7c5spiaqnjbax4n-libxcb-image-0.4.1 48krja1dqwpsa0i3yw9v47hbcxn7agrh-fontconfig-2.17.1-lib 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 7gwd2kvkx1s369cwiv5z4x2xjxbppav6-libx11-1.8.13 chqq8mpmpyfi9kgsngya71akv5xicn03-gcc-15.2.0-lib d6vnmfmcz5b299180issiaad4m96wh8k-vulkan-loader-1.4.341.0 dpi7sgi4dmnddwjwdi57d8x06sx49vkn-libglvnd-1.7.0 hyh8r9kblnp0r1nr0pqyydpri1h210d7-wezterm-terminfo jj27mc075js673vkgd8fy6xxr34n8n9i-libxcb-1.17.0 pdy4va4m24xl8f0c792jzfz00g1knai4-libxcb-util-0.4.1 x0gx9xj0xdg5n9vixwn4p5awi2h613r6-libxkbcommon-1.13.1 y18pnbvfarnilsmgayswvi1khaw9wbsc-openssl-3.6.2
+Deriver: 7p465sdw9iv1fc1yw8lpdj0pm742g7jl-weezterm.drv
+Sig: vicondoa-weezterm:cirE7syWWwC7sA4SGid8QM6SgwjilZLvx9HMXw/aQSpjIf2+9NTkxRUPUnYEcwPD70QYw6zrIii0tr5ZjGU3CA==

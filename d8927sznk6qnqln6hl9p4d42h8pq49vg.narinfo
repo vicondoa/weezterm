@@ -6,6 +6,6 @@ FileSize: 93472
 NarHash: sha256:04f5g4aifa0p1gfg58ndfcf8k6q9p8220syqv7jgvgg8lyv2hsaf
 NarSize: 313560
 References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 d8927sznk6qnqln6hl9p4d42h8pq49vg-expat-2.8.0
-Deriver: k48c3sv78mhi18p9rn9h3rdj3h8wn421-expat-2.8.0.drv
-Sig: cache.nixos.org-1:0cOViD5deLan5lGp7mhmDN6wYVZXbwLnRDHqhW6S1EI8QEijAtdCjVCIpAHwhUqbE4aJscscv7lSbAJUp2sDBg==
+Sig: cache.flakehub.com-3:WOHISlDjjuUNrDrq7NtIynpEvKc72XZl09n7XLPPJMPJLSXbczt65oezYDgRWR61szxUKXzkUHRHOnFpvUBGCQ==
+Sig: cache.flakehub.com-4:MzeoI5oScItbV+tpsveT+jamhH0Rxg5W75XHXMCzDZpcRtxa19DUQ1EESUONcepyRNlfVTsAIF4VjaKTFqiOCg==
 Sig: vicondoa-weezterm:4W1SCynzEMTPmSvy6SWWoUipiAvj8i4s7r6Cf2KVH1FxYNVbMBaJHC37jEaSGzNhLE1SCgiKJfT87HXYUvBcBQ==
