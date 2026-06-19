@@ -269,7 +269,7 @@
         };
       in
       {
-        packages.default = if hasPrebuilt then prebuiltPackage else sourcePackage;
+        packages.default = sourcePackage;
         packages.source = sourcePackage;
 
         # --- weezterm remote features ---
