@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-19
+
+### Added
+
+- Changelog-driven nix release workflow (auto-publishes pre-built binaries)
+- Changelog validation CI gate for PRs
+- Pre-built binary manifest (`nix/prebuilt.json`) for downstream consumers
+
 ## [0.4.0] - 2026-04-07
 
 ### Added
