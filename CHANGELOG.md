@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Native Linux d2b provider core using the d2b public client protocol with non-blocking pane queues and redacted diagnostics.
+
 ## [0.6.0] - 2026-06-19
 
 ### Changed

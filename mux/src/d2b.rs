@@ -8,18 +8,35 @@ mod imp {
         terminal_with_lines_mut, RenderableDimensions, StableCursorPosition,
     };
     use crate::window::WindowId;
-    use crate::Mux;
+    use crate::{Mux, MuxNotification};
     use anyhow::{anyhow, bail};
+    use async_channel::{Receiver, Sender, TrySendError};
+    use async_io::Async;
     use async_trait::async_trait;
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine as _;
+    use d2b_client::{AttachedShell, ClientError, FrameBounds, PublicSocketClient};
+    use d2b_toolkit_core::{
+        Hello, KnownFeatureFlag, Redacted, ShellName, SocketClass, TerminalSize as D2bTerminalSize,
+        TerminalStream,
+    };
+    use futures::{future, Future};
     use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
     use rangeset::RangeSet;
-    use std::future::Future;
+    use sha2::{Digest, Sha256};
+    use socket2::{Domain as SocketDomain, SockAddr, Socket, Type};
+    use std::convert::TryInto;
+    use std::future::Future as StdFuture;
     use std::io::{Error as IoError, ErrorKind, Write};
     use std::ops::Range;
+    use std::os::fd::OwnedFd;
+    use std::os::unix::net::UnixStream;
+    use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::mpsc;
     use std::sync::{Arc, Weak};
+    use std::time::Duration;
+    use termwiz::escape::parser::Parser;
     use termwiz::surface::{Line, SequenceNo};
     use url::Url;
     use wezterm_term::color::ColorPalette;
@@ -27,7 +44,76 @@ mod imp {
         KeyCode, KeyModifiers, MouseEvent, StableRowIndex, TerminalConfiguration, TerminalSize,
     };
 
+    const DEFAULT_SOCKET: &str = "/run/d2b/public.sock";
+    const DEFAULT_QUEUE_DEPTH: usize = 64;
+    const DEFAULT_EVENT_DEPTH: usize = 64;
+    const DEFAULT_READ_MAX: u64 = 64 * 1024;
+    const DEFAULT_READ_WAIT_MS: u64 = 25;
+    const MAX_INPUT_CHUNK: usize = 64 * 1024;
+
     pub type TransportFuture<'a, T> = Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>;
+
+    #[derive(Clone, Eq, PartialEq)]
+    pub struct D2bCorrelationId(String);
+
+    impl D2bCorrelationId {
+        pub fn from_sensitive(kind: &'static str, value: impl AsRef<[u8]>) -> Self {
+            let value = value.as_ref();
+            let mut hasher = Sha256::new();
+            hasher.update(b"weezterm-d2b-correlation-v1");
+            hasher.update((kind.len() as u64).to_le_bytes());
+            hasher.update(kind.as_bytes());
+            hasher.update((value.len() as u64).to_le_bytes());
+            hasher.update(value);
+            Self(format!("d2b:{:x}", hasher.finalize()))
+        }
+    }
+
+    impl std::fmt::Debug for D2bCorrelationId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    impl std::fmt::Display for D2bCorrelationId {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str(&self.0)
+        }
+    }
+
+    #[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+    pub enum D2bProviderError {
+        #[error("d2b provider queue full while {operation}; reattach required ({correlation})")]
+        Backpressure {
+            operation: &'static str,
+            correlation: D2bCorrelationId,
+        },
+        #[error("d2b provider timed out while {operation}; reattach required")]
+        Timeout {
+            operation: &'static str,
+            correlation: Option<D2bCorrelationId>,
+        },
+        #[error("d2b provider disconnected while {operation}; reattach required")]
+        Disconnected {
+            operation: &'static str,
+            correlation: Option<D2bCorrelationId>,
+        },
+        #[error("d2b provider stale session while {operation}; reattach required ({correlation})")]
+        StaleSession {
+            operation: &'static str,
+            correlation: D2bCorrelationId,
+        },
+        #[error("d2b provider dropped terminal output; reattach required ({correlation})")]
+        DroppedOutput { correlation: D2bCorrelationId },
+        #[error("d2b daemon returned typed error `{kind}` while {operation}")]
+        Daemon {
+            operation: &'static str,
+            kind: String,
+            correlation: Option<D2bCorrelationId>,
+        },
+        #[error("d2b provider attach failed: {kind}")]
+        AttachFailed { kind: String },
+    }
 
     #[derive(Clone, Eq, PartialEq)]
     pub struct D2bSession {
@@ -35,6 +121,7 @@ mod imp {
         pub label: String,
         pub vm_name: String,
         pub workspace: Option<String>,
+        pub correlation_id: D2bCorrelationId,
     }
 
     impl std::fmt::Debug for D2bSession {
@@ -44,6 +131,7 @@ mod imp {
                 .field("label", &"<redacted>")
                 .field("vm_name", &"<redacted>")
                 .field("workspace", &self.workspace.as_ref().map(|_| "<redacted>"))
+                .field("correlation_id", &self.correlation_id)
                 .finish()
         }
     }
@@ -52,6 +140,7 @@ mod imp {
     pub struct D2bPaneHandle {
         pub session_id: String,
         pub pane_id: String,
+        pub correlation_id: D2bCorrelationId,
     }
 
     impl std::fmt::Debug for D2bPaneHandle {
@@ -59,6 +148,7 @@ mod imp {
             f.debug_struct("D2bPaneHandle")
                 .field("session_id", &"<redacted>")
                 .field("pane_id", &"<redacted>")
+                .field("correlation_id", &self.correlation_id)
                 .finish()
         }
     }
@@ -89,20 +179,570 @@ mod imp {
         }
     }
 
+    enum D2bPaneCommand {
+        Write { bytes: Vec<u8> },
+        Resize { size: TerminalSize },
+        CloseAttach { reason: D2bDetachReason },
+    }
+
+    impl std::fmt::Debug for D2bPaneCommand {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Write { bytes } => f
+                    .debug_struct("Write")
+                    .field("bytes", &format_args!("<redacted:{}>", bytes.len()))
+                    .finish(),
+                Self::Resize { size } => f.debug_struct("Resize").field("size", size).finish(),
+                Self::CloseAttach { reason } => f
+                    .debug_struct("CloseAttach")
+                    .field("reason", reason)
+                    .finish(),
+            }
+        }
+    }
+
+    enum D2bPaneEvent {
+        Output(Vec<u8>),
+        Closed,
+        ReattachRequired(D2bProviderError),
+    }
+
+    impl std::fmt::Debug for D2bPaneEvent {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            match self {
+                Self::Output(bytes) => f
+                    .debug_struct("Output")
+                    .field("bytes", &format_args!("<redacted:{}>", bytes.len()))
+                    .finish(),
+                Self::Closed => f.write_str("Closed"),
+                Self::ReattachRequired(err) => {
+                    f.debug_tuple("ReattachRequired").field(err).finish()
+                }
+            }
+        }
+    }
+
+    pub struct D2bAttachedPane {
+        handle: D2bPaneHandle,
+        command_tx: Sender<D2bPaneCommand>,
+        event_rx: Receiver<D2bPaneEvent>,
+    }
+
+    impl D2bAttachedPane {
+        fn new(
+            handle: D2bPaneHandle,
+            command_tx: Sender<D2bPaneCommand>,
+            event_rx: Receiver<D2bPaneEvent>,
+        ) -> Self {
+            Self {
+                handle,
+                command_tx,
+                event_rx,
+            }
+        }
+    }
+
     pub trait D2bTransport: Send + Sync {
         fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>>;
 
-        fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bPaneHandle>;
+        fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane>;
+    }
 
-        fn detach(
-            &self,
-            handle: &D2bPaneHandle,
-            reason: D2bDetachReason,
-        ) -> TransportFuture<'_, ()>;
+    #[derive(Clone, Debug)]
+    pub struct D2bRuntimeConfig {
+        pub socket_path: PathBuf,
+        pub connect_timeout: Duration,
+        pub write_timeout: Duration,
+        pub read_timeout: Duration,
+        pub command_queue_depth: usize,
+        pub event_queue_depth: usize,
+        pub output_read_max: u64,
+        pub output_wait_ms: u64,
+    }
 
-        fn send_input(&self, handle: &D2bPaneHandle, input: Vec<u8>) -> TransportFuture<'_, ()>;
+    impl Default for D2bRuntimeConfig {
+        fn default() -> Self {
+            Self {
+                socket_path: PathBuf::from(DEFAULT_SOCKET),
+                connect_timeout: Duration::from_secs(2),
+                write_timeout: Duration::from_secs(2),
+                read_timeout: Duration::from_secs(2),
+                command_queue_depth: DEFAULT_QUEUE_DEPTH,
+                event_queue_depth: DEFAULT_EVENT_DEPTH,
+                output_read_max: DEFAULT_READ_MAX,
+                output_wait_ms: DEFAULT_READ_WAIT_MS,
+            }
+        }
+    }
 
-        fn resize(&self, handle: &D2bPaneHandle, size: TerminalSize) -> TransportFuture<'_, ()>;
+    type D2bSocket = Async<UnixStream>;
+    type D2bClient = PublicSocketClient<D2bSocket>;
+    type D2bShell = AttachedShell<D2bSocket>;
+
+    pub struct NativeD2bTransport {
+        vm: String,
+        config: D2bRuntimeConfig,
+        bounds: FrameBounds,
+    }
+
+    impl NativeD2bTransport {
+        pub fn new(vm: impl Into<String>, config: D2bRuntimeConfig) -> Self {
+            Self {
+                vm: vm.into(),
+                config,
+                bounds: FrameBounds::default_public_daemon(),
+            }
+        }
+
+        async fn connect_client(&self) -> Result<D2bClient, D2bProviderError> {
+            d2b_client::ensure_allowed_socket(classify_socket_path(&self.config.socket_path))
+                .map_err(|err| D2bProviderError::AttachFailed {
+                    kind: err.to_string(),
+                })?;
+            let mut socket = timeout_result(
+                "connecting to d2b public socket",
+                None,
+                self.config.connect_timeout,
+                async_unix_connect(&self.config.socket_path),
+            )
+            .await?;
+
+            client_op(
+                "sending d2b hello",
+                None,
+                self.config.write_timeout,
+                d2b_client::send_hello(
+                    &mut socket,
+                    &Hello::toolkit_client(vec![KnownFeatureFlag::TypedErrors.wire_value()]),
+                    self.bounds,
+                ),
+            )
+            .await?;
+            client_op(
+                "reading d2b hello",
+                None,
+                self.config.read_timeout,
+                d2b_client::read_hello_response(&mut socket, self.bounds),
+            )
+            .await?;
+
+            Ok(PublicSocketClient::with_bounds(socket, self.bounds))
+        }
+    }
+
+    impl D2bTransport for NativeD2bTransport {
+        fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>> {
+            Box::pin(async move {
+                let mut client = self.connect_client().await?;
+                let result = client_op(
+                    "listing d2b shells",
+                    None,
+                    self.config.write_timeout,
+                    client.shell_list(self.vm.clone()),
+                )
+                .await?;
+                Ok(result
+                    .sessions
+                    .into_iter()
+                    .map(|entry| {
+                        let name = entry.name.as_str().to_string();
+                        D2bSession {
+                            id: name.clone(),
+                            label: if entry.is_default {
+                                format!("{name} (default)")
+                            } else {
+                                name.clone()
+                            },
+                            vm_name: self.vm.clone(),
+                            workspace: None,
+                            correlation_id: D2bCorrelationId::from_sensitive("shell", &name),
+                        }
+                    })
+                    .collect())
+            })
+        }
+
+        fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
+            Box::pin(async move {
+                let client = self.connect_client().await?;
+                let name = request.session_id.clone().map(ShellName::new);
+                let size = to_d2b_size(request.size);
+                let shell = client_op(
+                    "attaching d2b shell",
+                    None,
+                    self.config.write_timeout,
+                    client.attach_shell(self.vm.clone(), name, false, size),
+                )
+                .await?;
+                let resolved_name = shell.resolved_name().as_str().to_string();
+                let correlation_id =
+                    D2bCorrelationId::from_sensitive("attached-shell", &resolved_name);
+                let handle = D2bPaneHandle {
+                    session_id: correlation_id.to_string(),
+                    pane_id: D2bCorrelationId::from_sensitive("pane", &resolved_name).to_string(),
+                    correlation_id: correlation_id.clone(),
+                };
+                let (command_tx, command_rx) =
+                    async_channel::bounded(self.config.command_queue_depth);
+                let (event_tx, event_rx) = async_channel::bounded(self.config.event_queue_depth);
+                spawn_native_actor(
+                    shell,
+                    command_rx,
+                    event_tx,
+                    self.config.clone(),
+                    correlation_id,
+                );
+                Ok(D2bAttachedPane::new(handle, command_tx, event_rx))
+            })
+        }
+    }
+
+    pub fn native_domain(vm: impl Into<String>, config: D2bRuntimeConfig) -> D2bDomain {
+        let vm = vm.into();
+        D2bDomain::new(vm.clone(), Arc::new(NativeD2bTransport::new(vm, config)))
+    }
+
+    async fn async_unix_connect(path: &Path) -> std::io::Result<D2bSocket> {
+        let sockaddr = SockAddr::unix(path)?;
+        let socket = Socket::new(
+            SocketDomain::UNIX,
+            Type::from(libc::SOCK_STREAM | libc::SOCK_CLOEXEC),
+            None,
+        )?;
+        socket.set_nonblocking(true)?;
+        match socket.connect(&sockaddr) {
+            Ok(()) => {}
+            Err(err) if is_connect_in_progress(&err) => {}
+            Err(err) => return Err(err),
+        }
+        let owned: OwnedFd = socket.into();
+        let stream = UnixStream::from(owned);
+        stream.set_nonblocking(true)?;
+        let stream = Async::new(stream)?;
+        stream.writable().await?;
+        if let Some(err) = stream.get_ref().take_error()? {
+            return Err(err);
+        }
+        Ok(stream)
+    }
+
+    fn is_connect_in_progress(err: &std::io::Error) -> bool {
+        err.kind() == ErrorKind::WouldBlock
+            || err.raw_os_error() == Some(libc::EINPROGRESS)
+            || err.raw_os_error() == Some(libc::EALREADY)
+    }
+
+    fn classify_socket_path(path: &Path) -> SocketClass {
+        let rendered = path.to_string_lossy();
+        let trimmed = rendered.trim();
+        if trimmed == "/run/d2b/public.sock" {
+            return SocketClass::PublicDaemon;
+        }
+        if trimmed.is_empty() || trimmed == "/run/d2b/priv.sock" {
+            return SocketClass::PrivilegedBroker;
+        }
+        match path.file_name().and_then(|name| name.to_str()) {
+            Some("priv.sock" | "broker.sock" | "priv-broker.sock") => SocketClass::PrivilegedBroker,
+            _ => SocketClass::Other,
+        }
+    }
+
+    async fn timeout_result<F, T>(
+        operation: &'static str,
+        correlation: Option<D2bCorrelationId>,
+        timeout: Duration,
+        fut: F,
+    ) -> Result<T, D2bProviderError>
+    where
+        F: StdFuture<Output = std::io::Result<T>>,
+    {
+        futures::pin_mut!(fut);
+        let timer = smol::Timer::after(timeout);
+        futures::pin_mut!(timer);
+        match future::select(fut, timer).await {
+            future::Either::Left((result, _)) => {
+                result.map_err(|_| D2bProviderError::Disconnected {
+                    operation,
+                    correlation,
+                })
+            }
+            future::Either::Right((_, _)) => Err(D2bProviderError::Timeout {
+                operation,
+                correlation,
+            }),
+        }
+    }
+
+    async fn client_op<F, T>(
+        operation: &'static str,
+        correlation: Option<D2bCorrelationId>,
+        timeout: Duration,
+        fut: F,
+    ) -> Result<T, D2bProviderError>
+    where
+        F: StdFuture<Output = Result<T, ClientError>>,
+    {
+        futures::pin_mut!(fut);
+        let timer = smol::Timer::after(timeout);
+        futures::pin_mut!(timer);
+        match future::select(fut, timer).await {
+            future::Either::Left((result, _)) => {
+                result.map_err(|err| classify_client_error(operation, correlation, err))
+            }
+            future::Either::Right((_, _)) => Err(D2bProviderError::Timeout {
+                operation,
+                correlation,
+            }),
+        }
+    }
+
+    fn classify_client_error(
+        operation: &'static str,
+        correlation: Option<D2bCorrelationId>,
+        err: ClientError,
+    ) -> D2bProviderError {
+        match err {
+            ClientError::Daemon { kind } if kind.contains("stale-session") => {
+                D2bProviderError::StaleSession {
+                    operation,
+                    correlation: correlation.unwrap_or_else(|| {
+                        D2bCorrelationId::from_sensitive("unknown-stale-session", operation)
+                    }),
+                }
+            }
+            ClientError::Daemon { kind } if kind.contains("timeout") => D2bProviderError::Timeout {
+                operation,
+                correlation,
+            },
+            ClientError::Daemon { kind } => D2bProviderError::Daemon {
+                operation,
+                kind,
+                correlation,
+            },
+            ClientError::Core(_) => D2bProviderError::Disconnected {
+                operation,
+                correlation,
+            },
+            ClientError::Codec { .. }
+            | ClientError::Hello { .. }
+            | ClientError::UnexpectedResponse { .. }
+            | ClientError::CorrelationMismatch => D2bProviderError::AttachFailed {
+                kind: err.to_string(),
+            },
+        }
+    }
+
+    fn spawn_native_actor(
+        shell: D2bShell,
+        command_rx: Receiver<D2bPaneCommand>,
+        event_tx: Sender<D2bPaneEvent>,
+        config: D2bRuntimeConfig,
+        correlation_id: D2bCorrelationId,
+    ) {
+        smol::spawn(async move {
+            run_native_actor(shell, command_rx, event_tx, config, correlation_id).await;
+        })
+        .detach();
+    }
+
+    async fn run_native_actor(
+        mut shell: D2bShell,
+        command_rx: Receiver<D2bPaneCommand>,
+        event_tx: Sender<D2bPaneEvent>,
+        config: D2bRuntimeConfig,
+        correlation_id: D2bCorrelationId,
+    ) {
+        loop {
+            while let Ok(command) = command_rx.try_recv() {
+                if handle_actor_command(&mut shell, command, &event_tx, &config, &correlation_id)
+                    .await
+                    .is_break()
+                {
+                    let _ = client_op(
+                        "closing d2b shell attach",
+                        Some(correlation_id.clone()),
+                        config.write_timeout,
+                        shell.close_attach(),
+                    )
+                    .await;
+                    let _ = event_tx.try_send(D2bPaneEvent::Closed);
+                    return;
+                }
+            }
+
+            if command_rx.is_closed() {
+                let _ = client_op(
+                    "closing detached d2b shell",
+                    Some(correlation_id.clone()),
+                    config.write_timeout,
+                    shell.close_attach(),
+                )
+                .await;
+                let _ = event_tx.try_send(D2bPaneEvent::Closed);
+                return;
+            }
+
+            for stream in [TerminalStream::Stdout, TerminalStream::Stderr] {
+                match client_op(
+                    "reading d2b shell output",
+                    Some(correlation_id.clone()),
+                    config.read_timeout,
+                    shell.read_output(stream, config.output_read_max, true, config.output_wait_ms),
+                )
+                .await
+                {
+                    Ok(chunk) => {
+                        if chunk.dropped_bytes > 0 || chunk.truncated {
+                            let err = D2bProviderError::DroppedOutput {
+                                correlation: correlation_id.clone(),
+                            };
+                            send_terminal_event(&event_tx, D2bPaneEvent::ReattachRequired(err))
+                                .await;
+                            let _ = shell.close_attach().await;
+                            return;
+                        }
+                        let encoded = chunk.data_base64.into_inner_for_wire();
+                        if !encoded.is_empty() {
+                            match STANDARD.decode(encoded) {
+                                Ok(bytes) if !bytes.is_empty() => {
+                                    if event_tx.try_send(D2bPaneEvent::Output(bytes)).is_err() {
+                                        let err = D2bProviderError::Backpressure {
+                                            operation: "forwarding d2b shell output",
+                                            correlation: correlation_id.clone(),
+                                        };
+                                        send_terminal_event(
+                                            &event_tx,
+                                            D2bPaneEvent::ReattachRequired(err),
+                                        )
+                                        .await;
+                                        let _ = shell.close_attach().await;
+                                        return;
+                                    }
+                                }
+                                Ok(_) => {}
+                                Err(_) => {
+                                    let err = D2bProviderError::Disconnected {
+                                        operation: "decoding d2b shell output",
+                                        correlation: Some(correlation_id.clone()),
+                                    };
+                                    send_terminal_event(
+                                        &event_tx,
+                                        D2bPaneEvent::ReattachRequired(err),
+                                    )
+                                    .await;
+                                    let _ = shell.close_attach().await;
+                                    return;
+                                }
+                            }
+                        }
+                    }
+                    Err(err) => {
+                        send_terminal_event(&event_tx, D2bPaneEvent::ReattachRequired(err)).await;
+                        let _ = shell.close_attach().await;
+                        return;
+                    }
+                }
+            }
+        }
+    }
+
+    enum ActorCommandResult {
+        Continue,
+        Break,
+    }
+
+    impl ActorCommandResult {
+        fn is_break(&self) -> bool {
+            matches!(self, Self::Break)
+        }
+    }
+
+    async fn handle_actor_command(
+        shell: &mut D2bShell,
+        command: D2bPaneCommand,
+        event_tx: &Sender<D2bPaneEvent>,
+        config: &D2bRuntimeConfig,
+        correlation_id: &D2bCorrelationId,
+    ) -> ActorCommandResult {
+        match command {
+            D2bPaneCommand::Write { bytes } => {
+                let result = client_op(
+                    "writing d2b shell input",
+                    Some(correlation_id.clone()),
+                    config.write_timeout,
+                    shell.write_bytes(Redacted::new(bytes), false),
+                )
+                .await;
+                match result {
+                    Ok(write) if write.backpressured || write.stdin_closed => {
+                        let err = D2bProviderError::Backpressure {
+                            operation: "writing d2b shell input",
+                            correlation: correlation_id.clone(),
+                        };
+                        send_terminal_event(event_tx, D2bPaneEvent::ReattachRequired(err)).await;
+                        ActorCommandResult::Break
+                    }
+                    Ok(_) => ActorCommandResult::Continue,
+                    Err(err) => {
+                        send_terminal_event(event_tx, D2bPaneEvent::ReattachRequired(err)).await;
+                        ActorCommandResult::Break
+                    }
+                }
+            }
+            D2bPaneCommand::Resize { size } => {
+                let result = client_op(
+                    "resizing d2b shell",
+                    Some(correlation_id.clone()),
+                    config.write_timeout,
+                    shell.resize(
+                        size.rows.try_into().unwrap_or(u32::MAX),
+                        size.cols.try_into().unwrap_or(u32::MAX),
+                    ),
+                )
+                .await;
+                match result {
+                    Ok(_) => ActorCommandResult::Continue,
+                    Err(err) => {
+                        send_terminal_event(event_tx, D2bPaneEvent::ReattachRequired(err)).await;
+                        ActorCommandResult::Break
+                    }
+                }
+            }
+            D2bPaneCommand::CloseAttach { reason: _ } => ActorCommandResult::Break,
+        }
+    }
+
+    async fn send_terminal_event(event_tx: &Sender<D2bPaneEvent>, event: D2bPaneEvent) {
+        let _ = event_tx.send(event).await;
+    }
+
+    fn to_d2b_size(size: TerminalSize) -> D2bTerminalSize {
+        D2bTerminalSize {
+            rows: size.rows.try_into().unwrap_or(u32::MAX),
+            cols: size.cols.try_into().unwrap_or(u32::MAX),
+        }
+    }
+
+    fn try_send_command(
+        tx: &Sender<D2bPaneCommand>,
+        command: D2bPaneCommand,
+        operation: &'static str,
+        correlation: D2bCorrelationId,
+    ) -> Result<(), D2bProviderError> {
+        match tx.try_send(command) {
+            Ok(()) => Ok(()),
+            Err(TrySendError::Full(_)) => {
+                tx.close();
+                Err(D2bProviderError::Backpressure {
+                    operation,
+                    correlation,
+                })
+            }
+            Err(TrySendError::Closed(_)) => Err(D2bProviderError::Disconnected {
+                operation,
+                correlation: Some(correlation),
+            }),
+        }
     }
 
     pub struct D2bDomain {
@@ -141,7 +781,7 @@ mod imp {
                 bail!("d2b domains attach existing sessions; command spawning is unsupported");
             }
 
-            let handle = self
+            let attached = self
                 .transport
                 .attach(D2bAttachRequest {
                     session_id: None,
@@ -149,12 +789,7 @@ mod imp {
                 })
                 .await?;
 
-            let concrete_pane = Arc::new(D2bPane::new(
-                self.id,
-                size,
-                handle,
-                Arc::clone(&self.transport),
-            ));
+            let concrete_pane = D2bPane::new(self.id, size, attached);
             self.panes.lock().push(Arc::downgrade(&concrete_pane));
             let pane: Arc<dyn Pane> = concrete_pane;
             Mux::get().add_pane(&pane)?;
@@ -218,8 +853,7 @@ mod imp {
         terminal: Mutex<wezterm_term::Terminal>,
         writer: Mutex<Box<dyn Write + Send>>,
         handle: D2bPaneHandle,
-        transport: Arc<dyn D2bTransport>,
-        input_tx: mpsc::Sender<Vec<u8>>,
+        command_tx: Sender<D2bPaneCommand>,
         detached: AtomicBool,
     }
 
@@ -227,49 +861,48 @@ mod imp {
         pub fn new(
             domain_id: DomainId,
             size: TerminalSize,
-            handle: D2bPaneHandle,
-            transport: Arc<dyn D2bTransport>,
-        ) -> Self {
+            attached: D2bAttachedPane,
+        ) -> Arc<Self> {
             let pane_id = alloc_pane_id();
-            let (input_tx, input_rx) = mpsc::channel::<Vec<u8>>();
-            spawn_input_forwarder(Arc::clone(&transport), handle.clone(), input_rx);
-
             let terminal = wezterm_term::Terminal::new(
                 size,
                 Arc::new(config::TermConfig::new()),
                 config::branding::APP_NAME_DISPLAY,
                 config::wezterm_version(),
                 Box::new(D2bInputWriter {
-                    input_tx: input_tx.clone(),
+                    command_tx: attached.command_tx.clone(),
+                    correlation_id: attached.handle.correlation_id.clone(),
                 }),
             );
 
-            Self {
+            let pane = Arc::new(Self {
                 pane_id,
                 domain_id,
                 terminal: Mutex::new(terminal),
                 writer: Mutex::new(Box::new(D2bInputWriter {
-                    input_tx: input_tx.clone(),
+                    command_tx: attached.command_tx.clone(),
+                    correlation_id: attached.handle.correlation_id.clone(),
                 })),
-                handle,
-                transport,
-                input_tx,
+                handle: attached.handle,
+                command_tx: attached.command_tx,
                 detached: AtomicBool::new(false),
-            }
+            });
+            spawn_event_forwarder(Arc::downgrade(&pane), attached.event_rx);
+            pane
         }
 
         fn detach_non_destructive(&self, reason: D2bDetachReason) {
             if self.detached.swap(true, Ordering::SeqCst) {
                 return;
             }
-            let transport = Arc::clone(&self.transport);
-            let handle = self.handle.clone();
-            smol::spawn(async move {
-                if let Err(err) = transport.detach(&handle, reason).await {
-                    log::warn!("failed to detach d2b pane: {err:#}");
-                }
-            })
-            .detach();
+            if let Err(err) = try_send_command(
+                &self.command_tx,
+                D2bPaneCommand::CloseAttach { reason },
+                "closing d2b shell attach",
+                self.handle.correlation_id.clone(),
+            ) {
+                log::warn!("failed to enqueue d2b close attach: {err}");
+            }
         }
 
         pub fn close_non_destructive(&self) {
@@ -335,9 +968,18 @@ mod imp {
         }
 
         fn send_paste(&self, text: &str) -> anyhow::Result<()> {
-            self.input_tx
-                .send(text.as_bytes().to_vec())
-                .map_err(|err| anyhow!("d2b input queue closed: {err}"))
+            for chunk in text.as_bytes().chunks(MAX_INPUT_CHUNK) {
+                try_send_command(
+                    &self.command_tx,
+                    D2bPaneCommand::Write {
+                        bytes: chunk.to_vec(),
+                    },
+                    "queueing d2b paste",
+                    self.handle.correlation_id.clone(),
+                )
+                .map_err(anyhow::Error::from)?;
+            }
+            Ok(())
         }
 
         fn reader(&self) -> anyhow::Result<Option<Box<dyn std::io::Read + Send>>> {
@@ -353,15 +995,13 @@ mod imp {
 
         fn resize(&self, size: TerminalSize) -> anyhow::Result<()> {
             self.terminal.lock().resize(size);
-            let transport = Arc::clone(&self.transport);
-            let handle = self.handle.clone();
-            smol::spawn(async move {
-                if let Err(err) = transport.resize(&handle, size).await {
-                    log::warn!("failed to resize d2b pane: {err:#}");
-                }
-            })
-            .detach();
-            Ok(())
+            try_send_command(
+                &self.command_tx,
+                D2bPaneCommand::Resize { size },
+                "queueing d2b resize",
+                self.handle.correlation_id.clone(),
+            )
+            .map_err(anyhow::Error::from)
         }
 
         fn key_down(&self, key: KeyCode, mods: KeyModifiers) -> anyhow::Result<()> {
@@ -428,17 +1068,23 @@ mod imp {
     }
 
     struct D2bInputWriter {
-        input_tx: mpsc::Sender<Vec<u8>>,
+        command_tx: Sender<D2bPaneCommand>,
+        correlation_id: D2bCorrelationId,
     }
 
     impl Write for D2bInputWriter {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            self.input_tx.send(buf.to_vec()).map_err(|err| {
-                IoError::new(
-                    ErrorKind::BrokenPipe,
-                    format!("d2b input queue closed: {err}"),
+            for chunk in buf.chunks(MAX_INPUT_CHUNK) {
+                try_send_command(
+                    &self.command_tx,
+                    D2bPaneCommand::Write {
+                        bytes: chunk.to_vec(),
+                    },
+                    "queueing d2b terminal input",
+                    self.correlation_id.clone(),
                 )
-            })?;
+                .map_err(|err| IoError::new(ErrorKind::WouldBlock, err))?;
+            }
             Ok(buf.len())
         }
 
@@ -447,22 +1093,42 @@ mod imp {
         }
     }
 
-    fn spawn_input_forwarder(
-        transport: Arc<dyn D2bTransport>,
-        handle: D2bPaneHandle,
-        input_rx: mpsc::Receiver<Vec<u8>>,
-    ) {
-        std::thread::Builder::new()
-            .name("weezterm-d2b-input".to_string())
-            .spawn(move || {
-                while let Ok(input) = input_rx.recv() {
-                    if let Err(err) = smol::block_on(transport.send_input(&handle, input)) {
-                        log::warn!("d2b input forward failed: {err:#}");
+    fn spawn_event_forwarder(pane: Weak<D2bPane>, event_rx: Receiver<D2bPaneEvent>) {
+        smol::spawn(async move {
+            let mut parser = Parser::new();
+            while let Ok(event) = event_rx.recv().await {
+                let Some(pane) = pane.upgrade() else { break };
+                match event {
+                    D2bPaneEvent::Output(bytes) => {
+                        let mut actions = Vec::new();
+                        parser.parse(&bytes, |action| actions.push(action));
+                        if !actions.is_empty() {
+                            pane.perform_actions(actions);
+                            Mux::notify_from_any_thread(MuxNotification::PaneOutput(
+                                pane.pane_id(),
+                            ));
+                        }
+                    }
+                    D2bPaneEvent::Closed => {
+                        pane.detached.store(true, Ordering::SeqCst);
+                        Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
+                        break;
+                    }
+                    D2bPaneEvent::ReattachRequired(err) => {
+                        pane.detached.store(true, Ordering::SeqCst);
+                        log::warn!("d2b pane requires reattach: {err}");
+                        Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
                         break;
                     }
                 }
-            })
-            .expect("spawn d2b input forwarder");
+            }
+            if let Some(pane) = pane.upgrade() {
+                if !pane.detached.swap(true, Ordering::SeqCst) {
+                    Mux::notify_from_any_thread(MuxNotification::PaneOutput(pane.pane_id()));
+                }
+            }
+        })
+        .detach();
     }
 
     pub struct UnsupportedD2bTransport;
@@ -472,23 +1138,7 @@ mod imp {
             Box::pin(async { Err(anyhow!("native d2b transport is not wired yet")) })
         }
 
-        fn attach(&self, _request: D2bAttachRequest) -> TransportFuture<'_, D2bPaneHandle> {
-            Box::pin(async { Err(anyhow!("native d2b transport is not wired yet")) })
-        }
-
-        fn detach(
-            &self,
-            _handle: &D2bPaneHandle,
-            _reason: D2bDetachReason,
-        ) -> TransportFuture<'_, ()> {
-            Box::pin(async { Ok(()) })
-        }
-
-        fn send_input(&self, _handle: &D2bPaneHandle, _input: Vec<u8>) -> TransportFuture<'_, ()> {
-            Box::pin(async { Err(anyhow!("native d2b transport is not wired yet")) })
-        }
-
-        fn resize(&self, _handle: &D2bPaneHandle, _size: TerminalSize) -> TransportFuture<'_, ()> {
+        fn attach(&self, _request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
             Box::pin(async { Err(anyhow!("native d2b transport is not wired yet")) })
         }
     }
@@ -505,9 +1155,125 @@ mod imp {
         #[derive(Default)]
         struct FakeTransport {
             sessions: Vec<D2bSession>,
-            detach_calls: Mutex<Vec<D2bDetachReason>>,
-            inputs: Mutex<Vec<Vec<u8>>>,
-            resizes: Mutex<Vec<TerminalSize>>,
+            attach_error: Option<D2bProviderError>,
+            queue_depth: usize,
+            event_depth: usize,
+            detach_calls: Arc<Mutex<Vec<D2bDetachReason>>>,
+            inputs: Arc<Mutex<Vec<Vec<u8>>>>,
+            resizes: Arc<Mutex<Vec<TerminalSize>>>,
+            pause_commands: bool,
+            emit_disconnect: bool,
+            emit_stale: bool,
+            emit_drop: bool,
+            emit_write_timeout: bool,
+            latency: Duration,
+        }
+
+        impl FakeTransport {
+            fn attached(&self, request: D2bAttachRequest) -> D2bAttachedPane {
+                let queue_depth = if self.queue_depth == 0 {
+                    DEFAULT_QUEUE_DEPTH
+                } else {
+                    self.queue_depth
+                };
+                let event_depth = if self.event_depth == 0 {
+                    DEFAULT_EVENT_DEPTH
+                } else {
+                    self.event_depth
+                };
+                let (command_tx, command_rx) = async_channel::bounded(queue_depth);
+                let (event_tx, event_rx) = async_channel::bounded(event_depth);
+                let correlation_id = D2bCorrelationId::from_sensitive(
+                    "fake-pane",
+                    request.session_id.as_deref().unwrap_or("default"),
+                );
+                let handle = D2bPaneHandle {
+                    session_id: request
+                        .session_id
+                        .unwrap_or_else(|| "session-1".to_string()),
+                    pane_id: "pane-1".to_string(),
+                    correlation_id: correlation_id.clone(),
+                };
+                if self.pause_commands {
+                    smol::spawn(async move {
+                        smol::Timer::after(Duration::from_secs(60)).await;
+                        drop(command_rx);
+                    })
+                    .detach();
+                } else {
+                    let detach_calls = Arc::clone(&self.detach_calls);
+                    let inputs = Arc::clone(&self.inputs);
+                    let resizes = Arc::clone(&self.resizes);
+                    let latency = self.latency;
+                    let emit_disconnect = self.emit_disconnect;
+                    let emit_stale = self.emit_stale;
+                    let emit_drop = self.emit_drop;
+                    let emit_write_timeout = self.emit_write_timeout;
+                    smol::spawn(async move {
+                        if latency > Duration::ZERO {
+                            smol::Timer::after(latency).await;
+                        }
+                        if emit_disconnect {
+                            let _ = event_tx
+                                .send(D2bPaneEvent::ReattachRequired(
+                                    D2bProviderError::Disconnected {
+                                        operation: "fake disconnect",
+                                        correlation: Some(correlation_id.clone()),
+                                    },
+                                ))
+                                .await;
+                            return;
+                        }
+                        if emit_stale {
+                            let _ = event_tx
+                                .send(D2bPaneEvent::ReattachRequired(
+                                    D2bProviderError::StaleSession {
+                                        operation: "fake stale session",
+                                        correlation: correlation_id.clone(),
+                                    },
+                                ))
+                                .await;
+                            return;
+                        }
+                        if emit_drop {
+                            let _ = event_tx
+                                .send(D2bPaneEvent::ReattachRequired(
+                                    D2bProviderError::DroppedOutput {
+                                        correlation: correlation_id.clone(),
+                                    },
+                                ))
+                                .await;
+                            return;
+                        }
+                        while let Ok(command) = command_rx.recv().await {
+                            match command {
+                                D2bPaneCommand::Write { bytes } => {
+                                    if emit_write_timeout {
+                                        let _ = event_tx
+                                            .send(D2bPaneEvent::ReattachRequired(
+                                                D2bProviderError::Timeout {
+                                                    operation: "fake write timeout",
+                                                    correlation: Some(correlation_id.clone()),
+                                                },
+                                            ))
+                                            .await;
+                                        break;
+                                    }
+                                    inputs.lock().push(bytes)
+                                }
+                                D2bPaneCommand::Resize { size } => resizes.lock().push(size),
+                                D2bPaneCommand::CloseAttach { reason } => {
+                                    detach_calls.lock().push(reason);
+                                    let _ = event_tx.try_send(D2bPaneEvent::Closed);
+                                    break;
+                                }
+                            }
+                        }
+                    })
+                    .detach();
+                }
+                D2bAttachedPane::new(handle, command_tx, event_rx)
+            }
         }
 
         impl D2bTransport for FakeTransport {
@@ -516,48 +1282,12 @@ mod imp {
                 Box::pin(async move { Ok(sessions) })
             }
 
-            fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bPaneHandle> {
-                Box::pin(async move {
-                    Ok(D2bPaneHandle {
-                        session_id: request
-                            .session_id
-                            .unwrap_or_else(|| "session-1".to_string()),
-                        pane_id: "pane-1".to_string(),
-                    })
-                })
-            }
-
-            fn detach(
-                &self,
-                _handle: &D2bPaneHandle,
-                reason: D2bDetachReason,
-            ) -> TransportFuture<'_, ()> {
-                Box::pin(async move {
-                    self.detach_calls.lock().push(reason);
-                    Ok(())
-                })
-            }
-
-            fn send_input(
-                &self,
-                _handle: &D2bPaneHandle,
-                input: Vec<u8>,
-            ) -> TransportFuture<'_, ()> {
-                Box::pin(async move {
-                    self.inputs.lock().push(input);
-                    Ok(())
-                })
-            }
-
-            fn resize(
-                &self,
-                _handle: &D2bPaneHandle,
-                size: TerminalSize,
-            ) -> TransportFuture<'_, ()> {
-                Box::pin(async move {
-                    self.resizes.lock().push(size);
-                    Ok(())
-                })
+            fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
+                if let Some(err) = self.attach_error.clone() {
+                    return Box::pin(async move { Err(anyhow::Error::new(err)) });
+                }
+                let pane = self.attached(request);
+                Box::pin(async move { Ok(pane) })
             }
         }
 
@@ -575,32 +1305,68 @@ mod imp {
             D2bPaneHandle {
                 session_id: "session-1".to_string(),
                 pane_id: "pane-1".to_string(),
+                correlation_id: D2bCorrelationId::from_sensitive("test", "session-1"),
             }
         }
 
+        fn attached_with_transport(transport: &FakeTransport) -> D2bAttachedPane {
+            transport.attached(D2bAttachRequest {
+                session_id: Some("session-1".to_string()),
+                size: size(),
+            })
+        }
+
         #[test]
-        fn debug_redacts_session_and_handle_data() {
+        fn native_transport_refuses_privileged_socket_before_connect() {
+            let transport = NativeD2bTransport::new(
+                "work",
+                D2bRuntimeConfig {
+                    socket_path: PathBuf::from("/run/d2b/priv.sock"),
+                    ..D2bRuntimeConfig::default()
+                },
+            );
+            let err = match smol::block_on(transport.connect_client()) {
+                Ok(_) => panic!("priv socket should be refused"),
+                Err(err) => err,
+            };
+            let rendered = err.to_string();
+            assert!(rendered.contains("refused privileged broker socket"));
+            assert!(!rendered.contains("/run/d2b/priv.sock"));
+        }
+
+        #[test]
+        fn debug_redacts_session_handle_shell_and_terminal_data_but_keeps_digest() {
             let session = D2bSession {
                 id: "session-secret".to_string(),
                 label: "quiet-otter".to_string(),
                 vm_name: "work".to_string(),
                 workspace: Some("private".to_string()),
+                correlation_id: D2bCorrelationId::from_sensitive("session", "session-secret"),
             };
             let handle = handle();
             let attach = D2bAttachRequest {
                 session_id: Some("session-secret".to_string()),
                 size: size(),
             };
+            let write = D2bPaneCommand::Write {
+                bytes: b"terminal bytes and /home/alice".to_vec(),
+            };
 
-            for rendered in [
-                format!("{session:?}"),
-                format!("{handle:?}"),
-                format!("{attach:?}"),
-            ] {
+            for rendered in [format!("{session:?}"), format!("{handle:?}")] {
                 assert!(!rendered.contains("session-secret"));
                 assert!(!rendered.contains("quiet-otter"));
+                assert!(!rendered.contains("session-1"));
+                assert!(!rendered.contains("pane-1"));
                 assert!(rendered.contains("redacted"));
+                assert!(rendered.contains("d2b:"));
             }
+            let rendered = format!("{attach:?}");
+            assert!(!rendered.contains("session-secret"));
+            assert!(rendered.contains("redacted"));
+            let rendered = format!("{write:?}");
+            assert!(rendered.contains("Write"));
+            assert!(!rendered.contains("terminal bytes"));
+            assert!(!rendered.contains("alice"));
         }
 
         fn wait_for<F>(mut predicate: F)
@@ -611,7 +1377,7 @@ mod imp {
                 if predicate() {
                     return;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(10));
+                smol::block_on(smol::Timer::after(Duration::from_millis(10)));
             }
             assert!(predicate());
         }
@@ -624,6 +1390,7 @@ mod imp {
                     label: "work".to_string(),
                     vm_name: "work".to_string(),
                     workspace: None,
+                    correlation_id: D2bCorrelationId::from_sensitive("session", "session-1"),
                 }],
                 ..Default::default()
             });
@@ -634,9 +1401,29 @@ mod imp {
         }
 
         #[test]
+        fn attach_failure_is_typed() {
+            let err = D2bProviderError::AttachFailed {
+                kind: "guest-control-shell-timeout".to_string(),
+            };
+            let transport = FakeTransport {
+                attach_error: Some(err),
+                ..Default::default()
+            };
+            let result = smol::block_on(transport.attach(D2bAttachRequest {
+                session_id: None,
+                size: size(),
+            }));
+            let err = match result {
+                Ok(_) => panic!("attach unexpectedly succeeded"),
+                Err(err) => err,
+            };
+            assert!(err.is::<D2bProviderError>());
+        }
+
+        #[test]
         fn kill_detaches_without_destroying_session() {
-            let transport = Arc::new(FakeTransport::default());
-            let pane = D2bPane::new(1, size(), handle(), transport.clone());
+            let transport = FakeTransport::default();
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
 
             pane.kill();
             pane.kill();
@@ -651,8 +1438,8 @@ mod imp {
 
         #[test]
         fn drop_detaches_if_pane_was_not_closed() {
-            let transport = Arc::new(FakeTransport::default());
-            let pane = D2bPane::new(1, size(), handle(), transport.clone());
+            let transport = FakeTransport::default();
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
 
             drop(pane);
 
@@ -662,8 +1449,8 @@ mod imp {
 
         #[test]
         fn explicit_close_uses_detach_not_kill() {
-            let transport = Arc::new(FakeTransport::default());
-            let pane = D2bPane::new(1, size(), handle(), transport.clone());
+            let transport = FakeTransport::default();
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
 
             pane.close_non_destructive();
             drop(pane);
@@ -679,7 +1466,7 @@ mod imp {
         fn domain_detach_detaches_tracked_panes() {
             let transport = Arc::new(FakeTransport::default());
             let domain = D2bDomain::new("d2b", transport.clone());
-            let pane = Arc::new(D2bPane::new(1, size(), handle(), transport.clone()));
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
             domain.panes.lock().push(Arc::downgrade(&pane));
 
             domain.detach().unwrap();
@@ -693,9 +1480,9 @@ mod imp {
         }
 
         #[test]
-        fn paste_and_resize_use_transport() {
-            let transport = Arc::new(FakeTransport::default());
-            let pane = D2bPane::new(1, size(), handle(), transport.clone());
+        fn paste_and_resize_use_nonblocking_actor_queue() {
+            let transport = FakeTransport::default();
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
 
             pane.send_paste("hello").unwrap();
             pane.resize(TerminalSize {
@@ -711,6 +1498,63 @@ mod imp {
             wait_for(|| !transport.resizes.lock().is_empty());
             assert_eq!(*transport.inputs.lock(), vec![b"hello".to_vec()]);
             assert_eq!(transport.resizes.lock()[0].rows, 40);
+        }
+
+        #[test]
+        fn full_pane_queue_returns_typed_backpressure_without_blocking() {
+            let transport = FakeTransport {
+                queue_depth: 1,
+                pause_commands: true,
+                ..Default::default()
+            };
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
+
+            pane.send_paste("first").unwrap();
+            let err = pane.send_paste("second").unwrap_err();
+            assert!(err.is::<D2bProviderError>());
+            assert!(format!("{err}").contains("queue full"));
+        }
+
+        #[test]
+        fn fake_transport_simulates_disconnect_stale_drop_write_timeout_and_latency() {
+            for (transport, expected) in [
+                (
+                    FakeTransport {
+                        emit_disconnect: true,
+                        latency: Duration::from_millis(1),
+                        ..Default::default()
+                    },
+                    "disconnected",
+                ),
+                (
+                    FakeTransport {
+                        emit_stale: true,
+                        ..Default::default()
+                    },
+                    "stale session",
+                ),
+                (
+                    FakeTransport {
+                        emit_drop: true,
+                        ..Default::default()
+                    },
+                    "dropped terminal output",
+                ),
+                (
+                    FakeTransport {
+                        emit_write_timeout: true,
+                        ..Default::default()
+                    },
+                    "write timeout",
+                ),
+            ] {
+                let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
+                if expected == "write timeout" {
+                    pane.send_paste("trigger").unwrap();
+                }
+                wait_for(|| pane.is_dead());
+                assert!(pane.is_dead(), "{}", expected);
+            }
         }
     }
 }

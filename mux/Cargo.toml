@@ -38,6 +38,7 @@ rangeset.workspace = true
 regex.workspace = true
 serde = {workspace=true, features = ["rc", "derive"]}
 serde_json.workspace = true
+sha2.workspace = true
 serial2.workspace = true
 shell-words.workspace = true
 smol.workspace = true
@@ -47,6 +48,14 @@ termwiz.workspace = true
 textwrap.workspace = true
 thiserror.workspace = true
 url.workspace = true
+# --- weezterm remote features ---
+async-channel.workspace = true
+async-io.workspace = true
+d2b-client = { path = "/home/paydro/projects/d2b-toolkit/crates/d2b-client" }
+d2b-toolkit-core = { path = "/home/paydro/projects/d2b-toolkit/crates/d2b-toolkit-core" }
+futures.workspace = true
+socket2.workspace = true
+# --- end weezterm remote features ---
 wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
