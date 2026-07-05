@@ -12,6 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native Linux d2b provider core using the d2b public client protocol with non-blocking pane queues and redacted diagnostics.
 - Native d2b VM terminal domains and a d2b session picker with offline-state handling, named-shell prompts, per-VM mux isolation, and VM/session-aware titles.
 
+### Changed
+
+- Nix flake packaging declares `d2b-toolkit` as an input and rewrites native d2b
+  client crate paths during builds, avoiding developer-local absolute paths.
+
 ## [0.6.0] - 2026-06-19
 
 ### Changed

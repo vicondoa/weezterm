@@ -1,5 +1,26 @@
 {
   "nodes": {
+    "d2b-toolkit": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1783281408,
+        "narHash": "sha256-TO1aDZnvHGB0kodpbyGPwSAhwFtV2rv0FQj3pUZQR/g=",
+        "owner": "vicondoa",
+        "repo": "d2b-toolkit",
+        "rev": "e93b17ab7fcce8a5a9f232c3c411f8082e56b706",
+        "type": "github"
+      },
+      "original": {
+        "owner": "vicondoa",
+        "ref": "terminal-integration-toolkit",
+        "repo": "d2b-toolkit",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -87,6 +108,7 @@
     },
     "root": {
       "inputs": {
+        "d2b-toolkit": "d2b-toolkit",
         "flake-utils": "flake-utils",
         "freetype2": "freetype2",
         "harfbuzz": "harfbuzz",
