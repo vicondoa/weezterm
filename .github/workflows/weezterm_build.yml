@@ -36,6 +36,9 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: "recursive"
+      - name: "Checkout d2b-toolkit sibling"
+        shell: bash
+        run: git clone --depth 1 https://github.com/vicondoa/d2b-toolkit ../d2b-toolkit
       - uses: dtolnay/rust-toolchain@stable
         with:
           target: "x86_64-pc-windows-msvc"
@@ -107,6 +110,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: "recursive"
+      - name: "Checkout d2b-toolkit sibling"
+        run: git clone --depth 1 https://github.com/vicondoa/d2b-toolkit ../d2b-toolkit
       - name: "Install Rust targets"
         run: |
           rustup target add aarch64-apple-darwin
@@ -223,6 +228,8 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: "recursive"
+      - name: "Checkout d2b-toolkit sibling"
+        run: git clone --depth 1 https://github.com/vicondoa/d2b-toolkit ../d2b-toolkit
       - uses: dtolnay/rust-toolchain@stable
       - uses: mozilla-actions/sccache-action@v0.0.9
       - uses: actions/cache@v4

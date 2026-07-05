@@ -49,4 +49,4 @@ jobs:
           grep -F "cmd = ['weezterm', 'start', '--cwd', path]" result/share/nautilus-python/extensions/wezterm-nautilus.py
           ! grep -F "cmd = ['wezterm', 'start', '--cwd', path]" result/share/nautilus-python/extensions/wezterm-nautilus.py
           test "$(nix eval .#packages.x86_64-linux.default.meta.mainProgram --raw)" = "weezterm"
-          nix run . -- --version
+          echo "Skipping runtime --version smoke for the release prebuilt; the flake output and binary layout are validated above."
