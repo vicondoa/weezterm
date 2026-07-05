@@ -1,7 +1,9 @@
 use crate::overlay::quickselect;
 use crate::termwindow::TermWindowNotif;
 use config::keyassignment::KeyAssignment;
-use mux::d2b::{friendly_session_name, validate_shell_name, D2bDomain, D2bSession};
+use mux::d2b::{
+    friendly_session_name, sanitize_display_label, validate_shell_name, D2bDomain, D2bSession,
+};
 use mux::domain::Domain;
 use mux::termwiztermtab::TermWizTerminal;
 use mux::Mux;
@@ -438,9 +440,10 @@ impl State {
 fn build_entries(vms: &[D2bVmPickerEntry]) -> Vec<Entry> {
     let mut entries = vec![];
     for vm in vms {
+        let vm_label = sanitize_display_label(&vm.vm_name);
         if !vm.available {
             entries.push(Entry {
-                label: format!("Unavailable d2b VM `{}` (offline)", vm.vm_name),
+                label: format!("Unavailable d2b VM `{vm_label}` (offline)"),
                 disabled: true,
                 action: EntryAction::Disabled,
             });
@@ -448,7 +451,10 @@ fn build_entries(vms: &[D2bVmPickerEntry]) -> Vec<Entry> {
         }
 
         entries.push(Entry {
-            label: format!("New d2b shell on `{}` ({})", vm.vm_name, vm.generated_name),
+            label: format!(
+                "New d2b shell on `{vm_label}` ({})",
+                sanitize_display_label(&vm.generated_name)
+            ),
             disabled: false,
             action: EntryAction::Open {
                 domain: vm.domain_name.clone(),
@@ -456,7 +462,7 @@ fn build_entries(vms: &[D2bVmPickerEntry]) -> Vec<Entry> {
             },
         });
         entries.push(Entry {
-            label: format!("Name new d2b shell on `{}`…", vm.vm_name),
+            label: format!("Name new d2b shell on `{vm_label}`…"),
             disabled: false,
             action: EntryAction::Manual {
                 domain: vm.domain_name.clone(),
@@ -467,6 +473,7 @@ fn build_entries(vms: &[D2bVmPickerEntry]) -> Vec<Entry> {
         let mut sessions = vm.sessions.clone();
         sessions.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.id.cmp(&b.id)));
         for session in sessions {
+            let session_label = sanitize_display_label(&session.id);
             let state = if session.is_default {
                 "default".to_string()
             } else if session.attached {
@@ -475,7 +482,7 @@ fn build_entries(vms: &[D2bVmPickerEntry]) -> Vec<Entry> {
                 format!("{:?}", session.state).to_ascii_lowercase()
             };
             entries.push(Entry {
-                label: format!("Open d2b shell `{}:{}` ({state})", vm.vm_name, session.id),
+                label: format!("Open d2b shell `{vm_label}:{session_label}` ({state})"),
                 disabled: false,
                 action: EntryAction::Open {
                     domain: vm.domain_name.clone(),
@@ -550,5 +557,24 @@ mod test {
             .iter()
             .any(|entry| entry.label.contains("work:default")));
         assert!(entries.iter().all(|entry| !entry.disabled));
+    }
+
+    #[test]
+    fn entries_sanitize_vm_and_session_labels() {
+        let entries = build_entries(&[D2bVmPickerEntry {
+            domain_name: "d2b-work".to_string(),
+            vm_name: "work\x1b[31m".to_string(),
+            available: true,
+            sessions: vec![session("bad\x07\x1b[31m", false)],
+            generated_name: "work-shell".to_string(),
+        }]);
+        let combined = entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!combined.contains('\x1b'));
+        assert!(!combined.contains('\x07'));
+        assert!(combined.contains("work:bad"));
     }
 }

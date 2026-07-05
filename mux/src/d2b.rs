@@ -46,8 +46,10 @@ pub fn friendly_session_name(vm: &str, existing: &[String]) -> String {
 }
 
 pub fn d2b_tab_title(vm: &str, session: &str, guest_osc_title: &str) -> String {
+    let vm = sanitize_display_label(vm);
+    let session = sanitize_display_label(session);
     let prefix = format!("[{vm}:{session}]");
-    let guest_osc_title = guest_osc_title.trim();
+    let guest_osc_title = sanitize_display_text(guest_osc_title);
     if guest_osc_title.is_empty() || guest_osc_title == "wezterm" {
         prefix
     } else {
@@ -91,6 +93,57 @@ fn sanitize_socket_component(value: &str) -> String {
             }
         })
         .collect()
+}
+
+pub fn sanitize_display_label(value: &str) -> String {
+    let label = sanitize_display_text(value);
+    if label.is_empty() {
+        "unnamed".to_string()
+    } else {
+        label
+    }
+}
+
+fn sanitize_display_text(value: &str) -> String {
+    const MAX_DISPLAY_CHARS: usize = 96;
+    let mut out = String::new();
+    let mut chars = value.trim().chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            match chars.peek().copied() {
+                Some('[') => {
+                    chars.next();
+                    for next in chars.by_ref() {
+                        if ('@'..='~').contains(&next) {
+                            break;
+                        }
+                    }
+                }
+                Some(']') => {
+                    chars.next();
+                    while let Some(next) = chars.next() {
+                        if next == '\x07' {
+                            break;
+                        }
+                        if next == '\x1b' && matches!(chars.peek(), Some('\\')) {
+                            chars.next();
+                            break;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            continue;
+        }
+        if c.is_control() {
+            continue;
+        }
+        out.push(c);
+        if out.chars().count() >= MAX_DISPLAY_CHARS {
+            break;
+        }
+    }
+    out
 }
 
 #[cfg(target_os = "linux")]
@@ -1745,6 +1798,24 @@ mod imp {
                 super::super::d2b_tab_title("work", "build", "wezterm"),
                 "[work:build]"
             );
+            assert_eq!(
+                super::super::d2b_tab_title("work\x1b[31m", "\x07", "nvim\x1b]0;secret\x07"),
+                "[work:unnamed] nvim"
+            );
+        }
+
+        #[test]
+        fn display_label_sanitizes_controls_and_has_placeholder() {
+            assert_eq!(
+                super::super::sanitize_display_label("build\x1b[31m"),
+                "build"
+            );
+            assert_eq!(
+                super::super::sanitize_display_label("\x07\x1b[31m"),
+                "unnamed"
+            );
+            let long = "a".repeat(128);
+            assert_eq!(super::super::sanitize_display_label(&long).len(), 96);
         }
 
         #[test]

@@ -451,16 +451,22 @@ fn cell_pixel_dims(config: &ConfigHandle, dpi: f64) -> anyhow::Result<(usize, us
     ))
 }
 
+fn gui_mux_socket_path_for_domain(domain: Option<&str>) -> PathBuf {
+    if let Some(vm) =
+        d2b_vm_for_domain_name(domain).or_else(|| std::env::var(mux::d2b::D2B_BOUND_VM_ENV).ok())
+    {
+        mux::d2b::vm_mux_socket_path(&config::RUNTIME_DIR, &vm)
+    } else {
+        config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }))
+    }
+}
+
 async fn async_run_terminal_gui(
     cmd: Option<CommandBuilder>,
     opts: StartCommand,
     should_publish: bool,
 ) -> anyhow::Result<()> {
-    let unix_socket_path = d2b_vm_for_domain_name(opts.domain.as_deref())
-        .map(|vm| mux::d2b::vm_mux_socket_path(&config::RUNTIME_DIR, &vm))
-        .unwrap_or_else(|| {
-            config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }))
-        });
+    let unix_socket_path = gui_mux_socket_path_for_domain(opts.domain.as_deref());
     std::env::set_var("WEZTERM_UNIX_SOCKET", unix_socket_path.clone());
     wezterm_blob_leases::register_storage(Arc::new(
         wezterm_blob_leases::simple_tempdir::SimpleTempDir::new_in(&*config::CACHE_DIR)?,
