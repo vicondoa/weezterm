@@ -14,7 +14,7 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/terminal-integration-toolkit";
+      url = "github:vicondoa/d2b-toolkit";
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
