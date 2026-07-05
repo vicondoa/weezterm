@@ -1240,6 +1240,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "d2b-client"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "d2b-toolkit-core",
+ "futures",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "d2b-toolkit-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3555,6 +3577,8 @@ name = "mux"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-channel",
+ "async-io",
  "async-trait",
  "base64 0.22.1",
  "bintree",
@@ -3562,10 +3586,13 @@ dependencies = [
  "chrono",
  "config",
  "crossbeam",
+ "d2b-client",
+ "d2b-toolkit-core",
  "downcast-rs",
  "fancy-regex",
  "filedescriptor",
  "finl_unicode",
+ "futures",
  "hostname",
  "k9",
  "lazy_static",
@@ -3587,8 +3614,10 @@ dependencies = [
  "serde",
  "serde_json",
  "serial2",
+ "sha2",
  "shell-words",
  "smol",
+ "socket2 0.5.10",
  "terminfo",
  "termwiz",
  "termwiz-funcs",
@@ -7342,7 +7371,7 @@ dependencies = [
 
 [[package]]
 name = "wezterm-version"
-version = "0.2.0"
+version = "0.6.0"
 dependencies = [
  "git2",
 ]

@@ -8,6 +8,10 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    d2b-toolkit = {
+      url = "github:vicondoa/d2b-toolkit";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
 
     # Keep these in sync with nix/flake.nix; the root flake delegates
     # outputs there while providing a repository-root entry point.

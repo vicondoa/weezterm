@@ -374,6 +374,34 @@ async fn connect_to_auto_connect_domains() -> anyhow::Result<()> {
     Ok(())
 }
 
+// --- weezterm remote features ---
+#[cfg(target_os = "linux")]
+fn d2b_vm_for_domain_name(domain_name: Option<&str>) -> Option<String> {
+    let mux = Mux::try_get()?;
+    let domain = match domain_name {
+        Some(domain_name) => mux.get_domain_by_name(domain_name)?,
+        None => mux.default_domain(),
+    };
+    domain
+        .downcast_ref::<mux::d2b::D2bDomain>()
+        .map(|domain| domain.vm_name().to_string())
+}
+
+#[cfg(not(target_os = "linux"))]
+fn d2b_vm_for_domain_name(_domain_name: Option<&str>) -> Option<String> {
+    None
+}
+
+fn d2b_vm_from_config_domain(config: &ConfigHandle, domain_name: Option<&str>) -> Option<String> {
+    let domain_name = domain_name?;
+    config
+        .d2b_domains
+        .iter()
+        .find(|domain| domain.name == domain_name)
+        .map(|domain| domain.vm.clone())
+}
+// --- end weezterm remote features ---
+
 async fn trigger_gui_startup(
     lua: Option<Rc<mlua::Lua>>,
     spawn: Option<SpawnCommand>,
@@ -423,13 +451,22 @@ fn cell_pixel_dims(config: &ConfigHandle, dpi: f64) -> anyhow::Result<(usize, us
     ))
 }
 
+fn gui_mux_socket_path_for_domain(domain: Option<&str>) -> PathBuf {
+    if let Some(vm) =
+        d2b_vm_for_domain_name(domain).or_else(|| std::env::var(mux::d2b::D2B_BOUND_VM_ENV).ok())
+    {
+        mux::d2b::vm_mux_socket_path(&config::RUNTIME_DIR, &vm)
+    } else {
+        config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }))
+    }
+}
+
 async fn async_run_terminal_gui(
     cmd: Option<CommandBuilder>,
     opts: StartCommand,
     should_publish: bool,
 ) -> anyhow::Result<()> {
-    let unix_socket_path =
-        config::RUNTIME_DIR.join(format!("gui-sock-{}", unsafe { libc::getpid() }));
+    let unix_socket_path = gui_mux_socket_path_for_domain(opts.domain.as_deref());
     std::env::set_var("WEZTERM_UNIX_SOCKET", unix_socket_path.clone());
     wezterm_blob_leases::register_storage(Arc::new(
         wezterm_blob_leases::simple_tempdir::SimpleTempDir::new_in(&*config::CACHE_DIR)?,
@@ -764,6 +801,19 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
 
     let config = config::configuration();
 
+    // --- weezterm remote features ---
+    let requested_domain = opts
+        .domain
+        .as_deref()
+        .or(default_domain_name.as_deref())
+        .or(config.default_domain.as_deref());
+    if let Some(vm) = d2b_vm_from_config_domain(&config, requested_domain) {
+        std::env::set_var(mux::d2b::D2B_BOUND_VM_ENV, vm);
+    } else {
+        std::env::remove_var(mux::d2b::D2B_BOUND_VM_ENV);
+    }
+    // --- end weezterm remote features ---
+
     let cmd = if !opts.prog.is_empty() || opts.cwd.is_some() {
         let prog = opts.prog.iter().map(|s| s.as_os_str()).collect::<Vec<_>>();
         let mut builder = config.build_prog(
@@ -806,10 +856,11 @@ fn run_terminal_gui(opts: StartCommand, default_domain_name: Option<String>) -> 
     // First, let's see if we can ask an already running wezterm to do this.
     // We must do this before we start the gui frontend as the scheduler
     // requirements are different.
+    let is_d2b_vm_domain = d2b_vm_for_domain_name(opts.domain.as_deref()).is_some();
     let mut publish = Publish::resolve(
         &mux,
         &config,
-        opts.always_new_process || opts.position.is_some(),
+        opts.always_new_process || opts.position.is_some() || is_d2b_vm_domain,
     );
     log::trace!("{:?}", publish);
     if publish.try_spawn(
@@ -1270,6 +1321,9 @@ fn run() -> anyhow::Result<()> {
     if let Some(value) = &config.default_ssh_auth_sock {
         std::env::set_var("SSH_AUTH_SOCK", value);
     }
+    // --- weezterm remote features ---
+    std::env::remove_var(mux::d2b::D2B_BOUND_VM_ENV);
+    // --- end weezterm remote features ---
 
     let sub = match opts.cmd.as_ref().cloned() {
         Some(SubCommand::BlockingStart(start)) => {
