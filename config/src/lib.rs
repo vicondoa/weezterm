@@ -22,6 +22,7 @@ use wezterm_term::UnicodeVersion;
 
 // --- weezterm remote features ---
 pub mod branding;
+pub mod d2b;
 pub mod devcontainer;
 pub mod monitor;
 // --- end weezterm remote features ---
@@ -69,6 +70,7 @@ pub use version::*;
 pub use wsl::*;
 
 // --- weezterm remote features ---
+pub use d2b::*;
 pub use monitor::*;
 // --- end weezterm remote features ---
 

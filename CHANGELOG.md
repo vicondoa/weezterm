@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Native Linux d2b provider core using the d2b public client protocol with non-blocking pane queues and redacted diagnostics.
+- Native d2b VM terminal domains and a d2b session picker with offline-state handling, named-shell prompts, per-VM mux isolation, and VM/session-aware titles.
 
 ## [0.6.0] - 2026-06-19
 

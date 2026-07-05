@@ -1,3 +1,98 @@
+use std::path::{Path, PathBuf};
+
+pub use d2b_toolkit_core::ShellSessionState;
+
+pub const D2B_BOUND_VM_ENV: &str = "WEEZTERM_D2B_BOUND_VM";
+pub const D2B_SHELL_NAME_ENV: &str = "WEEZTERM_D2B_SHELL_NAME";
+
+pub fn validate_shell_name(name: &str) -> Result<(), String> {
+    let bytes = name.as_bytes();
+    if bytes.is_empty() || bytes.len() > 64 {
+        return Err("shell names must be 1-64 ASCII bytes".to_string());
+    }
+
+    let first = bytes[0];
+    if !(first.is_ascii_alphanumeric() || first == b'_') {
+        return Err("shell names must start with [A-Za-z0-9_]".to_string());
+    }
+    if first == b'-' {
+        return Err("shell names must not start with '-'".to_string());
+    }
+
+    if !bytes
+        .iter()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
+    {
+        return Err("shell names may contain only [A-Za-z0-9._-]".to_string());
+    }
+
+    Ok(())
+}
+
+pub fn friendly_session_name(vm: &str, existing: &[String]) -> String {
+    let base = format!("{}-shell", sanitize_shell_component(vm));
+    if !existing.iter().any(|name| name == &base) {
+        return base;
+    }
+    for idx in 2..=64 {
+        let candidate = format!("{base}-{idx}");
+        if !existing.iter().any(|name| name == &candidate)
+            && validate_shell_name(&candidate).is_ok()
+        {
+            return candidate;
+        }
+    }
+    "default".to_string()
+}
+
+pub fn d2b_tab_title(vm: &str, session: &str, guest_osc_title: &str) -> String {
+    let prefix = format!("[{vm}:{session}]");
+    let guest_osc_title = guest_osc_title.trim();
+    if guest_osc_title.is_empty() || guest_osc_title == "wezterm" {
+        prefix
+    } else {
+        format!("{prefix} {guest_osc_title}")
+    }
+}
+
+pub fn vm_mux_socket_path(runtime_dir: &Path, vm: &str) -> PathBuf {
+    runtime_dir.join(format!(
+        "gui-sock-d2b-{}-{}",
+        sanitize_socket_component(vm),
+        std::process::id()
+    ))
+}
+
+fn sanitize_shell_component(value: &str) -> String {
+    let mut out = String::new();
+    for c in value.chars() {
+        if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+            out.push(c);
+        } else {
+            out.push('-');
+        }
+    }
+    let out = out.trim_matches('-');
+    if out.is_empty() {
+        "d2b".to_string()
+    } else {
+        out.to_string()
+    }
+}
+
+fn sanitize_socket_component(value: &str) -> String {
+    sanitize_shell_component(value)
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect()
+}
+
 #[cfg(target_os = "linux")]
 mod imp {
     use crate::domain::{alloc_domain_id, Domain, DomainId, DomainState};
@@ -17,14 +112,15 @@ mod imp {
     use base64::Engine as _;
     use d2b_client::{AttachedShell, ClientError, FrameBounds, PublicSocketClient};
     use d2b_toolkit_core::{
-        Hello, KnownFeatureFlag, Redacted, ShellName, SocketClass, TerminalSize as D2bTerminalSize,
-        TerminalStream,
+        Hello, KnownFeatureFlag, Redacted, ShellName, ShellSessionState, SocketClass,
+        TerminalSize as D2bTerminalSize, TerminalStream,
     };
     use futures::{future, Future};
     use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
     use rangeset::RangeSet;
     use sha2::{Digest, Sha256};
     use socket2::{Domain as SocketDomain, SockAddr, Socket, Type};
+    use std::collections::HashMap;
     use std::convert::TryInto;
     use std::future::Future as StdFuture;
     use std::io::{Error as IoError, ErrorKind, Write};
@@ -121,6 +217,9 @@ mod imp {
         pub label: String,
         pub vm_name: String,
         pub workspace: Option<String>,
+        pub state: ShellSessionState,
+        pub attached: bool,
+        pub is_default: bool,
         pub correlation_id: D2bCorrelationId,
     }
 
@@ -131,6 +230,9 @@ mod imp {
                 .field("label", &"<redacted>")
                 .field("vm_name", &"<redacted>")
                 .field("workspace", &self.workspace.as_ref().map(|_| "<redacted>"))
+                .field("state", &self.state)
+                .field("attached", &self.attached)
+                .field("is_default", &self.is_default)
                 .field("correlation_id", &self.correlation_id)
                 .finish()
         }
@@ -138,6 +240,7 @@ mod imp {
 
     #[derive(Clone, Eq, PartialEq)]
     pub struct D2bPaneHandle {
+        pub vm_name: String,
         pub session_id: String,
         pub pane_id: String,
         pub correlation_id: D2bCorrelationId,
@@ -146,6 +249,7 @@ mod imp {
     impl std::fmt::Debug for D2bPaneHandle {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("D2bPaneHandle")
+                .field("vm_name", &"<redacted>")
                 .field("session_id", &"<redacted>")
                 .field("pane_id", &"<redacted>")
                 .field("correlation_id", &self.correlation_id)
@@ -240,6 +344,25 @@ mod imp {
                 event_rx,
             }
         }
+    }
+
+    fn d2b_session_from_command(
+        command: Option<portable_pty::CommandBuilder>,
+    ) -> anyhow::Result<Option<String>> {
+        let Some(command) = command else {
+            return Ok(None);
+        };
+
+        let Some(name) = command
+            .get_env(super::D2B_SHELL_NAME_ENV)
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_string())
+        else {
+            bail!("d2b domains attach existing sessions; command spawning is unsupported");
+        };
+
+        super::validate_shell_name(&name).map_err(|err| anyhow!(err))?;
+        Ok(Some(name))
     }
 
     pub trait D2bTransport: Send + Sync {
@@ -355,6 +478,9 @@ mod imp {
                             },
                             vm_name: self.vm.clone(),
                             workspace: None,
+                            state: entry.state,
+                            attached: entry.attached,
+                            is_default: entry.is_default,
                             correlation_id: D2bCorrelationId::from_sensitive("shell", &name),
                         }
                     })
@@ -365,6 +491,10 @@ mod imp {
         fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
             Box::pin(async move {
                 let client = self.connect_client().await?;
+                if let Some(name) = request.session_id.as_deref() {
+                    super::validate_shell_name(name)
+                        .map_err(|kind| D2bProviderError::AttachFailed { kind })?;
+                }
                 let name = request.session_id.clone().map(ShellName::new);
                 let size = to_d2b_size(request.size);
                 let shell = client_op(
@@ -378,7 +508,8 @@ mod imp {
                 let correlation_id =
                     D2bCorrelationId::from_sensitive("attached-shell", &resolved_name);
                 let handle = D2bPaneHandle {
-                    session_id: correlation_id.to_string(),
+                    vm_name: self.vm.clone(),
+                    session_id: resolved_name.clone(),
                     pane_id: D2bCorrelationId::from_sensitive("pane", &resolved_name).to_string(),
                     correlation_id: correlation_id.clone(),
                 };
@@ -399,7 +530,24 @@ mod imp {
 
     pub fn native_domain(vm: impl Into<String>, config: D2bRuntimeConfig) -> D2bDomain {
         let vm = vm.into();
-        D2bDomain::new(vm.clone(), Arc::new(NativeD2bTransport::new(vm, config)))
+        D2bDomain::new(
+            vm.clone(),
+            vm.clone(),
+            Arc::new(NativeD2bTransport::new(vm, config)),
+        )
+    }
+
+    pub fn native_domain_with_name(
+        name: impl Into<String>,
+        vm: impl Into<String>,
+        config: D2bRuntimeConfig,
+    ) -> D2bDomain {
+        let vm = vm.into();
+        D2bDomain::new(
+            name,
+            vm.clone(),
+            Arc::new(NativeD2bTransport::new(vm, config)),
+        )
     }
 
     async fn async_unix_connect(path: &Path) -> std::io::Result<D2bSocket> {
@@ -748,20 +896,30 @@ mod imp {
     pub struct D2bDomain {
         id: DomainId,
         name: String,
+        vm_name: String,
         transport: Arc<dyn D2bTransport>,
         state: Mutex<DomainState>,
         panes: Mutex<Vec<Weak<D2bPane>>>,
     }
 
     impl D2bDomain {
-        pub fn new(name: impl Into<String>, transport: Arc<dyn D2bTransport>) -> Self {
+        pub fn new(
+            name: impl Into<String>,
+            vm_name: impl Into<String>,
+            transport: Arc<dyn D2bTransport>,
+        ) -> Self {
             Self {
                 id: alloc_domain_id(),
                 name: name.into(),
+                vm_name: vm_name.into(),
                 transport,
                 state: Mutex::new(DomainState::Detached),
                 panes: Mutex::new(Vec::new()),
             }
+        }
+
+        pub fn vm_name(&self) -> &str {
+            &self.vm_name
         }
 
         pub async fn discover_sessions(&self) -> anyhow::Result<Vec<D2bSession>> {
@@ -777,16 +935,11 @@ mod imp {
             command: Option<portable_pty::CommandBuilder>,
             _command_dir: Option<String>,
         ) -> anyhow::Result<Arc<dyn Pane>> {
-            if command.is_some() {
-                bail!("d2b domains attach existing sessions; command spawning is unsupported");
-            }
+            let session_id = d2b_session_from_command(command)?;
 
             let attached = self
                 .transport
-                .attach(D2bAttachRequest {
-                    session_id: None,
-                    size,
-                })
+                .attach(D2bAttachRequest { session_id, size })
                 .await?;
 
             let concrete_pane = D2bPane::new(self.id, size, attached);
@@ -964,7 +1117,8 @@ mod imp {
         }
 
         fn get_title(&self) -> String {
-            self.terminal.lock().get_title().to_string()
+            let guest_title = self.terminal.lock().get_title().to_string();
+            super::d2b_tab_title(&self.handle.vm_name, &self.handle.session_id, &guest_title)
         }
 
         fn send_paste(&self, text: &str) -> anyhow::Result<()> {
@@ -1059,6 +1213,16 @@ mod imp {
         fn get_config(&self) -> Option<Arc<dyn TerminalConfiguration>> {
             Some(self.terminal.lock().get_config())
         }
+
+        fn copy_user_vars(&self) -> HashMap<String, String> {
+            HashMap::from([
+                ("weezterm.d2b.vm".to_string(), self.handle.vm_name.clone()),
+                (
+                    "weezterm.d2b.session".to_string(),
+                    self.handle.session_id.clone(),
+                ),
+            ])
+        }
     }
 
     impl Drop for D2bPane {
@@ -1144,7 +1308,7 @@ mod imp {
     }
 
     pub fn unsupported_domain(name: impl Into<String>) -> D2bDomain {
-        D2bDomain::new(name, Arc::new(UnsupportedD2bTransport))
+        D2bDomain::new(name, "unsupported", Arc::new(UnsupportedD2bTransport))
     }
 
     #[cfg(test)]
@@ -1156,6 +1320,7 @@ mod imp {
         struct FakeTransport {
             sessions: Vec<D2bSession>,
             attach_error: Option<D2bProviderError>,
+            attach_requests: Arc<Mutex<Vec<D2bAttachRequest>>>,
             queue_depth: usize,
             event_depth: usize,
             detach_calls: Arc<Mutex<Vec<D2bDetachReason>>>,
@@ -1171,6 +1336,7 @@ mod imp {
 
         impl FakeTransport {
             fn attached(&self, request: D2bAttachRequest) -> D2bAttachedPane {
+                self.attach_requests.lock().push(request.clone());
                 let queue_depth = if self.queue_depth == 0 {
                     DEFAULT_QUEUE_DEPTH
                 } else {
@@ -1188,6 +1354,7 @@ mod imp {
                     request.session_id.as_deref().unwrap_or("default"),
                 );
                 let handle = D2bPaneHandle {
+                    vm_name: "work".to_string(),
                     session_id: request
                         .session_id
                         .unwrap_or_else(|| "session-1".to_string()),
@@ -1303,6 +1470,7 @@ mod imp {
 
         fn handle() -> D2bPaneHandle {
             D2bPaneHandle {
+                vm_name: "work".to_string(),
                 session_id: "session-1".to_string(),
                 pane_id: "pane-1".to_string(),
                 correlation_id: D2bCorrelationId::from_sensitive("test", "session-1"),
@@ -1341,6 +1509,9 @@ mod imp {
                 label: "quiet-otter".to_string(),
                 vm_name: "work".to_string(),
                 workspace: Some("private".to_string()),
+                state: ShellSessionState::Detached,
+                attached: false,
+                is_default: false,
                 correlation_id: D2bCorrelationId::from_sensitive("session", "session-secret"),
             };
             let handle = handle();
@@ -1390,11 +1561,14 @@ mod imp {
                     label: "work".to_string(),
                     vm_name: "work".to_string(),
                     workspace: None,
+                    state: ShellSessionState::Detached,
+                    attached: false,
+                    is_default: false,
                     correlation_id: D2bCorrelationId::from_sensitive("session", "session-1"),
                 }],
                 ..Default::default()
             });
-            let domain = D2bDomain::new("d2b", transport);
+            let domain = D2bDomain::new("d2b", "work", transport);
 
             let sessions = smol::block_on(domain.discover_sessions()).unwrap();
             assert_eq!(sessions[0].id, "session-1");
@@ -1465,7 +1639,7 @@ mod imp {
         #[test]
         fn domain_detach_detaches_tracked_panes() {
             let transport = Arc::new(FakeTransport::default());
-            let domain = D2bDomain::new("d2b", transport.clone());
+            let domain = D2bDomain::new("d2b", "work", transport.clone());
             let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
             domain.panes.lock().push(Arc::downgrade(&pane));
 
@@ -1555,6 +1729,63 @@ mod imp {
                 wait_for(|| pane.is_dead());
                 assert!(pane.is_dead(), "{}", expected);
             }
+        }
+
+        #[test]
+        fn d2b_title_format_prefixes_vm_and_session() {
+            assert_eq!(
+                super::super::d2b_tab_title("work", "build", ""),
+                "[work:build]"
+            );
+            assert_eq!(
+                super::super::d2b_tab_title("work", "build", "nvim"),
+                "[work:build] nvim"
+            );
+            assert_eq!(
+                super::super::d2b_tab_title("work", "build", "wezterm"),
+                "[work:build]"
+            );
+        }
+
+        #[test]
+        fn shell_name_validation_matches_d2b_grammar() {
+            for name in ["default", "build_1", "a.b-c", "9"] {
+                assert!(super::super::validate_shell_name(name).is_ok(), "{}", name);
+            }
+            for name in ["", "-bad", "has space", "slash/name", "{tmpl}"] {
+                assert!(super::super::validate_shell_name(name).is_err(), "{}", name);
+            }
+        }
+
+        #[test]
+        fn spawn_command_env_selects_d2b_session_without_subprocess_bridge() {
+            let transport = FakeTransport::default();
+            let mut command = portable_pty::CommandBuilder::new_default_prog();
+            command.env(super::super::D2B_SHELL_NAME_ENV, "build");
+            let session_id = d2b_session_from_command(Some(command)).unwrap();
+
+            let attached = smol::block_on(transport.attach(D2bAttachRequest {
+                session_id,
+                size: size(),
+            }))
+            .unwrap();
+            let pane = D2bPane::new(1, size(), attached);
+
+            assert_eq!(
+                transport.attach_requests.lock()[0].session_id.as_deref(),
+                Some("build")
+            );
+            assert_eq!(pane.get_title(), "[work:build]");
+        }
+
+        #[test]
+        fn vm_mux_socket_path_is_unique_per_vm_and_not_global() {
+            let base = PathBuf::from("runtime");
+            let work = super::super::vm_mux_socket_path(&base, "work");
+            let personal = super::super::vm_mux_socket_path(&base, "personal");
+            assert_ne!(work, personal);
+            assert!(work.to_string_lossy().contains("d2b-work"));
+            assert!(!work.ends_with("sock"));
         }
     }
 }

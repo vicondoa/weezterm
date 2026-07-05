@@ -1636,6 +1636,24 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
             menubar: &["Shell"],
             icon: None,
         },
+        // --- weezterm remote features ---
+        ShowD2bLauncher => CommandDef {
+            brief: "Show d2b sessions".into(),
+            doc: "Shows the native d2b VM session picker".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &["Shell"],
+            icon: Some("md_terminal"),
+        },
+        D2bOpenSession { .. } => CommandDef {
+            brief: "Open d2b session".into(),
+            doc: "Opens or creates a native d2b VM shell session".into(),
+            keys: vec![],
+            args: &[ArgType::ActiveWindow],
+            menubar: &[],
+            icon: Some("md_terminal"),
+        },
+        // --- end weezterm remote features ---
         ShowTabNavigator => CommandDef {
             brief: "Navigate tabs".into(),
             doc: "Shows the tab navigator".into(),
@@ -2179,6 +2197,7 @@ fn compute_default_actions() -> Vec<KeyAssignment> {
         ShowLauncher,
         ShowTabNavigator,
         // --- weezterm remote features ---
+        ShowD2bLauncher,
         ShowPortForwardOverlay,
         ShowConfigOverlay,
         ShowDevContainerManager,

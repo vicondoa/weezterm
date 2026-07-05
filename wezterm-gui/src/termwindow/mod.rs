@@ -351,6 +351,36 @@ impl UserData for PaneInformation {
     }
 }
 
+// --- weezterm remote features ---
+fn d2b_window_title(
+    active_pane: &PaneInformation,
+    tabs: &[TabInformation],
+    num_tabs: usize,
+) -> Option<String> {
+    let vm = active_pane.user_vars.get("weezterm.d2b.vm")?;
+    let same_vm = tabs
+        .iter()
+        .filter(|tab| {
+            tab.active_pane
+                .as_ref()
+                .and_then(|pane| pane.user_vars.get("weezterm.d2b.vm"))
+                == Some(vm)
+        })
+        .count();
+
+    if same_vm > 1 {
+        Some(format!(
+            "d2b {vm} ({same_vm} sessions) - {}",
+            active_pane.title
+        ))
+    } else if num_tabs == 1 {
+        Some(active_pane.title.clone())
+    } else {
+        None
+    }
+}
+// --- end weezterm remote features ---
+
 #[derive(Default)]
 pub struct TabState {
     /// If is_some(), rather than display the actual tab
@@ -2773,7 +2803,10 @@ impl TermWindow {
             Some(title) => title,
             None => {
                 if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
-                    if num_tabs == 1 {
+                    // --- weezterm remote features ---
+                    if let Some(title) = d2b_window_title(&pos, &tabs, num_tabs) {
+                        title
+                    } else if num_tabs == 1 {
                         format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
                     } else {
                         format!(
@@ -2784,6 +2817,7 @@ impl TermWindow {
                             pos.title
                         )
                     }
+                    // --- end weezterm remote features ---
                 } else {
                     "".to_string()
                 }
@@ -3507,6 +3541,63 @@ impl TermWindow {
         .detach();
     }
 
+    // --- weezterm remote features ---
+    #[cfg(target_os = "linux")]
+    fn show_d2b_launcher(&mut self) {
+        let window = self.window.as_ref().unwrap().clone();
+        let mux = Mux::get();
+        let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
+            Some(tab) => tab,
+            None => return,
+        };
+        let pane = match self.get_active_pane_or_overlay() {
+            Some(pane) => pane,
+            None => return,
+        };
+        let pane_id = pane.pane_id();
+        let tab_id = tab.tab_id();
+
+        promise::spawn::spawn(async move {
+            let args = crate::overlay::d2b_launcher::D2bLauncherArgs::new(pane_id).await;
+            let win = window.clone();
+            win.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
+                let mux = Mux::get();
+                if let Some(tab) = mux.get_tab(tab_id) {
+                    let window = window.clone();
+                    let (overlay, future) =
+                        start_overlay(term_window, &tab, move |_tab_id, term| {
+                            crate::overlay::d2b_launcher::d2b_launcher(args, term, window)
+                        });
+
+                    term_window.assign_overlay(tab_id, overlay);
+                    promise::spawn::spawn(future).detach();
+                }
+            })));
+        })
+        .detach();
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    fn show_d2b_launcher(&mut self) {
+        log::warn!("native d2b session picker is only supported on Linux");
+    }
+
+    fn open_d2b_session(&mut self, domain: &str, name: Option<&str>) {
+        let mut env = HashMap::new();
+        if let Some(name) = name {
+            env.insert(mux::d2b::D2B_SHELL_NAME_ENV.to_string(), name.to_string());
+        }
+        self.spawn_command(
+            &SpawnCommand {
+                domain: config::keyassignment::SpawnTabDomain::DomainName(domain.to_string()),
+                set_environment_variables: env,
+                ..Default::default()
+            },
+            SpawnWhere::NewTab,
+        );
+    }
+    // --- end weezterm remote features ---
+
     /// Returns the Prompt semantic zones
     fn get_semantic_prompt_zones(&mut self, pane: &Arc<dyn Pane>) -> &[StableRowIndex] {
         let cache = self
@@ -3830,6 +3921,10 @@ impl TermWindow {
                 };
                 self.show_launcher_impl(args, 0);
             }
+            // --- weezterm remote features ---
+            ShowD2bLauncher => self.show_d2b_launcher(),
+            D2bOpenSession { domain, name } => self.open_d2b_session(domain, name.as_deref()),
+            // --- end weezterm remote features ---
             HideApplication => {
                 let con = Connection::get().expect("call on gui thread");
                 con.hide_application();

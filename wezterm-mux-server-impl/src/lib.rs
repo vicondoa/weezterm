@@ -90,6 +90,37 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
     }
 
     // --- weezterm remote features ---
+    #[cfg(target_os = "linux")]
+    for d2b_dom in &config.d2b_domains {
+        if let Ok(bound_vm) = std::env::var(mux::d2b::D2B_BOUND_VM_ENV) {
+            if bound_vm != d2b_dom.vm.as_str() {
+                continue;
+            }
+        }
+        if mux.get_domain_by_name(&d2b_dom.name).is_some() {
+            continue;
+        }
+
+        let mut runtime = mux::d2b::D2bRuntimeConfig::default();
+        if let Some(socket_path) = &d2b_dom.socket_path {
+            runtime.socket_path = socket_path.clone();
+        }
+        let domain: Arc<dyn Domain> = Arc::new(mux::d2b::native_domain_with_name(
+            d2b_dom.name.clone(),
+            d2b_dom.vm.clone(),
+            runtime,
+        ));
+        mux.add_domain(&domain);
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    for d2b_dom in &config.d2b_domains {
+        log::warn!(
+            "Ignoring d2b domain {}: native d2b domains are only supported on Linux",
+            d2b_dom.name
+        );
+    }
+
     for dc_dom in &config.devcontainer_domains {
         if mux.get_domain_by_name(&dc_dom.name).is_some() {
             continue;

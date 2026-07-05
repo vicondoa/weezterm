@@ -123,6 +123,10 @@ pub struct Config {
     /// that connects to Docker devcontainers, optionally via SSH.
     #[dynamic(default)]
     pub devcontainer_domains: Vec<crate::devcontainer::DevContainerDomainConfig>,
+
+    /// Native d2b VM terminal domains.
+    #[dynamic(default)]
+    pub d2b_domains: Vec<crate::d2b::D2bDomainConfig>,
     // --- end weezterm remote features ---
     /// The baseline font to use
     #[dynamic(default)]
