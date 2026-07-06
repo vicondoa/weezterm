@@ -859,7 +859,7 @@ mod imp {
                 return;
             }
 
-            for stream in [TerminalStream::Stdout, TerminalStream::Stderr] {
+            for stream in [TerminalStream::Stdout] {
                 match client_op(
                     "reading d2b shell output",
                     Some(correlation_id.clone()),
