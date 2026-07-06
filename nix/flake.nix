@@ -96,6 +96,20 @@
           [
             libxcb-image
             libGL
+            wayland
+            vulkan-loader
+          ]
+        );
+        runtimeLibPath = lib.makeLibraryPath (
+          with pkgs;
+          [
+            libxcb-image
+            libGL
+            libxkbcommon
+            libx11
+            libxcb
+            libxcb-util
+            wayland
             vulkan-loader
           ]
         );
@@ -214,6 +228,14 @@
               mv $out/bin/{weezterm,weezterm-mux-server,weezterm-gui,strip-ansi-escapes} "$OUT_APP"
               ln -s "$OUT_APP"/{weezterm,weezterm-mux-server,weezterm-gui,strip-ansi-escapes} "$out/bin"
             '';
+
+          postFixup = lib.optionalString stdenv.isLinux /* bash */ ''
+            for bin in weezterm weezterm-mux-server weezterm-gui; do
+              if [ -x "$out/bin/$bin" ]; then
+                patchelf --set-rpath "${runtimeLibPath}:$(patchelf --print-rpath "$out/bin/$bin")" "$out/bin/$bin"
+              fi
+            done
+          '';
 
           postInstall = ''
             mkdir -p $out/nix-support

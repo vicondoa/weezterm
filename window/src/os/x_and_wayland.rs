@@ -46,6 +46,11 @@ impl Connection {
                 }
                 Err(e) => {
                     log::debug!("Failed to init wayland: {}", e);
+                    if std::env::var_os("WAYLAND_DISPLAY").is_some()
+                        && std::env::var_os("DISPLAY").is_none()
+                    {
+                        return Err(e);
+                    }
                 }
             }
         }
