@@ -159,7 +159,6 @@ mod imp {
     use crate::{Mux, MuxNotification};
     use anyhow::{anyhow, bail};
     use async_channel::{Receiver, Sender, TrySendError};
-    use async_io::Async;
     use async_trait::async_trait;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
@@ -168,6 +167,7 @@ mod imp {
         Hello, KnownFeatureFlag, Redacted, ShellName, ShellSessionState, SocketClass,
         TerminalSize as D2bTerminalSize, TerminalStream,
     };
+    use futures::io::{AsyncRead, AsyncWrite};
     use futures::{future, Future};
     use parking_lot::{MappedMutexGuard, Mutex, MutexGuard};
     use rangeset::RangeSet;
@@ -178,8 +178,7 @@ mod imp {
     use std::future::Future as StdFuture;
     use std::io::{Error as IoError, ErrorKind, Write};
     use std::ops::Range;
-    use std::os::fd::OwnedFd;
-    use std::os::unix::net::UnixStream;
+    use std::os::fd::{AsRawFd, OwnedFd};
     use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -451,7 +450,95 @@ mod imp {
         }
     }
 
-    type D2bSocket = Async<UnixStream>;
+    const MAX_PUBLIC_PACKET: usize = 1024 * 1024 + 4;
+
+    pub struct D2bSocket {
+        fd: OwnedFd,
+        read_buf: Vec<u8>,
+        read_pos: usize,
+        write_buf: Vec<u8>,
+    }
+
+    impl D2bSocket {
+        fn new(fd: OwnedFd) -> Self {
+            Self {
+                fd,
+                read_buf: Vec::new(),
+                read_pos: 0,
+                write_buf: Vec::new(),
+            }
+        }
+    }
+
+    impl AsyncRead for D2bSocket {
+        fn poll_read(
+            mut self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &mut [u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.read_pos >= self.read_buf.len() {
+                let mut packet = vec![0_u8; MAX_PUBLIC_PACKET];
+                let len = nix::sys::socket::recv(
+                    self.fd.as_raw_fd(),
+                    &mut packet,
+                    nix::sys::socket::MsgFlags::empty(),
+                )
+                .map_err(errno_to_io)?;
+                packet.truncate(len);
+                self.read_buf = packet;
+                self.read_pos = 0;
+                if self.read_buf.is_empty() {
+                    return std::task::Poll::Ready(Ok(0));
+                }
+            }
+            let available = &self.read_buf[self.read_pos..];
+            let len = available.len().min(buf.len());
+            buf[..len].copy_from_slice(&available[..len]);
+            self.read_pos += len;
+            std::task::Poll::Ready(Ok(len))
+        }
+    }
+
+    impl AsyncWrite for D2bSocket {
+        fn poll_write(
+            mut self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            self.write_buf.extend_from_slice(buf);
+            std::task::Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(
+            mut self: Pin<&mut Self>,
+            _cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            if !self.write_buf.is_empty() {
+                let sent = nix::sys::socket::send(
+                    self.fd.as_raw_fd(),
+                    &self.write_buf,
+                    nix::sys::socket::MsgFlags::empty(),
+                )
+                .map_err(errno_to_io)?;
+                if sent != self.write_buf.len() {
+                    return std::task::Poll::Ready(Err(std::io::Error::new(
+                        std::io::ErrorKind::WriteZero,
+                        "short write on public seqpacket socket",
+                    )));
+                }
+                self.write_buf.clear();
+            }
+            std::task::Poll::Ready(Ok(()))
+        }
+
+        fn poll_close(
+            self: Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            self.poll_flush(cx)
+        }
+    }
+
     type D2bClient = PublicSocketClient<D2bSocket>;
     type D2bShell = AttachedShell<D2bSocket>;
 
@@ -607,30 +694,19 @@ mod imp {
         let sockaddr = SockAddr::unix(path)?;
         let socket = Socket::new(
             SocketDomain::UNIX,
-            Type::from(libc::SOCK_STREAM | libc::SOCK_CLOEXEC),
+            Type::from(libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC),
             None,
         )?;
-        socket.set_nonblocking(true)?;
         match socket.connect(&sockaddr) {
             Ok(()) => {}
-            Err(err) if is_connect_in_progress(&err) => {}
             Err(err) => return Err(err),
         }
         let owned: OwnedFd = socket.into();
-        let stream = UnixStream::from(owned);
-        stream.set_nonblocking(true)?;
-        let stream = Async::new(stream)?;
-        stream.writable().await?;
-        if let Some(err) = stream.get_ref().take_error()? {
-            return Err(err);
-        }
-        Ok(stream)
+        Ok(D2bSocket::new(owned))
     }
 
-    fn is_connect_in_progress(err: &std::io::Error) -> bool {
-        err.kind() == ErrorKind::WouldBlock
-            || err.raw_os_error() == Some(libc::EINPROGRESS)
-            || err.raw_os_error() == Some(libc::EALREADY)
+    fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {
+        std::io::Error::from_raw_os_error(error as i32)
     }
 
     fn classify_socket_path(path: &Path) -> SocketClass {
