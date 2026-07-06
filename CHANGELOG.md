@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Native d2b shell panes now read from d2b's PTY stdout stream only, matching
+  the persistent-shell wire contract and avoiding false reattach prompts when a
+  separate stderr stream is unavailable.
 - Source-built Nix packages now include Wayland runtime libraries in their
   binary rpaths, and Wayland-only launches fail with the original Wayland error
   instead of falling back to X11 and hiding the missing library cause.
