@@ -93,13 +93,15 @@
           ]);
 
         libPath = lib.makeLibraryPath (
-          with pkgs;
-          [
-            libxcb-image
-            libGL
-            wayland
-            vulkan-loader
-          ]
+          lib.optionals stdenv.isLinux (
+            with pkgs;
+            [
+              libxcb-image
+              libGL
+              wayland
+              vulkan-loader
+            ]
+          )
         );
         runtimeLibPath = lib.makeLibraryPath (
           with pkgs;

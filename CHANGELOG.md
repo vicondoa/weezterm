@@ -39,7 +39,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport, preserving frame packet boundaries for shell attach/read/write
   requests.
 - Nix flake packaging declares an immutable d2b-toolkit release input, while
-  Cargo uses the matching immutable Git revision.
+  Cargo uses the matching immutable release tag.
+- Nix source builds and development shells pin exact Rust releases, and
+  non-Linux shell evaluation no longer instantiates Wayland-only libraries.
 
 ### Deprecated
 
