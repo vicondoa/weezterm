@@ -331,11 +331,11 @@
               (stable."1.96.0".minimal.override {
                 extensions = [
                   "clippy"
-                  "rust-analyzer"
                   "rust-src"
-                  "rustfmt"
                 ];
               })
+              nightly."2026-06-06".rustfmt
+              nightly."2026-06-06".rust-analyzer
             ]);
 
           LD_LIBRARY_PATH = libPath;
