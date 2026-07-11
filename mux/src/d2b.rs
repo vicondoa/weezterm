@@ -682,16 +682,30 @@ mod imp {
     pub struct D2bSocket {
         fd: Async<Socket>,
         read_buf: Vec<u8>,
+        read_len: usize,
         read_pos: usize,
+        packet_limit: usize,
         write_buf: Vec<u8>,
     }
 
     impl D2bSocket {
         fn new(socket: Socket) -> std::io::Result<Self> {
+            Self::with_packet_limit(socket, MAX_PUBLIC_PACKET)
+        }
+
+        fn with_packet_limit(socket: Socket, packet_limit: usize) -> std::io::Result<Self> {
+            if packet_limit == 0 {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "d2bd public socket packet bound must be non-zero",
+                ));
+            }
             Ok(Self {
                 fd: Async::new(socket)?,
-                read_buf: Vec::new(),
+                read_buf: vec![0_u8; packet_limit],
+                read_len: 0,
                 read_pos: 0,
+                packet_limit,
                 write_buf: Vec::new(),
             })
         }
@@ -703,26 +717,25 @@ mod imp {
             cx: &mut std::task::Context<'_>,
             buf: &mut [u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
-            if self.read_pos >= self.read_buf.len() {
+            if self.read_pos >= self.read_len {
                 loop {
-                    let mut packet = vec![0_u8; MAX_PUBLIC_PACKET];
+                    let fd = self.fd.get_ref().as_raw_fd();
                     match nix::sys::socket::recv(
-                        self.fd.get_ref().as_raw_fd(),
-                        &mut packet,
+                        fd,
+                        &mut self.read_buf,
                         nix::sys::socket::MsgFlags::MSG_DONTWAIT
                             | nix::sys::socket::MsgFlags::MSG_TRUNC,
                     ) {
-                        Ok(len) if len > packet.len() => {
+                        Ok(len) if len > self.packet_limit => {
                             return std::task::Poll::Ready(Err(std::io::Error::new(
                                 std::io::ErrorKind::InvalidData,
                                 "d2bd public socket packet exceeded the frame bound",
                             )));
                         }
                         Ok(len) => {
-                            packet.truncate(len);
-                            self.read_buf = packet;
+                            self.read_len = len;
                             self.read_pos = 0;
-                            if self.read_buf.is_empty() {
+                            if self.read_len == 0 {
                                 return std::task::Poll::Ready(Ok(0));
                             }
                             break;
@@ -734,13 +747,14 @@ mod imp {
                                 return std::task::Poll::Ready(Err(error));
                             }
                         },
+                        Err(nix::errno::Errno::EINTR) => continue,
                         Err(error) => {
                             return std::task::Poll::Ready(Err(errno_to_io(error)));
                         }
                     }
                 }
             }
-            let available = &self.read_buf[self.read_pos..];
+            let available = &self.read_buf[self.read_pos..self.read_len];
             let len = available.len().min(buf.len());
             buf[..len].copy_from_slice(&available[..len]);
             self.read_pos += len;
@@ -788,6 +802,7 @@ mod imp {
                             return std::task::Poll::Ready(Err(error));
                         }
                     },
+                    Err(nix::errno::Errno::EINTR) => continue,
                     Err(error) => {
                         return std::task::Poll::Ready(Err(errno_to_io(error)));
                     }
@@ -2720,6 +2735,32 @@ mod imp {
                 socket.read(&mut byte),
             ));
             assert!(matches!(result, Err(D2bProviderError::Timeout { .. })));
+        }
+
+        #[test]
+        fn oversized_seqpacket_is_rejected_via_msg_trunc_length() {
+            let (client, server) = nix::sys::socket::socketpair(
+                nix::sys::socket::AddressFamily::Unix,
+                nix::sys::socket::SockType::SeqPacket,
+                None,
+                nix::sys::socket::SockFlag::SOCK_CLOEXEC
+                    | nix::sys::socket::SockFlag::SOCK_NONBLOCK,
+            )
+            .unwrap();
+            let mut socket = D2bSocket::with_packet_limit(Socket::from(client), 8).unwrap();
+            let packet = [0_u8; 9];
+            assert_eq!(
+                nix::sys::socket::send(
+                    server.as_raw_fd(),
+                    &packet,
+                    nix::sys::socket::MsgFlags::empty(),
+                )
+                .unwrap(),
+                packet.len()
+            );
+            let mut byte = [0_u8; 1];
+            let error = smol::block_on(socket.read(&mut byte)).unwrap_err();
+            assert_eq!(error.kind(), std::io::ErrorKind::InvalidData);
         }
     }
 }

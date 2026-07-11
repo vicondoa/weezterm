@@ -39,7 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   transport, preserving frame packet boundaries for shell attach/read/write
   requests.
 - Native d2b socket I/O is reactor-backed and non-blocking, so stalled daemon
-  traffic cannot block the mux executor.
+  traffic cannot block the mux executor; packet buffers are reused and
+  interrupted reads and writes retry.
 - Nix flake packaging declares an immutable d2b-toolkit release input, while
   Cargo uses the matching immutable release tag.
 - Nix source builds and development shells pin exact Rust releases, and
