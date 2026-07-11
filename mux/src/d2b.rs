@@ -1862,6 +1862,10 @@ mod imp {
             self.domain_id
         }
 
+        fn trusted_d2b_target(&self) -> Option<&str> {
+            Some(&self.handle.target)
+        }
+
         fn can_close_without_prompting(&self, _reason: CloseReason) -> bool {
             true
         }
@@ -2702,6 +2706,7 @@ mod imp {
                 Some("tools.host.d2b")
             );
             assert_eq!(pane.get_title(), "[tools.host.d2b:session-1]");
+            assert_eq!(pane.trusted_d2b_target(), Some("tools.host.d2b"));
 
             let first = D2bCorrelationId::from_target_session(
                 "attached-shell",

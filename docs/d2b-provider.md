@@ -107,6 +107,9 @@ domain names, so a target is never used as a filesystem path component.
   the negotiated `unsafe-local-shell-v1` feature before any shell operation.
   Helper and user-manager unavailability are shown in the domain and launcher
   UI. There is no SSH, direct host shell, or separate host-terminal fallback.
+- Window-title d2b identity comes from the mux pane's configured d2b domain,
+  never terminal-controlled user variables. Compatibility user variables are
+  presentation metadata and cannot make a local or SSH pane appear d2b-backed.
 
 ## Redaction and diagnostics
 

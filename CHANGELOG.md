@@ -58,6 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   support and never fall back to SSH, a direct host shell, or a separate
   host-terminal backend.
 - Conflicting target and VM aliases fail closed before domain selection.
+- Window-title d2b identity now comes from the trusted mux domain rather than
+  terminal-controlled user variables, preventing local or SSH panes from
+  spoofing a d2b-backed title.
 
 ## [0.6.0] - 2026-06-19
 

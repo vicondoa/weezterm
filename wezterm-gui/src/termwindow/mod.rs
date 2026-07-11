@@ -283,6 +283,7 @@ pub struct PaneInformation {
     pub pixel_height: usize,
     pub title: String,
     pub user_vars: HashMap<String, String>,
+    pub trusted_d2b_target: Option<String>,
     pub progress: Progress,
 }
 
@@ -358,14 +359,7 @@ fn d2b_window_title(
     num_tabs: usize,
 ) -> Option<String> {
     fn pane_target(pane: &PaneInformation) -> Option<&String> {
-        match (
-            pane.user_vars.get("weezterm.d2b.target"),
-            pane.user_vars.get("weezterm.d2b.vm"),
-        ) {
-            (Some(target), Some(vm)) if target != vm => None,
-            (Some(target), _) | (None, Some(target)) => Some(target),
-            (None, None) => None,
-        }
+        pane.trusted_d2b_target.as_ref()
     }
 
     let target = pane_target(active_pane)?;
@@ -386,6 +380,43 @@ fn d2b_window_title(
     }
 }
 // --- end weezterm remote features ---
+
+#[cfg(test)]
+mod d2b_title_tests {
+    use super::*;
+
+    fn pane_with_untrusted_target() -> PaneInformation {
+        PaneInformation {
+            pane_id: 999_999,
+            pane_index: 0,
+            is_active: true,
+            is_zoomed: false,
+            has_unseen_output: false,
+            left: 0,
+            top: 0,
+            width: 80,
+            height: 24,
+            pixel_width: 800,
+            pixel_height: 600,
+            title: "shell".to_owned(),
+            user_vars: HashMap::from([(
+                "weezterm.d2b.target".to_owned(),
+                "spoofed.host.d2b".to_owned(),
+            )]),
+            trusted_d2b_target: None,
+            progress: Progress::default(),
+        }
+    }
+
+    #[test]
+    fn terminal_user_vars_cannot_claim_d2b_window_identity() {
+        let mut pane = pane_with_untrusted_target();
+        assert_eq!(d2b_window_title(&pane, &[], 1), None);
+
+        pane.trusted_d2b_target = Some("tools.host.d2b".to_owned());
+        assert_eq!(d2b_window_title(&pane, &[], 1), Some("shell".to_owned()));
+    }
+}
 
 #[derive(Default)]
 pub struct TabState {
@@ -4602,6 +4633,7 @@ impl TermWindow {
             pixel_height: pos.pixel_height,
             title: pos.pane.get_title(),
             user_vars: pos.pane.copy_user_vars(),
+            trusted_d2b_target: pos.pane.trusted_d2b_target().map(str::to_owned),
             progress: pos.pane.get_progress(),
         }
     }
