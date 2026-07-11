@@ -245,6 +245,7 @@ mod imp {
     use crate::{Mux, MuxNotification};
     use anyhow::{anyhow, bail};
     use async_channel::{Receiver, Sender, TrySendError};
+    use async_io::Async;
     use async_trait::async_trait;
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine as _;
@@ -265,7 +266,7 @@ mod imp {
     use std::future::Future as StdFuture;
     use std::io::{Error as IoError, ErrorKind, Write};
     use std::ops::Range;
-    use std::os::fd::{AsRawFd, OwnedFd};
+    use std::os::fd::AsRawFd;
     use std::path::{Path, PathBuf};
     use std::pin::Pin;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -679,42 +680,64 @@ mod imp {
     const MAX_PUBLIC_PACKET: usize = 1024 * 1024 + 4;
 
     pub struct D2bSocket {
-        fd: OwnedFd,
+        fd: Async<Socket>,
         read_buf: Vec<u8>,
         read_pos: usize,
         write_buf: Vec<u8>,
     }
 
     impl D2bSocket {
-        fn new(fd: OwnedFd) -> Self {
-            Self {
-                fd,
+        fn new(socket: Socket) -> std::io::Result<Self> {
+            Ok(Self {
+                fd: Async::new(socket)?,
                 read_buf: Vec::new(),
                 read_pos: 0,
                 write_buf: Vec::new(),
-            }
+            })
         }
     }
 
     impl AsyncRead for D2bSocket {
         fn poll_read(
             mut self: Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
+            cx: &mut std::task::Context<'_>,
             buf: &mut [u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
             if self.read_pos >= self.read_buf.len() {
-                let mut packet = vec![0_u8; MAX_PUBLIC_PACKET];
-                let len = nix::sys::socket::recv(
-                    self.fd.as_raw_fd(),
-                    &mut packet,
-                    nix::sys::socket::MsgFlags::empty(),
-                )
-                .map_err(errno_to_io)?;
-                packet.truncate(len);
-                self.read_buf = packet;
-                self.read_pos = 0;
-                if self.read_buf.is_empty() {
-                    return std::task::Poll::Ready(Ok(0));
+                loop {
+                    let mut packet = vec![0_u8; MAX_PUBLIC_PACKET];
+                    match nix::sys::socket::recv(
+                        self.fd.get_ref().as_raw_fd(),
+                        &mut packet,
+                        nix::sys::socket::MsgFlags::MSG_DONTWAIT
+                            | nix::sys::socket::MsgFlags::MSG_TRUNC,
+                    ) {
+                        Ok(len) if len > packet.len() => {
+                            return std::task::Poll::Ready(Err(std::io::Error::new(
+                                std::io::ErrorKind::InvalidData,
+                                "d2bd public socket packet exceeded the frame bound",
+                            )));
+                        }
+                        Ok(len) => {
+                            packet.truncate(len);
+                            self.read_buf = packet;
+                            self.read_pos = 0;
+                            if self.read_buf.is_empty() {
+                                return std::task::Poll::Ready(Ok(0));
+                            }
+                            break;
+                        }
+                        Err(nix::errno::Errno::EAGAIN) => match self.fd.poll_readable(cx) {
+                            std::task::Poll::Pending => return std::task::Poll::Pending,
+                            std::task::Poll::Ready(Ok(())) => continue,
+                            std::task::Poll::Ready(Err(error)) => {
+                                return std::task::Poll::Ready(Err(error));
+                            }
+                        },
+                        Err(error) => {
+                            return std::task::Poll::Ready(Err(errno_to_io(error)));
+                        }
+                    }
                 }
             }
             let available = &self.read_buf[self.read_pos..];
@@ -731,28 +754,44 @@ mod imp {
             _cx: &mut std::task::Context<'_>,
             buf: &[u8],
         ) -> std::task::Poll<std::io::Result<usize>> {
+            if self.write_buf.len().saturating_add(buf.len()) > MAX_PUBLIC_PACKET {
+                return std::task::Poll::Ready(Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "d2bd public socket packet exceeded the frame bound",
+                )));
+            }
             self.write_buf.extend_from_slice(buf);
             std::task::Poll::Ready(Ok(buf.len()))
         }
 
         fn poll_flush(
             mut self: Pin<&mut Self>,
-            _cx: &mut std::task::Context<'_>,
+            cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
-            if !self.write_buf.is_empty() {
-                let sent = nix::sys::socket::send(
-                    self.fd.as_raw_fd(),
+            while !self.write_buf.is_empty() {
+                match nix::sys::socket::send(
+                    self.fd.get_ref().as_raw_fd(),
                     &self.write_buf,
-                    nix::sys::socket::MsgFlags::empty(),
-                )
-                .map_err(errno_to_io)?;
-                if sent != self.write_buf.len() {
-                    return std::task::Poll::Ready(Err(std::io::Error::new(
-                        std::io::ErrorKind::WriteZero,
-                        "short write on public seqpacket socket",
-                    )));
+                    nix::sys::socket::MsgFlags::MSG_DONTWAIT,
+                ) {
+                    Ok(sent) if sent == self.write_buf.len() => self.write_buf.clear(),
+                    Ok(_) => {
+                        return std::task::Poll::Ready(Err(std::io::Error::new(
+                            std::io::ErrorKind::WriteZero,
+                            "short write on public seqpacket socket",
+                        )));
+                    }
+                    Err(nix::errno::Errno::EAGAIN) => match self.fd.poll_writable(cx) {
+                        std::task::Poll::Pending => return std::task::Poll::Pending,
+                        std::task::Poll::Ready(Ok(())) => continue,
+                        std::task::Poll::Ready(Err(error)) => {
+                            return std::task::Poll::Ready(Err(error));
+                        }
+                    },
+                    Err(error) => {
+                        return std::task::Poll::Ready(Err(errno_to_io(error)));
+                    }
                 }
-                self.write_buf.clear();
             }
             std::task::Poll::Ready(Ok(()))
         }
@@ -1134,15 +1173,29 @@ mod imp {
         let sockaddr = SockAddr::unix(path)?;
         let socket = Socket::new(
             SocketDomain::UNIX,
-            Type::from(libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC),
+            Type::from(libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC | libc::SOCK_NONBLOCK),
             None,
         )?;
-        match socket.connect(&sockaddr) {
-            Ok(()) => {}
-            Err(err) => return Err(err),
+        let connecting = match socket.connect(&sockaddr) {
+            Ok(()) => false,
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error
+                        .raw_os_error()
+                        .is_some_and(|code| matches!(code, libc::EINPROGRESS | libc::EALREADY)) =>
+            {
+                true
+            }
+            Err(error) => return Err(error),
+        };
+        let socket = D2bSocket::new(socket)?;
+        if connecting {
+            socket.fd.writable().await?;
+            if let Some(error) = socket.fd.get_ref().take_error()? {
+                return Err(error);
+            }
         }
-        let owned: OwnedFd = socket.into();
-        Ok(D2bSocket::new(owned))
+        Ok(socket)
     }
 
     fn errno_to_io(error: nix::errno::Errno) -> std::io::Error {
@@ -1923,7 +1976,7 @@ mod imp {
     mod test {
         use super::*;
         use d2b_toolkit_core::{NegotiatedCapabilities, PublicResponse, WorkloadOpResponse};
-        use futures::io::Cursor;
+        use futures::io::{AsyncReadExt, Cursor};
         use parking_lot::Mutex;
 
         #[derive(Default)]
@@ -2646,6 +2699,27 @@ mod imp {
                 "session-1",
             );
             assert_ne!(first, second);
+        }
+
+        #[test]
+        fn idle_d2b_socket_yields_to_the_timeout_reactor() {
+            let (client, _server) = nix::sys::socket::socketpair(
+                nix::sys::socket::AddressFamily::Unix,
+                nix::sys::socket::SockType::SeqPacket,
+                None,
+                nix::sys::socket::SockFlag::SOCK_CLOEXEC
+                    | nix::sys::socket::SockFlag::SOCK_NONBLOCK,
+            )
+            .unwrap();
+            let mut socket = D2bSocket::new(Socket::from(client)).unwrap();
+            let mut byte = [0_u8; 1];
+            let result = smol::block_on(timeout_result(
+                "testing idle socket",
+                None,
+                Duration::from_millis(20),
+                socket.read(&mut byte),
+            ));
+            assert!(matches!(result, Err(D2bProviderError::Timeout { .. })));
         }
     }
 }

@@ -34,9 +34,9 @@ Pin WeezTerm, d2b, and the shared toolkit to one `nixpkgs` revision:
 }
 ```
 
-WeezTerm pins toolkit release `v0.2.0` at commit
-the `v0.2.0` release tag in Cargo and both Nix lock files. The lock files resolve
-that tag to `fde6af8b842718e7150f5056d4eba73093d4ad77`.
+WeezTerm pins toolkit release `v0.2.0` at the `v0.2.0` release tag in Cargo and
+both Nix lock files. The lock files resolve that tag to
+`fde6af8b842718e7150f5056d4eba73093d4ad77`.
 
 ## Configuration
 

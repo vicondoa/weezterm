@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native d2b provider connections now use d2bd's SOCK_SEQPACKET public socket
   transport, preserving frame packet boundaries for shell attach/read/write
   requests.
+- Native d2b socket I/O is reactor-backed and non-blocking, so stalled daemon
+  traffic cannot block the mux executor.
 - Nix flake packaging declares an immutable d2b-toolkit release input, while
   Cargo uses the matching immutable release tag.
 - Nix source builds and development shells pin exact Rust releases, and
