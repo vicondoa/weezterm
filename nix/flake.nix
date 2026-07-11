@@ -13,13 +13,6 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    # --- weezterm remote features ---
-    d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/v0.2.0";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-    # --- end weezterm remote features ---
-
     # NOTE: @2024-05 Nix flakes does not support getting git submodules of 'self'.
     # refs:
     # - https://discourse.nixos.org/t/get-nix-flake-to-include-git-submodule/30324
@@ -123,7 +116,8 @@
         };
 
         prebuiltManifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
-        hasPrebuilt = prebuiltManifest.version != null
+        hasPrebuilt =
+          prebuiltManifest.version != null
           && prebuiltManifest.binaries ? weezterm
           && system == prebuiltManifest.system;
 
@@ -135,10 +129,23 @@
           };
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
           buildInputs = with pkgs; [
-            stdenv.cc.cc.lib openssl fontconfig libGL libxkbcommon wayland
-            vulkan-loader xorg.libxcb xorg.libX11 xorg.libXcursor
-            xorg.libXrandr xorg.libXi xorg.xcbutil xorg.xcbutilimage
-            xorg.xcbutilkeysyms xorg.xcbutilwm zlib
+            stdenv.cc.cc.lib
+            openssl
+            fontconfig
+            libGL
+            libxkbcommon
+            wayland
+            vulkan-loader
+            xorg.libxcb
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.xcbutil
+            xorg.xcbutilimage
+            xorg.xcbutilkeysyms
+            xorg.xcbutilwm
+            zlib
           ];
           sourceRoot = ".";
           dontConfigure = true;

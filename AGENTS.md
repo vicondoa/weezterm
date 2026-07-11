@@ -297,6 +297,7 @@ This makes merge conflicts with upstream easy to identify and resolve.
 - `mux/src/port_forward_proxy.rs` — TCP proxy
 - `wezterm-gui/src/overlay/port_forward.rs` — Port manager overlay UI
 - `docs/remote-extensions.md` — Remote features documentation
+- `docs/d2b-provider.md` — Native d2b provider configuration and contract
 
 ### Additive changes to existing files:
 Changes to upstream files are small, additive-only (new enum variants, match arms, methods),

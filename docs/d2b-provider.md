@@ -6,9 +6,9 @@ d2b public daemon protocol through `d2b-client` and `d2b-toolkit-core`; it does
 not connect to the privileged broker socket and does not shell out through the
 `d2b` CLI for the terminal byte stream.
 
-## Flake input alignment
+## Input alignment
 
-Pin WeezTerm, d2b, and the shared toolkit to one `nixpkgs` revision:
+Pin WeezTerm and d2b to one `nixpkgs` revision:
 
 ```nix
 {
@@ -20,22 +20,16 @@ Pin WeezTerm, d2b, and the shared toolkit to one `nixpkgs` revision:
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
-    d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit/v0.2.0";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     weezterm = {
       url = "github:vicondoa/weezterm/v0.7.0";
       inputs.nixpkgs.follows = "nixpkgs";
-      inputs.d2b-toolkit.follows = "d2b-toolkit";
     };
   };
 }
 ```
 
-WeezTerm pins toolkit release `v0.2.0` at the `v0.2.0` release tag in Cargo and
-both Nix lock files. The lock files resolve that tag to
+WeezTerm pins toolkit release `v0.2.0` at the `v0.2.0` release tag in Cargo.
+`Cargo.lock` resolves that tag to
 `fde6af8b842718e7150f5056d4eba73093d4ad77`.
 
 ## Configuration
