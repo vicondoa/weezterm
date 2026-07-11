@@ -91,9 +91,12 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
 
     // --- weezterm remote features ---
     #[cfg(target_os = "linux")]
+    let bound_target = mux::d2b::bound_target_from_env().map_err(anyhow::Error::msg)?;
+
+    #[cfg(target_os = "linux")]
     for d2b_dom in &config.d2b_domains {
-        if let Ok(bound_vm) = std::env::var(mux::d2b::D2B_BOUND_VM_ENV) {
-            if bound_vm != d2b_dom.vm.as_str() {
+        if let Some(bound_target) = bound_target.as_deref() {
+            if bound_target != d2b_dom.target.as_str() {
                 continue;
             }
         }
@@ -107,9 +110,9 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
         }
         let domain: Arc<dyn Domain> = Arc::new(mux::d2b::native_domain_with_name(
             d2b_dom.name.clone(),
-            d2b_dom.vm.clone(),
+            d2b_dom.target.clone(),
             runtime,
-        ));
+        )?);
         mux.add_domain(&domain);
     }
 

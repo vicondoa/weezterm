@@ -1639,7 +1639,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         // --- weezterm remote features ---
         ShowD2bLauncher => CommandDef {
             brief: "Show d2b sessions".into(),
-            doc: "Shows the native d2b VM session picker".into(),
+            doc: "Shows the native provider-neutral d2b target session picker".into(),
             keys: vec![],
             args: &[ArgType::ActiveWindow],
             menubar: &["Shell"],
@@ -1647,7 +1647,7 @@ pub fn derive_command_from_key_assignment(action: &KeyAssignment) -> Option<Comm
         },
         D2bOpenSession { .. } => CommandDef {
             brief: "Open d2b session".into(),
-            doc: "Opens or creates a native d2b VM shell session".into(),
+            doc: "Opens or creates a native d2b target shell session".into(),
             keys: vec![],
             args: &[ArgType::ActiveWindow],
             menubar: &[],

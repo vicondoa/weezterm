@@ -13,11 +13,6 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
-
     # NOTE: @2024-05 Nix flakes does not support getting git submodules of 'self'.
     # refs:
     # - https://discourse.nixos.org/t/get-nix-flake-to-include-git-submodule/30324
@@ -57,7 +52,6 @@
 
         inherit (inputs.nixpkgs) lib;
         inherit (pkgs) stdenv;
-        toolkitSource = inputs.d2b-toolkit.packages.${system}.default;
 
         nativeBuildInputs =
           with pkgs;
@@ -92,13 +86,15 @@
           ]);
 
         libPath = lib.makeLibraryPath (
-          with pkgs;
-          [
-            libxcb-image
-            libGL
-            wayland
-            vulkan-loader
-          ]
+          lib.optionals stdenv.isLinux (
+            with pkgs;
+            [
+              libxcb-image
+              libGL
+              wayland
+              vulkan-loader
+            ]
+          )
         );
         runtimeLibPath = lib.makeLibraryPath (
           with pkgs;
@@ -115,12 +111,13 @@
         );
 
         rustPlatform = pkgs.makeRustPlatform {
-          cargo = pkgs.rust-bin.stable.latest.minimal;
-          rustc = pkgs.rust-bin.stable.latest.minimal;
+          cargo = pkgs.rust-bin.stable."1.96.0".minimal;
+          rustc = pkgs.rust-bin.stable."1.96.0".minimal;
         };
 
         prebuiltManifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
-        hasPrebuilt = prebuiltManifest.version != null
+        hasPrebuilt =
+          prebuiltManifest.version != null
           && prebuiltManifest.binaries ? weezterm
           && system == prebuiltManifest.system;
 
@@ -132,10 +129,23 @@
           };
           nativeBuildInputs = [ pkgs.autoPatchelfHook ];
           buildInputs = with pkgs; [
-            stdenv.cc.cc.lib openssl fontconfig libGL libxkbcommon wayland
-            vulkan-loader xorg.libxcb xorg.libX11 xorg.libXcursor
-            xorg.libXrandr xorg.libXi xorg.xcbutil xorg.xcbutilimage
-            xorg.xcbutilkeysyms xorg.xcbutilwm zlib
+            stdenv.cc.cc.lib
+            openssl
+            fontconfig
+            libGL
+            libxkbcommon
+            wayland
+            vulkan-loader
+            xorg.libxcb
+            xorg.libX11
+            xorg.libXcursor
+            xorg.libXrandr
+            xorg.libXi
+            xorg.xcbutil
+            xorg.xcbutilimage
+            xorg.xcbutilkeysyms
+            xorg.xcbutilwm
+            zlib
           ];
           sourceRoot = ".";
           dontConfigure = true;
@@ -155,7 +165,7 @@
           name = "weezterm";
           # --- end weezterm remote features ---
           src = ./..;
-          version = self.shortRev or "dev";
+          version = "0.7.0";
 
           cargoLock = {
             lockFile = ../Cargo.lock;
@@ -173,12 +183,6 @@
 
           postPatch = ''
             echo ${version} > .tag
-
-            substituteInPlace mux/Cargo.toml \
-              --replace-fail "../../d2b-toolkit/crates/d2b-client" \
-                "${toolkitSource}/share/d2b-toolkit/crates/d2b-client" \
-              --replace-fail "../../d2b-toolkit/crates/d2b-toolkit-core" \
-                "${toolkitSource}/share/d2b-toolkit/crates/d2b-toolkit-core"
 
             # tests are failing with: Unable to exchange encryption keys
             rm -r wezterm-ssh/tests
@@ -333,15 +337,14 @@
           buildInputs =
             buildInputs
             ++ (with pkgs.rust-bin; [
-              (stable.latest.minimal.override {
+              (stable."1.96.0".minimal.override {
                 extensions = [
                   "clippy"
                   "rust-src"
                 ];
               })
-
-              nightly.latest.rustfmt
-              nightly.latest.rust-analyzer
+              nightly."2026-06-06".rustfmt
+              nightly."2026-06-06".rust-analyzer
             ]);
 
           LD_LIBRARY_PATH = libPath;

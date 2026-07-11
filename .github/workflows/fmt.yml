@@ -20,8 +20,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
-      - name: Checkout d2b-toolkit sibling
-        run: git clone --depth 1 https://github.com/vicondoa/d2b-toolkit ../d2b-toolkit
       - name: "Install Rust"
         uses: dtolnay/rust-toolchain@nightly
         with:
@@ -30,4 +28,3 @@ jobs:
         run: |
           source $HOME/.cargo/env
           cargo +nightly fmt --all -- --check
-

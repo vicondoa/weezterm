@@ -981,6 +981,7 @@ dependencies = [
  "anyhow",
  "bitflags 1.3.2",
  "colorgrad",
+ "d2b-toolkit-core",
  "dirs-next",
  "enum-display-derive",
  "env_logger 0.11.8",
@@ -1241,7 +1242,8 @@ checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
 name = "d2b-client"
-version = "0.1.0"
+version = "0.2.0"
+source = "git+https://github.com/vicondoa/d2b-toolkit?tag=v0.2.0#fde6af8b842718e7150f5056d4eba73093d4ad77"
 dependencies = [
  "base64 0.22.1",
  "d2b-toolkit-core",
@@ -1253,7 +1255,8 @@ dependencies = [
 
 [[package]]
 name = "d2b-toolkit-core"
-version = "0.1.0"
+version = "0.2.0"
+source = "git+https://github.com/vicondoa/d2b-toolkit?tag=v0.2.0#fde6af8b842718e7150f5056d4eba73093d4ad77"
 dependencies = [
  "serde",
  "serde_json",
@@ -7371,7 +7374,7 @@ dependencies = [
 
 [[package]]
 name = "wezterm-version"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "git2",
 ]

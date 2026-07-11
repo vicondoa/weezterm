@@ -254,6 +254,10 @@ pub trait Pane: Downcast + Send + Sync {
     fn palette(&self) -> ColorPalette;
     fn domain_id(&self) -> DomainId;
 
+    fn trusted_d2b_target(&self) -> Option<&str> {
+        None
+    }
+
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
         KeyboardEncoding::Xterm
     }

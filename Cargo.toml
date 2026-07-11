@@ -292,6 +292,10 @@ xml-rs = "0.8"
 zbus = "4.2"
 zstd = "0.11"
 zvariant = "4.0"
+# --- weezterm remote features ---
+d2b-client = { version = "=0.2.0", git = "https://github.com/vicondoa/d2b-toolkit", tag = "v0.2.0" }
+d2b-toolkit-core = { version = "=0.2.0", git = "https://github.com/vicondoa/d2b-toolkit", tag = "v0.2.0" }
+# --- end weezterm remote features ---
 
 [patch.crates-io]
 # We use our own vendored cairo, which has minimal deps and should just

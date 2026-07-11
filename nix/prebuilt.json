@@ -1,10 +1,5 @@
 {
-  "version": "0.6.0",
+  "version": null,
   "system": "x86_64-linux",
-  "binaries": {
-    "weezterm": {
-      "url": "https://github.com/vicondoa/weezterm/releases/download/v0.6.0/weezterm-v0.6.0-x86_64-linux-nix.tar.gz",
-      "hash": "sha256-LoX8iGoFXQfqur3u/jPqQizwHhrZS0a6FoLTJD0N7GE="
-    }
-  }
+  "binaries": {}
 }

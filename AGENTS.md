@@ -240,7 +240,8 @@ work) can tell intentional divergence from accidental drift.
   (0002), remote SSH extensions (0003), the rebrand + binary compat (0004),
   unified SemVer versioning (0005), the open-url security policy (0006), Windows
   rendering modes + state persistence (0007), CI/CD unification (0008), and this
-  panel-review + ADR methodology (0009).
+  panel-review + ADR methodology (0009), plus provider-neutral d2b target
+  domains (0010).
 
 ## Commit conventions
 
@@ -296,6 +297,7 @@ This makes merge conflicts with upstream easy to identify and resolve.
 - `mux/src/port_forward_proxy.rs` — TCP proxy
 - `wezterm-gui/src/overlay/port_forward.rs` — Port manager overlay UI
 - `docs/remote-extensions.md` — Remote features documentation
+- `docs/d2b-provider.md` — Native d2b provider configuration and contract
 
 ### Additive changes to existing files:
 Changes to upstream files are small, additive-only (new enum variants, match arms, methods),
