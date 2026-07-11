@@ -116,8 +116,8 @@
         );
 
         rustPlatform = pkgs.makeRustPlatform {
-          cargo = pkgs.rust-bin.stable.latest.minimal;
-          rustc = pkgs.rust-bin.stable.latest.minimal;
+          cargo = pkgs.rust-bin.stable."1.96.0".minimal;
+          rustc = pkgs.rust-bin.stable."1.96.0".minimal;
         };
 
         prebuiltManifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
@@ -156,7 +156,7 @@
           name = "weezterm";
           # --- end weezterm remote features ---
           src = ./..;
-          version = self.shortRev or "dev";
+          version = "0.7.0";
 
           cargoLock = {
             lockFile = ../Cargo.lock;
@@ -328,15 +328,14 @@
           buildInputs =
             buildInputs
             ++ (with pkgs.rust-bin; [
-              (stable.latest.minimal.override {
+              (stable."1.96.0".minimal.override {
                 extensions = [
                   "clippy"
+                  "rust-analyzer"
                   "rust-src"
+                  "rustfmt"
                 ];
               })
-
-              nightly.latest.rustfmt
-              nightly.latest.rust-analyzer
             ]);
 
           LD_LIBRARY_PATH = libPath;

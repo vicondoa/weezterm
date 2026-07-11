@@ -51,7 +51,6 @@ url.workspace = true
 # --- weezterm remote features ---
 async-channel.workspace = true
 async-io.workspace = true
-d2b-client.workspace = true
 d2b-toolkit-core.workspace = true
 futures.workspace = true
 socket2.workspace = true
@@ -69,6 +68,9 @@ winapi = { workspace=true, features = [
     "processthreadsapi",
     "tlhelp32",
 ]}
+
+[target."cfg(target_os = \"linux\")".dependencies]
+d2b-client.workspace = true
 
 [dev-dependencies]
 k9.workspace = true
