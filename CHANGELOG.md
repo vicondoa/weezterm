@@ -40,7 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests.
 - Native d2b socket I/O is reactor-backed and non-blocking, so stalled daemon
   traffic cannot block the mux executor; packet buffers are reused and
-  interrupted reads and writes retry.
+  interrupted reads and writes retry. Interrupted and backlog-saturated
+  connects await bounded reactor completion.
 - Cargo manifests use the immutable d2b-toolkit `v0.2.0` release tag; the Nix
   flakes avoid a duplicate input that did not participate in the Cargo build.
 - Nix source builds and development shells pin exact Rust releases, and

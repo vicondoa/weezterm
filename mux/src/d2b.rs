@@ -1195,9 +1195,12 @@ mod imp {
             Ok(()) => false,
             Err(error)
                 if error.kind() == std::io::ErrorKind::WouldBlock
-                    || error
-                        .raw_os_error()
-                        .is_some_and(|code| matches!(code, libc::EINPROGRESS | libc::EALREADY)) =>
+                    || error.raw_os_error().is_some_and(|code| {
+                        matches!(
+                            code,
+                            libc::EINPROGRESS | libc::EALREADY | libc::EAGAIN | libc::EINTR
+                        )
+                    }) =>
             {
                 true
             }
