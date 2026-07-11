@@ -7,15 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-11
+
 ### Added
 
-- Documented native d2b provider packaging, flake input alignment with
-  d2b-toolkit, runtime behavior, and redaction boundaries.
-- Native Linux d2b provider core using the d2b public client protocol with non-blocking pane queues and redacted diagnostics.
-- Native d2b VM terminal domains and a d2b session picker with offline-state handling, named-shell prompts, per-VM mux isolation, and VM/session-aware titles.
+- Native Linux d2b provider core using the public client protocol with
+  non-blocking pane queues and redacted diagnostics.
+- Provider-neutral d2b target domains and a session picker with named-shell
+  prompts, per-target mux isolation, canonical target titles, and typed
+  provider posture.
+- Canonical dotted workload targets with bounded, non-reversible mux socket and
+  generated domain keys.
+- Clear unsafe-local/no-isolation, helper-unavailable, and daemon feature-skew
+  status in d2b domain and launcher UI.
+- Native d2b provider documentation covering toolkit alignment, Lua
+  configuration, migration, runtime behavior, and redaction boundaries.
 
 ### Changed
 
+- The native d2b provider now uses canonical `target` identities across config,
+  discovery, transport, panes, reconnect state, launcher entries, and user vars.
+- d2b public client dependencies and Nix inputs are pinned to d2b-toolkit
+  `v0.2.0`.
 - Native d2b shell panes now read from d2b's PTY stdout stream only, matching
   the persistent-shell wire contract and avoiding false reattach prompts when a
   separate stderr stream is unavailable.
@@ -25,8 +38,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native d2b provider connections now use d2bd's SOCK_SEQPACKET public socket
   transport, preserving frame packet boundaries for shell attach/read/write
   requests.
-- Nix flake packaging declares `d2b-toolkit` as an input and rewrites native d2b
-  client crate paths during builds, avoiding developer-local absolute paths.
+- Nix flake packaging declares an immutable d2b-toolkit release input, while
+  Cargo uses the matching immutable Git revision.
+
+### Deprecated
+
+- The d2b domain `vm` field and `WEEZTERM_D2B_BOUND_VM` remain compatibility
+  aliases for `target` and `WEEZTERM_D2B_BOUND_TARGET` through the 0.7 release
+  line.
+
+### Security
+
+- Unsafe-local shell targets require negotiated `unsafe-local-shell-v1`
+  support and never fall back to SSH, a direct host shell, or a separate
+  host-terminal backend.
+- Conflicting target and VM aliases fail closed before domain selection.
 
 ## [0.6.0] - 2026-06-19
 

@@ -13,10 +13,12 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # --- weezterm remote features ---
     d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit";
+      url = "github:vicondoa/d2b-toolkit/v0.2.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # --- end weezterm remote features ---
 
     # NOTE: @2024-05 Nix flakes does not support getting git submodules of 'self'.
     # refs:
@@ -57,7 +59,6 @@
 
         inherit (inputs.nixpkgs) lib;
         inherit (pkgs) stdenv;
-        toolkitSource = inputs.d2b-toolkit.packages.${system}.default;
 
         nativeBuildInputs =
           with pkgs;
@@ -173,12 +174,6 @@
 
           postPatch = ''
             echo ${version} > .tag
-
-            substituteInPlace mux/Cargo.toml \
-              --replace-fail "../../d2b-toolkit/crates/d2b-client" \
-                "${toolkitSource}/share/d2b-toolkit/crates/d2b-client" \
-              --replace-fail "../../d2b-toolkit/crates/d2b-toolkit-core" \
-                "${toolkitSource}/share/d2b-toolkit/crates/d2b-toolkit-core"
 
             # tests are failing with: Unable to exchange encryption keys
             rm -r wezterm-ssh/tests

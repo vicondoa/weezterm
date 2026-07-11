@@ -1,9 +1,76 @@
+use d2b_toolkit_core::WorkloadTarget;
+use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
 
-pub use d2b_toolkit_core::ShellSessionState;
+pub use d2b_toolkit_core::{
+    IsolationPosture, KnownFeatureFlag, ShellSessionState, WorkloadAvailability,
+    WorkloadProviderKind,
+};
 
+pub const D2B_BOUND_TARGET_ENV: &str = "WEEZTERM_D2B_BOUND_TARGET";
 pub const D2B_BOUND_VM_ENV: &str = "WEEZTERM_D2B_BOUND_VM";
 pub const D2B_SHELL_NAME_ENV: &str = "WEEZTERM_D2B_SHELL_NAME";
+
+pub fn normalize_d2b_target(target: &str) -> Result<String, String> {
+    if target.starts_with("d2b://") || target.contains('.') {
+        return WorkloadTarget::parse(target)
+            .map(|target| target.to_canonical())
+            .map_err(|_| {
+                "d2b targets must use `<workload>.<realm>.d2b` with lowercase labels".to_string()
+            });
+    }
+
+    let mut chars = target.chars();
+    if !matches!(chars.next(), Some(c) if c.is_ascii_lowercase())
+        || !chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        || target.starts_with("sys-")
+        || target == "launcher"
+    {
+        return Err("legacy d2b target has an invalid VM name".to_string());
+    }
+    Ok(target.to_string())
+}
+
+pub fn resolve_bound_target_aliases(
+    target: Option<&str>,
+    vm: Option<&str>,
+) -> Result<Option<String>, String> {
+    match (target, vm) {
+        (Some(target), Some(vm)) => {
+            let target = normalize_d2b_target(target)?;
+            let vm = normalize_d2b_target(vm)?;
+            if target != vm {
+                return Err(format!(
+                    "{D2B_BOUND_TARGET_ENV} and compatibility alias {D2B_BOUND_VM_ENV} differ; \
+                     unset the alias or make both values identical"
+                ));
+            }
+            Ok(Some(target))
+        }
+        (Some(target), None) | (None, Some(target)) => normalize_d2b_target(target).map(Some),
+        (None, None) => Ok(None),
+    }
+}
+
+pub fn bound_target_from_env() -> Result<Option<String>, String> {
+    let target = std::env::var(D2B_BOUND_TARGET_ENV)
+        .map(Some)
+        .or_else(|err| match err {
+            std::env::VarError::NotPresent => Ok(None),
+            std::env::VarError::NotUnicode(_) => {
+                Err(format!("{D2B_BOUND_TARGET_ENV} must contain valid UTF-8"))
+            }
+        })?;
+    let vm = std::env::var(D2B_BOUND_VM_ENV)
+        .map(Some)
+        .or_else(|err| match err {
+            std::env::VarError::NotPresent => Ok(None),
+            std::env::VarError::NotUnicode(_) => {
+                Err(format!("{D2B_BOUND_VM_ENV} must contain valid UTF-8"))
+            }
+        })?;
+    resolve_bound_target_aliases(target.as_deref(), vm.as_deref())
+}
 
 pub fn validate_shell_name(name: &str) -> Result<(), String> {
     let bytes = name.as_bytes();
@@ -29,8 +96,16 @@ pub fn validate_shell_name(name: &str) -> Result<(), String> {
     Ok(())
 }
 
-pub fn friendly_session_name(vm: &str, existing: &[String]) -> String {
-    let base = format!("{}-shell", sanitize_shell_component(vm));
+pub fn friendly_session_name(target: &str, existing: &[String]) -> String {
+    let legacy_base = format!("{}-shell", sanitize_shell_component(target));
+    let base = if !target.contains('.')
+        && !target.starts_with("d2b://")
+        && validate_shell_name(&legacy_base).is_ok()
+    {
+        legacy_base
+    } else {
+        format!("d2b-{}-shell", &stable_target_key(target)[..16])
+    };
     if !existing.iter().any(|name| name == &base) {
         return base;
     }
@@ -45,10 +120,10 @@ pub fn friendly_session_name(vm: &str, existing: &[String]) -> String {
     "default".to_string()
 }
 
-pub fn d2b_tab_title(vm: &str, session: &str, guest_osc_title: &str) -> String {
-    let vm = sanitize_display_label(vm);
+pub fn d2b_tab_title(target: &str, session: &str, guest_osc_title: &str) -> String {
+    let target = sanitize_display_label(target);
     let session = sanitize_display_label(session);
-    let prefix = format!("[{vm}:{session}]");
+    let prefix = format!("[{target}:{session}]");
     let guest_osc_title = sanitize_display_text(guest_osc_title);
     if guest_osc_title.is_empty() || guest_osc_title == "wezterm" {
         prefix
@@ -57,12 +132,36 @@ pub fn d2b_tab_title(vm: &str, session: &str, guest_osc_title: &str) -> String {
     }
 }
 
-pub fn vm_mux_socket_path(runtime_dir: &Path, vm: &str) -> PathBuf {
+pub fn target_domain_key(target: &str) -> String {
+    format!("d2b-{}", stable_target_key(target))
+}
+
+pub fn target_mux_socket_path(runtime_dir: &Path, target: &str) -> PathBuf {
     runtime_dir.join(format!(
         "gui-sock-d2b-{}-{}",
-        sanitize_socket_component(vm),
+        stable_target_key(target),
         std::process::id()
     ))
+}
+
+pub fn vm_mux_socket_path(runtime_dir: &Path, vm: &str) -> PathBuf {
+    target_mux_socket_path(runtime_dir, vm)
+}
+
+fn stable_target_key(target: &str) -> String {
+    let normalized = normalize_d2b_target(target);
+    let target = normalized.as_deref().unwrap_or("<invalid-d2b-target>");
+    let mut hasher = Sha256::new();
+    hasher.update(b"weezterm-d2b-target-key-v1");
+    hasher.update((target.len() as u64).to_le_bytes());
+    hasher.update(target.as_bytes());
+    let digest = hasher.finalize();
+    let mut key = String::with_capacity(32);
+    for byte in &digest[..16] {
+        use std::fmt::Write as _;
+        let _ = write!(key, "{byte:02x}");
+    }
+    key
 }
 
 fn sanitize_shell_component(value: &str) -> String {
@@ -80,19 +179,6 @@ fn sanitize_shell_component(value: &str) -> String {
     } else {
         out.to_string()
     }
-}
-
-fn sanitize_socket_component(value: &str) -> String {
-    sanitize_shell_component(value)
-        .chars()
-        .map(|c| {
-            if c.is_ascii_alphanumeric() || c == '-' {
-                c
-            } else {
-                '-'
-            }
-        })
-        .collect()
 }
 
 pub fn sanitize_display_label(value: &str) -> String {
@@ -164,8 +250,9 @@ mod imp {
     use base64::Engine as _;
     use d2b_client::{AttachedShell, ClientError, FrameBounds, PublicSocketClient};
     use d2b_toolkit_core::{
-        Hello, KnownFeatureFlag, Redacted, ShellName, ShellSessionState, SocketClass,
-        TerminalSize as D2bTerminalSize, TerminalStream,
+        Capability, Hello, HelloResponse, KnownFeatureFlag, Redacted, ShellName, ShellSessionState,
+        SocketClass, TerminalSize as D2bTerminalSize, TerminalStream, ToolkitError,
+        WorkloadAvailability, WorkloadProviderKind, WorkloadPublicSummary,
     };
     use futures::io::{AsyncRead, AsyncWrite};
     use futures::{future, Future};
@@ -215,6 +302,15 @@ mod imp {
             hasher.update(value);
             Self(format!("d2b:{:x}", hasher.finalize()))
         }
+
+        pub fn from_target_session(kind: &'static str, target: &str, session: &str) -> Self {
+            let mut value = Vec::with_capacity(target.len() + session.len() + 16);
+            value.extend_from_slice(&(target.len() as u64).to_le_bytes());
+            value.extend_from_slice(target.as_bytes());
+            value.extend_from_slice(&(session.len() as u64).to_le_bytes());
+            value.extend_from_slice(session.as_bytes());
+            Self::from_sensitive(kind, value)
+        }
     }
 
     impl std::fmt::Debug for D2bCorrelationId {
@@ -261,13 +357,143 @@ mod imp {
         },
         #[error("d2b provider attach failed: {kind}")]
         AttachFailed { kind: String },
+        #[error("d2b daemon is missing required feature `{feature}`; update d2b and retry")]
+        FeatureSkew { feature: KnownFeatureFlag },
+        #[error("d2b target resolution failed: {kind}")]
+        TargetResolution { kind: &'static str },
+        #[error("d2b target shell is unavailable: {reason}")]
+        TargetUnavailable { reason: &'static str },
+    }
+
+    #[derive(Clone, Eq, PartialEq)]
+    pub struct D2bTargetStatus {
+        target: String,
+        pub provider_kind: Option<WorkloadProviderKind>,
+        pub isolation: Option<d2b_toolkit_core::IsolationPosture>,
+        pub availability: Option<WorkloadAvailability>,
+        pub shell_capable: bool,
+        posture_known: bool,
+        required_feature: Option<KnownFeatureFlag>,
+    }
+
+    impl D2bTargetStatus {
+        pub fn new(
+            target: impl Into<String>,
+            provider_kind: WorkloadProviderKind,
+            isolation: d2b_toolkit_core::IsolationPosture,
+            availability: WorkloadAvailability,
+            shell_capable: bool,
+        ) -> Result<Self, String> {
+            Ok(Self {
+                target: super::normalize_d2b_target(&target.into())?,
+                provider_kind: Some(provider_kind),
+                isolation: Some(isolation),
+                availability: Some(availability),
+                shell_capable,
+                posture_known: true,
+                required_feature: None,
+            })
+        }
+
+        fn legacy(target: String) -> Self {
+            Self {
+                target,
+                provider_kind: None,
+                isolation: None,
+                availability: None,
+                shell_capable: true,
+                posture_known: false,
+                required_feature: None,
+            }
+        }
+
+        fn from_workload(workload: &WorkloadPublicSummary) -> Self {
+            Self {
+                target: workload.identity().target().to_canonical(),
+                provider_kind: Some(workload.provider_kind()),
+                isolation: Some(workload.execution_posture().isolation()),
+                availability: Some(workload.availability()),
+                shell_capable: workload.capabilities().has(Capability::PersistentShell)
+                    && workload.capabilities().has(Capability::Pty),
+                posture_known: true,
+                required_feature: None,
+            }
+        }
+
+        fn require_feature(&mut self, feature: KnownFeatureFlag) {
+            self.required_feature = Some(feature);
+        }
+
+        pub fn target(&self) -> &str {
+            &self.target
+        }
+
+        pub fn is_unsafe_local(&self) -> bool {
+            self.provider_kind == Some(WorkloadProviderKind::UnsafeLocal)
+                || self.isolation == Some(d2b_toolkit_core::IsolationPosture::UnsafeLocal)
+        }
+
+        pub fn is_shell_ready(&self) -> bool {
+            self.shell_capable
+                && self.required_feature.is_none()
+                && self
+                    .availability
+                    .map(|availability| availability == WorkloadAvailability::Ready)
+                    .unwrap_or(true)
+        }
+
+        pub fn required_feature(&self) -> Option<KnownFeatureFlag> {
+            self.required_feature
+        }
+
+        pub fn warning_text(&self) -> Option<String> {
+            let mut warnings = Vec::new();
+            if self.is_unsafe_local() {
+                warnings.push("UNSAFE LOCAL — NO ISOLATION".to_string());
+            }
+            if !self.posture_known {
+                warnings.push("provider posture unavailable (daemon feature skew)".to_string());
+            }
+            if let Some(availability) = self.availability {
+                if let Some(message) = availability_message(availability) {
+                    warnings.push(message.to_string());
+                }
+            }
+            if !self.shell_capable {
+                warnings.push("persistent shell unavailable".to_string());
+            }
+            if let Some(feature) = self.required_feature {
+                warnings.push(format!("daemon lacks required `{feature}` feature"));
+            }
+            (!warnings.is_empty()).then(|| warnings.join("; "))
+        }
+    }
+
+    impl std::fmt::Debug for D2bTargetStatus {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("D2bTargetStatus")
+                .field("target", &"<redacted>")
+                .field("provider_kind", &self.provider_kind)
+                .field("isolation", &self.isolation)
+                .field("availability", &self.availability)
+                .field("shell_capable", &self.shell_capable)
+                .field("posture_known", &self.posture_known)
+                .field("required_feature", &self.required_feature)
+                .finish()
+        }
+    }
+
+    #[derive(Clone, Debug, Eq, PartialEq)]
+    pub struct D2bDiscovery {
+        pub status: D2bTargetStatus,
+        pub sessions: Vec<D2bSession>,
     }
 
     #[derive(Clone, Eq, PartialEq)]
     pub struct D2bSession {
         pub id: String,
         pub label: String,
-        pub vm_name: String,
+        pub target: String,
         pub workspace: Option<String>,
         pub state: ShellSessionState,
         pub attached: bool,
@@ -280,7 +506,7 @@ mod imp {
             f.debug_struct("D2bSession")
                 .field("id", &"<redacted>")
                 .field("label", &"<redacted>")
-                .field("vm_name", &"<redacted>")
+                .field("target", &"<redacted>")
                 .field("workspace", &self.workspace.as_ref().map(|_| "<redacted>"))
                 .field("state", &self.state)
                 .field("attached", &self.attached)
@@ -292,7 +518,7 @@ mod imp {
 
     #[derive(Clone, Eq, PartialEq)]
     pub struct D2bPaneHandle {
-        pub vm_name: String,
+        pub target: String,
         pub session_id: String,
         pub pane_id: String,
         pub correlation_id: D2bCorrelationId,
@@ -301,7 +527,7 @@ mod imp {
     impl std::fmt::Debug for D2bPaneHandle {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
             f.debug_struct("D2bPaneHandle")
-                .field("vm_name", &"<redacted>")
+                .field("target", &"<redacted>")
                 .field("session_id", &"<redacted>")
                 .field("pane_id", &"<redacted>")
                 .field("correlation_id", &self.correlation_id)
@@ -418,7 +644,7 @@ mod imp {
     }
 
     pub trait D2bTransport: Send + Sync {
-        fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>>;
+        fn discover(&self) -> TransportFuture<'_, D2bDiscovery>;
 
         fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane>;
     }
@@ -543,18 +769,26 @@ mod imp {
     type D2bShell = AttachedShell<D2bSocket>;
 
     pub struct NativeD2bTransport {
-        vm: String,
+        target: String,
         config: D2bRuntimeConfig,
         bounds: FrameBounds,
     }
 
     impl NativeD2bTransport {
-        pub fn new(vm: impl Into<String>, config: D2bRuntimeConfig) -> Self {
-            Self {
-                vm: vm.into(),
+        pub fn new(
+            target: impl Into<String>,
+            config: D2bRuntimeConfig,
+        ) -> Result<Self, D2bProviderError> {
+            let target = super::normalize_d2b_target(&target.into()).map_err(|_| {
+                D2bProviderError::TargetResolution {
+                    kind: "invalid-target",
+                }
+            })?;
+            Ok(Self {
+                target,
                 config,
                 bounds: FrameBounds::default_public_daemon(),
-            }
+            })
         }
 
         async fn connect_client(&self) -> Result<D2bClient, D2bProviderError> {
@@ -576,35 +810,215 @@ mod imp {
                 self.config.write_timeout,
                 d2b_client::send_hello(
                     &mut socket,
-                    &Hello::toolkit_client(vec![KnownFeatureFlag::TypedErrors.wire_value()]),
+                    &Hello::toolkit_client(vec![
+                        KnownFeatureFlag::TypedErrors.wire_value(),
+                        KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+                        KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+                        KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
+                    ]),
                     self.bounds,
                 ),
             )
             .await?;
-            client_op(
+            let hello = client_op(
                 "reading d2b hello",
                 None,
                 self.config.read_timeout,
                 d2b_client::read_hello_response(&mut socket, self.bounds),
             )
             .await?;
+            let HelloResponse::HelloOk(hello) = hello else {
+                return Err(D2bProviderError::AttachFailed {
+                    kind: "hello-rejected".to_string(),
+                });
+            };
 
-            Ok(PublicSocketClient::with_bounds(socket, self.bounds))
+            Ok(PublicSocketClient::with_bounds_and_negotiated_capabilities(
+                socket,
+                self.bounds,
+                hello.negotiated_capabilities(),
+            ))
+        }
+
+        async fn resolve_target(
+            &self,
+            client: &mut D2bClient,
+        ) -> Result<D2bTargetStatus, D2bProviderError> {
+            match client_op(
+                "reading d2b workload metadata",
+                None,
+                self.config.read_timeout,
+                client.workload_inventory(),
+            )
+            .await
+            {
+                Ok(inventory) => {
+                    let workload = select_workload(&self.target, &inventory.workloads)?;
+                    Ok(D2bTargetStatus::from_workload(workload))
+                }
+                Err(D2bProviderError::FeatureSkew { .. }) if is_legacy_target(&self.target) => {
+                    Ok(D2bTargetStatus::legacy(self.target.clone()))
+                }
+                Err(err) => Err(err),
+            }
+        }
+
+        fn apply_unsafe_shell_requirement<T>(
+            client: &mut PublicSocketClient<T>,
+            status: &mut D2bTargetStatus,
+        ) -> Result<(), D2bProviderError>
+        where
+            T: AsyncRead + AsyncWrite + Unpin,
+        {
+            if !status.is_unsafe_local() {
+                return Ok(());
+            }
+            match client.require_unsafe_local_shell() {
+                Ok(()) => Ok(()),
+                Err(err) => {
+                    let err =
+                        classify_client_error("checking unsafe-local shell support", None, err);
+                    if let D2bProviderError::FeatureSkew { feature } = err {
+                        status.require_feature(feature);
+                        Ok(())
+                    } else {
+                        Err(err)
+                    }
+                }
+            }
+        }
+    }
+
+    fn is_legacy_target(target: &str) -> bool {
+        !target.contains('.') && !target.starts_with("d2b://")
+    }
+
+    fn select_workload<'a>(
+        target: &str,
+        workloads: &'a [WorkloadPublicSummary],
+    ) -> Result<&'a WorkloadPublicSummary, D2bProviderError> {
+        let exact = workloads
+            .iter()
+            .filter(|workload| workload.identity().target().as_str() == target)
+            .collect::<Vec<_>>();
+        match exact.as_slice() {
+            [workload] => return Ok(*workload),
+            [] => {}
+            _ => {
+                return Err(D2bProviderError::TargetResolution {
+                    kind: "duplicate-canonical-target",
+                })
+            }
+        }
+
+        if !is_legacy_target(target) {
+            return Err(D2bProviderError::TargetResolution {
+                kind: "canonical-target-not-found",
+            });
+        }
+
+        let legacy = workloads
+            .iter()
+            .filter(|workload| {
+                workload
+                    .identity()
+                    .legacy_vm_name()
+                    .map(|name| name.as_str() == target)
+                    .unwrap_or(false)
+            })
+            .collect::<Vec<_>>();
+        match legacy.as_slice() {
+            [workload] => return Ok(*workload),
+            [] => {}
+            _ => {
+                return Err(D2bProviderError::TargetResolution {
+                    kind: "ambiguous-legacy-vm-alias",
+                })
+            }
+        }
+
+        let workload_id = workloads
+            .iter()
+            .filter(|workload| workload.identity().workload_id().as_str() == target)
+            .collect::<Vec<_>>();
+        match workload_id.as_slice() {
+            [workload] => Ok(*workload),
+            [] => Err(D2bProviderError::TargetResolution {
+                kind: "legacy-target-not-found",
+            }),
+            _ => Err(D2bProviderError::TargetResolution {
+                kind: "ambiguous-workload-id-alias",
+            }),
+        }
+    }
+
+    fn ensure_target_shell_ready(status: &D2bTargetStatus) -> Result<(), D2bProviderError> {
+        if let Some(feature) = status.required_feature() {
+            return Err(D2bProviderError::FeatureSkew { feature });
+        }
+        if !status.shell_capable {
+            return Err(D2bProviderError::TargetUnavailable {
+                reason: "persistent-shell-capability-missing",
+            });
+        }
+        if let Some(availability) = status.availability {
+            if availability != WorkloadAvailability::Ready {
+                return Err(D2bProviderError::TargetUnavailable {
+                    reason: availability_slug(availability),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn availability_slug(availability: WorkloadAvailability) -> &'static str {
+        match availability {
+            WorkloadAvailability::Ready => "ready",
+            WorkloadAvailability::HelperUnavailable => "helper-unavailable",
+            WorkloadAvailability::HelperStale => "helper-stale",
+            WorkloadAvailability::UserManagerUnavailable => "user-manager-unavailable",
+            WorkloadAvailability::GraphicalSessionInactive => "graphical-session-inactive",
+            WorkloadAvailability::WaylandUnavailable => "wayland-unavailable",
+            WorkloadAvailability::ProxyUnavailable => "proxy-unavailable",
+            WorkloadAvailability::Degraded => "degraded",
+        }
+    }
+
+    fn availability_message(availability: WorkloadAvailability) -> Option<&'static str> {
+        match availability {
+            WorkloadAvailability::Ready => None,
+            WorkloadAvailability::HelperUnavailable => Some("user-session helper unavailable"),
+            WorkloadAvailability::HelperStale => Some("user-session helper stale"),
+            WorkloadAvailability::UserManagerUnavailable => {
+                Some("systemd user manager unavailable")
+            }
+            WorkloadAvailability::GraphicalSessionInactive => Some("graphical session inactive"),
+            WorkloadAvailability::WaylandUnavailable => Some("Wayland unavailable"),
+            WorkloadAvailability::ProxyUnavailable => Some("Wayland proxy unavailable"),
+            WorkloadAvailability::Degraded => Some("provider degraded"),
         }
     }
 
     impl D2bTransport for NativeD2bTransport {
-        fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>> {
+        fn discover(&self) -> TransportFuture<'_, D2bDiscovery> {
             Box::pin(async move {
                 let mut client = self.connect_client().await?;
+                let mut status = self.resolve_target(&mut client).await?;
+                Self::apply_unsafe_shell_requirement(&mut client, &mut status)?;
+                if !status.is_shell_ready() {
+                    return Ok(D2bDiscovery {
+                        status,
+                        sessions: Vec::new(),
+                    });
+                }
                 let result = client_op(
                     "listing d2b shells",
                     None,
                     self.config.write_timeout,
-                    client.shell_list(self.vm.clone()),
+                    client.shell_list(status.target().to_string()),
                 )
                 .await?;
-                Ok(result
+                let sessions = result
                     .sessions
                     .into_iter()
                     .map(|entry| {
@@ -616,41 +1030,64 @@ mod imp {
                             } else {
                                 name.clone()
                             },
-                            vm_name: self.vm.clone(),
+                            target: status.target().to_string(),
                             workspace: None,
                             state: entry.state,
                             attached: entry.attached,
                             is_default: entry.is_default,
-                            correlation_id: D2bCorrelationId::from_sensitive("shell", &name),
+                            correlation_id: D2bCorrelationId::from_target_session(
+                                "shell",
+                                status.target(),
+                                &name,
+                            ),
                         }
                     })
-                    .collect())
+                    .collect();
+                Ok(D2bDiscovery { status, sessions })
             })
         }
 
         fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
             Box::pin(async move {
-                let client = self.connect_client().await?;
+                let mut client = self.connect_client().await?;
+                let mut status = self.resolve_target(&mut client).await?;
+                Self::apply_unsafe_shell_requirement(&mut client, &mut status)?;
+                ensure_target_shell_ready(&status)?;
                 if let Some(name) = request.session_id.as_deref() {
                     super::validate_shell_name(name)
                         .map_err(|kind| D2bProviderError::AttachFailed { kind })?;
                 }
-                let name = request.session_id.clone().map(ShellName::new);
+                let name = request
+                    .session_id
+                    .clone()
+                    .map(ShellName::new)
+                    .transpose()
+                    .map_err(|err| D2bProviderError::AttachFailed {
+                        kind: err.to_string(),
+                    })?;
                 let size = to_d2b_size(request.size);
                 let shell = client_op(
                     "attaching d2b shell",
                     None,
                     self.config.write_timeout,
-                    client.attach_shell(self.vm.clone(), name, false, size),
+                    client.attach_shell(status.target().to_string(), name, false, size),
                 )
                 .await?;
                 let resolved_name = shell.resolved_name().as_str().to_string();
-                let correlation_id =
-                    D2bCorrelationId::from_sensitive("attached-shell", &resolved_name);
+                let correlation_id = D2bCorrelationId::from_target_session(
+                    "attached-shell",
+                    status.target(),
+                    &resolved_name,
+                );
                 let handle = D2bPaneHandle {
-                    vm_name: self.vm.clone(),
+                    target: status.target().to_string(),
                     session_id: resolved_name.clone(),
-                    pane_id: D2bCorrelationId::from_sensitive("pane", &resolved_name).to_string(),
+                    pane_id: D2bCorrelationId::from_target_session(
+                        "pane",
+                        status.target(),
+                        &resolved_name,
+                    )
+                    .to_string(),
                     correlation_id: correlation_id.clone(),
                 };
                 let (command_tx, command_rx) =
@@ -668,26 +1105,29 @@ mod imp {
         }
     }
 
-    pub fn native_domain(vm: impl Into<String>, config: D2bRuntimeConfig) -> D2bDomain {
-        let vm = vm.into();
-        D2bDomain::new(
-            vm.clone(),
-            vm.clone(),
-            Arc::new(NativeD2bTransport::new(vm, config)),
-        )
+    pub fn native_domain(
+        target: impl Into<String>,
+        config: D2bRuntimeConfig,
+    ) -> anyhow::Result<D2bDomain> {
+        let target = super::normalize_d2b_target(&target.into()).map_err(anyhow::Error::msg)?;
+        Ok(D2bDomain::new(
+            super::target_domain_key(&target),
+            target.clone(),
+            Arc::new(NativeD2bTransport::new(target, config)?),
+        ))
     }
 
     pub fn native_domain_with_name(
         name: impl Into<String>,
-        vm: impl Into<String>,
+        target: impl Into<String>,
         config: D2bRuntimeConfig,
-    ) -> D2bDomain {
-        let vm = vm.into();
-        D2bDomain::new(
+    ) -> anyhow::Result<D2bDomain> {
+        let target = super::normalize_d2b_target(&target.into()).map_err(anyhow::Error::msg)?;
+        Ok(D2bDomain::new(
             name,
-            vm.clone(),
-            Arc::new(NativeD2bTransport::new(vm, config)),
-        )
+            target.clone(),
+            Arc::new(NativeD2bTransport::new(target, config)?),
+        ))
     }
 
     async fn async_unix_connect(path: &Path) -> std::io::Result<D2bSocket> {
@@ -796,6 +1236,14 @@ mod imp {
                 kind,
                 correlation,
             },
+            ClientError::Core(ToolkitError::FeatureUnavailable { feature }) => {
+                D2bProviderError::FeatureSkew { feature }
+            }
+            ClientError::Core(ToolkitError::InvalidTarget { .. }) => {
+                D2bProviderError::TargetResolution {
+                    kind: "invalid-target",
+                }
+            }
             ClientError::Core(_) => D2bProviderError::Disconnected {
                 operation,
                 correlation,
@@ -1025,7 +1473,7 @@ mod imp {
     pub struct D2bDomain {
         id: DomainId,
         name: String,
-        vm_name: String,
+        target: String,
         transport: Arc<dyn D2bTransport>,
         state: Mutex<DomainState>,
         panes: Mutex<Vec<Weak<D2bPane>>>,
@@ -1034,25 +1482,33 @@ mod imp {
     impl D2bDomain {
         pub fn new(
             name: impl Into<String>,
-            vm_name: impl Into<String>,
+            target: impl Into<String>,
             transport: Arc<dyn D2bTransport>,
         ) -> Self {
             Self {
                 id: alloc_domain_id(),
                 name: name.into(),
-                vm_name: vm_name.into(),
+                target: target.into(),
                 transport,
                 state: Mutex::new(DomainState::Detached),
                 panes: Mutex::new(Vec::new()),
             }
         }
 
+        pub fn target(&self) -> &str {
+            &self.target
+        }
+
         pub fn vm_name(&self) -> &str {
-            &self.vm_name
+            self.target()
+        }
+
+        pub async fn discover(&self) -> anyhow::Result<D2bDiscovery> {
+            self.transport.discover().await
         }
 
         pub async fn discover_sessions(&self) -> anyhow::Result<Vec<D2bSession>> {
-            self.transport.discover_sessions().await
+            Ok(self.discover().await?.sessions)
         }
     }
 
@@ -1095,12 +1551,31 @@ mod imp {
         }
 
         async fn domain_label(&self) -> String {
-            match self.discover_sessions().await {
-                Ok(sessions) if sessions.is_empty() => format!("d2b `{}` — no sessions", self.name),
-                Ok(sessions) => format!("d2b `{}` — {} session(s)", self.name, sessions.len()),
+            match self.discover().await {
+                Ok(discovery) => {
+                    let availability = if discovery.status.is_shell_ready() {
+                        if discovery.sessions.is_empty() {
+                            "no sessions".to_string()
+                        } else {
+                            format!("{} session(s)", discovery.sessions.len())
+                        }
+                    } else {
+                        "unavailable".to_string()
+                    };
+                    match discovery.status.warning_text() {
+                        Some(warning) => {
+                            format!("d2b `{}` — {availability} — {warning}", self.name)
+                        }
+                        None => format!("d2b `{}` — {availability}", self.name),
+                    }
+                }
                 Err(err) => {
-                    log::debug!("d2b session discovery failed for {}: {err:#}", self.name);
-                    format!("d2b `{}` — unavailable", self.name)
+                    log::debug!("d2b session discovery failed: {err:#}");
+                    format!(
+                        "d2b `{}` — unavailable — {}",
+                        self.name,
+                        super::sanitize_display_label(&err.to_string())
+                    )
                 }
             }
         }
@@ -1247,7 +1722,7 @@ mod imp {
 
         fn get_title(&self) -> String {
             let guest_title = self.terminal.lock().get_title().to_string();
-            super::d2b_tab_title(&self.handle.vm_name, &self.handle.session_id, &guest_title)
+            super::d2b_tab_title(&self.handle.target, &self.handle.session_id, &guest_title)
         }
 
         fn send_paste(&self, text: &str) -> anyhow::Result<()> {
@@ -1345,7 +1820,11 @@ mod imp {
 
         fn copy_user_vars(&self) -> HashMap<String, String> {
             HashMap::from([
-                ("weezterm.d2b.vm".to_string(), self.handle.vm_name.clone()),
+                (
+                    "weezterm.d2b.target".to_string(),
+                    self.handle.target.clone(),
+                ),
+                ("weezterm.d2b.vm".to_string(), self.handle.target.clone()),
                 (
                     "weezterm.d2b.session".to_string(),
                     self.handle.session_id.clone(),
@@ -1427,7 +1906,7 @@ mod imp {
     pub struct UnsupportedD2bTransport;
 
     impl D2bTransport for UnsupportedD2bTransport {
-        fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>> {
+        fn discover(&self) -> TransportFuture<'_, D2bDiscovery> {
             Box::pin(async { Err(anyhow!("native d2b transport is not wired yet")) })
         }
 
@@ -1443,11 +1922,14 @@ mod imp {
     #[cfg(test)]
     mod test {
         use super::*;
+        use d2b_toolkit_core::{NegotiatedCapabilities, PublicResponse, WorkloadOpResponse};
+        use futures::io::Cursor;
         use parking_lot::Mutex;
 
         #[derive(Default)]
         struct FakeTransport {
             sessions: Vec<D2bSession>,
+            status: Option<D2bTargetStatus>,
             attach_error: Option<D2bProviderError>,
             attach_requests: Arc<Mutex<Vec<D2bAttachRequest>>>,
             queue_depth: usize,
@@ -1478,15 +1960,20 @@ mod imp {
                 };
                 let (command_tx, command_rx) = async_channel::bounded(queue_depth);
                 let (event_tx, event_rx) = async_channel::bounded(event_depth);
-                let correlation_id = D2bCorrelationId::from_sensitive(
-                    "fake-pane",
-                    request.session_id.as_deref().unwrap_or("default"),
-                );
+                let target = self
+                    .status
+                    .as_ref()
+                    .map(|status| status.target().to_string())
+                    .unwrap_or_else(|| "work".to_string());
+                let session_id = request
+                    .session_id
+                    .clone()
+                    .unwrap_or_else(|| "session-1".to_string());
+                let correlation_id =
+                    D2bCorrelationId::from_target_session("fake-pane", &target, &session_id);
                 let handle = D2bPaneHandle {
-                    vm_name: "work".to_string(),
-                    session_id: request
-                        .session_id
-                        .unwrap_or_else(|| "session-1".to_string()),
+                    target,
+                    session_id,
                     pane_id: "pane-1".to_string(),
                     correlation_id: correlation_id.clone(),
                 };
@@ -1573,9 +2060,13 @@ mod imp {
         }
 
         impl D2bTransport for FakeTransport {
-            fn discover_sessions(&self) -> TransportFuture<'_, Vec<D2bSession>> {
+            fn discover(&self) -> TransportFuture<'_, D2bDiscovery> {
                 let sessions = self.sessions.clone();
-                Box::pin(async move { Ok(sessions) })
+                let status = self
+                    .status
+                    .clone()
+                    .unwrap_or_else(|| D2bTargetStatus::legacy("work".to_string()));
+                Box::pin(async move { Ok(D2bDiscovery { status, sessions }) })
             }
 
             fn attach(&self, request: D2bAttachRequest) -> TransportFuture<'_, D2bAttachedPane> {
@@ -1597,9 +2088,24 @@ mod imp {
             }
         }
 
+        fn unsafe_workload_fixture() -> WorkloadPublicSummary {
+            // Mirrored from d2b-toolkit v0.2.0's public-workload-v3-v1 fixtures.
+            let response: PublicResponse = serde_json::from_str(include_str!(
+                "../test-data/public-workload-v3-v1/unsafe-local-list-response.json"
+            ))
+            .unwrap();
+            match response {
+                PublicResponse::Workload {
+                    response: WorkloadOpResponse::List(mut result),
+                    ..
+                } => result.workloads.remove(0),
+                _ => panic!("toolkit unsafe-local fixture had an unexpected shape"),
+            }
+        }
+
         fn handle() -> D2bPaneHandle {
             D2bPaneHandle {
-                vm_name: "work".to_string(),
+                target: "work".to_string(),
                 session_id: "session-1".to_string(),
                 pane_id: "pane-1".to_string(),
                 correlation_id: D2bCorrelationId::from_sensitive("test", "session-1"),
@@ -1621,7 +2127,8 @@ mod imp {
                     socket_path: PathBuf::from("/run/d2b/priv.sock"),
                     ..D2bRuntimeConfig::default()
                 },
-            );
+            )
+            .unwrap();
             let err = match smol::block_on(transport.connect_client()) {
                 Ok(_) => panic!("priv socket should be refused"),
                 Err(err) => err,
@@ -1632,11 +2139,101 @@ mod imp {
         }
 
         #[test]
+        fn toolkit_fixture_exposes_unsafe_local_and_helper_posture() {
+            let workload = unsafe_workload_fixture();
+            let status = D2bTargetStatus::from_workload(&workload);
+
+            assert_eq!(status.target(), "tools.host.d2b");
+            assert_eq!(
+                status.provider_kind,
+                Some(WorkloadProviderKind::UnsafeLocal)
+            );
+            assert_eq!(
+                status.isolation,
+                Some(d2b_toolkit_core::IsolationPosture::UnsafeLocal)
+            );
+            assert_eq!(
+                status.availability,
+                Some(WorkloadAvailability::HelperUnavailable)
+            );
+            let warning = status.warning_text().unwrap();
+            assert!(warning.contains("UNSAFE LOCAL — NO ISOLATION"));
+            assert!(warning.contains("helper unavailable"));
+            assert!(!status.is_shell_ready());
+        }
+
+        #[test]
+        fn unsafe_local_feature_skew_fails_closed_before_shell_operations() {
+            let mut status = D2bTargetStatus::new(
+                "tools.host.d2b",
+                WorkloadProviderKind::UnsafeLocal,
+                d2b_toolkit_core::IsolationPosture::UnsafeLocal,
+                WorkloadAvailability::Ready,
+                true,
+            )
+            .unwrap();
+            let capabilities = NegotiatedCapabilities::from_features([
+                KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+                KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+            ]);
+            let mut client = PublicSocketClient::with_negotiated_capabilities(
+                Cursor::new(Vec::new()),
+                capabilities,
+            );
+
+            NativeD2bTransport::apply_unsafe_shell_requirement(&mut client, &mut status).unwrap();
+
+            assert_eq!(
+                status.required_feature(),
+                Some(KnownFeatureFlag::UnsafeLocalShellV1)
+            );
+            let err = ensure_target_shell_ready(&status).unwrap_err();
+            assert!(matches!(
+                err,
+                D2bProviderError::FeatureSkew {
+                    feature: KnownFeatureFlag::UnsafeLocalShellV1
+                }
+            ));
+        }
+
+        #[test]
+        fn unsafe_target_keeps_one_canonical_public_socket_shell_route() {
+            let mut status = D2bTargetStatus::new(
+                "tools.host.d2b",
+                WorkloadProviderKind::UnsafeLocal,
+                d2b_toolkit_core::IsolationPosture::UnsafeLocal,
+                WorkloadAvailability::Ready,
+                true,
+            )
+            .unwrap();
+            let capabilities = NegotiatedCapabilities::from_features([
+                KnownFeatureFlag::ConfiguredLaunchV1.wire_value(),
+                KnownFeatureFlag::UnsafeLocalProviderV1.wire_value(),
+                KnownFeatureFlag::UnsafeLocalShellV1.wire_value(),
+            ]);
+            let mut client = PublicSocketClient::with_negotiated_capabilities(
+                Cursor::new(Vec::new()),
+                capabilities,
+            );
+
+            NativeD2bTransport::apply_unsafe_shell_requirement(&mut client, &mut status).unwrap();
+            ensure_target_shell_ready(&status).unwrap();
+            let transport =
+                NativeD2bTransport::new(status.target(), D2bRuntimeConfig::default()).unwrap();
+
+            assert_eq!(transport.target, "tools.host.d2b");
+            assert_eq!(
+                transport.config.socket_path,
+                PathBuf::from("/run/d2b/public.sock")
+            );
+        }
+
+        #[test]
         fn debug_redacts_session_handle_shell_and_terminal_data_but_keeps_digest() {
             let session = D2bSession {
                 id: "session-secret".to_string(),
                 label: "quiet-otter".to_string(),
-                vm_name: "work".to_string(),
+                target: "work".to_string(),
                 workspace: Some("private".to_string()),
                 state: ShellSessionState::Detached,
                 attached: false,
@@ -1688,7 +2285,7 @@ mod imp {
                 sessions: vec![D2bSession {
                     id: "session-1".to_string(),
                     label: "work".to_string(),
-                    vm_name: "work".to_string(),
+                    target: "work".to_string(),
                     workspace: None,
                     state: ShellSessionState::Detached,
                     attached: false,
@@ -1701,6 +2298,31 @@ mod imp {
 
             let sessions = smol::block_on(domain.discover_sessions()).unwrap();
             assert_eq!(sessions[0].id, "session-1");
+        }
+
+        #[test]
+        fn domain_label_shows_unsafe_local_and_helper_unavailable() {
+            let status = D2bTargetStatus::new(
+                "tools.host.d2b",
+                WorkloadProviderKind::UnsafeLocal,
+                d2b_toolkit_core::IsolationPosture::UnsafeLocal,
+                WorkloadAvailability::HelperUnavailable,
+                true,
+            )
+            .unwrap();
+            let domain = D2bDomain::new(
+                "host-tools",
+                "tools.host.d2b",
+                Arc::new(FakeTransport {
+                    status: Some(status),
+                    ..Default::default()
+                }),
+            );
+
+            let label = smol::block_on(domain.domain_label());
+            assert!(label.contains("UNSAFE LOCAL — NO ISOLATION"));
+            assert!(label.contains("helper unavailable"));
+            assert!(label.contains("unavailable"));
         }
 
         #[test]
@@ -1861,7 +2483,7 @@ mod imp {
         }
 
         #[test]
-        fn d2b_title_format_prefixes_vm_and_session() {
+        fn d2b_title_format_prefixes_target_and_session() {
             assert_eq!(
                 super::super::d2b_tab_title("work", "build", ""),
                 "[work:build]"
@@ -1926,13 +2548,104 @@ mod imp {
         }
 
         #[test]
-        fn vm_mux_socket_path_is_unique_per_vm_and_not_global() {
+        fn canonical_dotted_target_normalizes_and_generates_bounded_shell_name() {
+            assert_eq!(
+                super::super::normalize_d2b_target("d2b://tools.host.d2b").unwrap(),
+                "tools.host.d2b"
+            );
+            let name = super::super::friendly_session_name("tools.host.d2b", &[]);
+            assert!(super::super::validate_shell_name(&name).is_ok());
+            assert!(name.len() <= 64);
+            assert!(!name.contains("tools.host.d2b"));
+            assert_eq!(
+                super::super::friendly_session_name("work", &[]),
+                "work-shell"
+            );
+        }
+
+        #[test]
+        fn bound_vm_alias_normalizes_to_target_and_conflicts_fail_closed() {
+            assert_eq!(
+                super::super::resolve_bound_target_aliases(None, Some("work")).unwrap(),
+                Some("work".to_string())
+            );
+            assert_eq!(
+                super::super::resolve_bound_target_aliases(
+                    Some("tools.host.d2b"),
+                    Some("d2b://tools.host.d2b")
+                )
+                .unwrap(),
+                Some("tools.host.d2b".to_string())
+            );
+            let err =
+                super::super::resolve_bound_target_aliases(Some("tools.host.d2b"), Some("work"))
+                    .unwrap_err();
+            assert!(err.contains(super::super::D2B_BOUND_TARGET_ENV));
+            assert!(err.contains(super::super::D2B_BOUND_VM_ENV));
+            assert!(!err.contains("tools.host.d2b"));
+        }
+
+        #[test]
+        fn target_socket_and_domain_keys_are_bounded_stable_and_non_reversible() {
             let base = PathBuf::from("runtime");
-            let work = super::super::vm_mux_socket_path(&base, "work");
-            let personal = super::super::vm_mux_socket_path(&base, "personal");
-            assert_ne!(work, personal);
-            assert!(work.to_string_lossy().contains("d2b-work"));
-            assert!(!work.ends_with("sock"));
+            let target = "tools.host.d2b";
+            let path = super::super::target_mux_socket_path(&base, target);
+            let repeated = super::super::target_mux_socket_path(&base, target);
+            let with_scheme = super::super::target_mux_socket_path(&base, "d2b://tools.host.d2b");
+            let other = super::super::target_mux_socket_path(&base, "corp.work.d2b");
+            let domain_key = super::super::target_domain_key(target);
+
+            assert_eq!(path, repeated);
+            assert_eq!(path, with_scheme);
+            assert_ne!(path, other);
+            assert!(!path.to_string_lossy().contains(target));
+            assert!(!domain_key.contains(target));
+            assert_eq!(domain_key.len(), 36);
+            assert!(path.to_string_lossy().len() < 80);
+            assert_eq!(
+                super::super::vm_mux_socket_path(&base, "work"),
+                super::super::target_mux_socket_path(&base, "work")
+            );
+        }
+
+        #[test]
+        fn reconnect_identity_uses_canonical_target_and_keeps_vm_user_var_alias() {
+            let status = D2bTargetStatus::new(
+                "tools.host.d2b",
+                WorkloadProviderKind::UnsafeLocal,
+                d2b_toolkit_core::IsolationPosture::UnsafeLocal,
+                WorkloadAvailability::Ready,
+                true,
+            )
+            .unwrap();
+            let transport = FakeTransport {
+                status: Some(status),
+                ..Default::default()
+            };
+            let pane = D2bPane::new(1, size(), attached_with_transport(&transport));
+            let vars = pane.copy_user_vars();
+
+            assert_eq!(
+                vars.get("weezterm.d2b.target").map(String::as_str),
+                Some("tools.host.d2b")
+            );
+            assert_eq!(
+                vars.get("weezterm.d2b.vm").map(String::as_str),
+                Some("tools.host.d2b")
+            );
+            assert_eq!(pane.get_title(), "[tools.host.d2b:session-1]");
+
+            let first = D2bCorrelationId::from_target_session(
+                "attached-shell",
+                "tools.host.d2b",
+                "session-1",
+            );
+            let second = D2bCorrelationId::from_target_session(
+                "attached-shell",
+                "tools.personal.d2b",
+                "session-1",
+            );
+            assert_ne!(first, second);
         }
     }
 }

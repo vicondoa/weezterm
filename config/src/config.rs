@@ -124,7 +124,7 @@ pub struct Config {
     #[dynamic(default)]
     pub devcontainer_domains: Vec<crate::devcontainer::DevContainerDomainConfig>,
 
-    /// Native d2b VM terminal domains.
+    /// Native provider-neutral d2b target terminal domains.
     #[dynamic(default)]
     pub d2b_domains: Vec<crate::d2b::D2bDomainConfig>,
     // --- end weezterm remote features ---

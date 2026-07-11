@@ -1,0 +1,70 @@
+{
+  "type": "workloadResponse",
+  "opId": 9,
+  "op": "list",
+  "result": {
+    "workloads": [
+      {
+        "identity": {
+          "workloadId": "tools",
+          "workloadName": "Host Tools",
+          "realmId": "host",
+          "realmPath": [
+            "host"
+          ],
+          "canonicalTarget": "tools.host.d2b",
+          "runtimeKind": "unsafe-local",
+          "providerId": "unsafe-local"
+        },
+        "providerKind": "unsafe-local",
+        "state": "stopped",
+        "executionPosture": {
+          "isolation": "unsafe-local",
+          "environment": "systemd-user-manager-ambient",
+          "displayEnvironment": "wayland-proxy-only",
+          "executionIdentity": "authenticated-requester-uid",
+          "sessionPersistence": "user-manager-lifetime"
+        },
+        "availability": "helper-unavailable",
+        "graphicalPosture": "graphical-session-inactive",
+        "capabilities": [
+          "configured-launch",
+          "future-desktop-capability",
+          "persistent-shell",
+          "pty",
+          "window-forwarding"
+        ],
+        "launcherItems": [
+          {
+            "id": "firefox",
+            "name": "Firefox",
+            "icon": {
+              "id": "firefox",
+              "name": "web-browser"
+            },
+            "type": "exec",
+            "graphical": true,
+            "capabilities": [
+              "configured-launch",
+              "window-forwarding"
+            ]
+          },
+          {
+            "id": "terminal",
+            "name": "Terminal",
+            "icon": {
+              "name": "terminal"
+            },
+            "type": "shell",
+            "graphical": false,
+            "capabilities": [
+              "persistent-shell",
+              "pty"
+            ]
+          }
+        ],
+        "defaultItemId": "firefox"
+      }
+    ]
+  }
+}

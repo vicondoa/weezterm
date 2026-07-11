@@ -8,10 +8,12 @@
       url = "github:oxalica/rust-overlay";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # --- weezterm remote features ---
     d2b-toolkit = {
-      url = "github:vicondoa/d2b-toolkit";
+      url = "github:vicondoa/d2b-toolkit/v0.2.0";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # --- end weezterm remote features ---
 
     # Keep these in sync with nix/flake.nix; the root flake delegates
     # outputs there while providing a repository-root entry point.

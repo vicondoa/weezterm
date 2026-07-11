@@ -357,20 +357,26 @@ fn d2b_window_title(
     tabs: &[TabInformation],
     num_tabs: usize,
 ) -> Option<String> {
-    let vm = active_pane.user_vars.get("weezterm.d2b.vm")?;
-    let same_vm = tabs
+    fn pane_target(pane: &PaneInformation) -> Option<&String> {
+        match (
+            pane.user_vars.get("weezterm.d2b.target"),
+            pane.user_vars.get("weezterm.d2b.vm"),
+        ) {
+            (Some(target), Some(vm)) if target != vm => None,
+            (Some(target), _) | (None, Some(target)) => Some(target),
+            (None, None) => None,
+        }
+    }
+
+    let target = pane_target(active_pane)?;
+    let same_target = tabs
         .iter()
-        .filter(|tab| {
-            tab.active_pane
-                .as_ref()
-                .and_then(|pane| pane.user_vars.get("weezterm.d2b.vm"))
-                == Some(vm)
-        })
+        .filter(|tab| tab.active_pane.as_ref().and_then(pane_target) == Some(target))
         .count();
 
-    if same_vm > 1 {
+    if same_target > 1 {
         Some(format!(
-            "d2b {vm} ({same_vm} sessions) - {}",
+            "d2b {target} ({same_target} sessions) - {}",
             active_pane.title
         ))
     } else if num_tabs == 1 {

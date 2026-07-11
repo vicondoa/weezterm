@@ -42,6 +42,9 @@ wezterm-dynamic.workspace = true
 wezterm-input-types.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace = true, features=["use_serde"] }
+# --- weezterm remote features ---
+d2b-toolkit-core.workspace = true
+# --- end weezterm remote features ---
 
 [target."cfg(unix)".dependencies]
 nix = {workspace=true, features=["resource"]}
