@@ -1,10 +1,12 @@
 // --- weezterm remote features ---
 use std::error::Error;
 use std::marker::PhantomData;
-use std::mem;
 use std::num::NonZeroU32;
+use std::ops::Deref;
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
+use std::{fmt, mem};
 
 use smithay_client_toolkit::compositor::SurfaceData;
 use smithay_client_toolkit::reexports::client::protocol::wl_shm;
@@ -19,7 +21,9 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::Shm;
 use smithay_client_toolkit::subcompositor::{SubcompositorState, SubsurfaceData};
+use tiny_skia::{ColorU8, PixmapMut, PixmapPaint, PixmapRef, Transform};
 use wayland_backend::client::ObjectId;
+use wezterm_font::{FontConfiguration, FontMetrics, GlyphInfo, RasterizedGlyph};
 
 const HEADER_SIZE: u32 = 24;
 
@@ -43,7 +47,70 @@ pub struct TitleBarFrame<State> {
     pool: SlotPool,
     subcompositor: Arc<SubcompositorState>,
     buttons: [Option<UIButton>; 3],
+    font_config: TitleFontConfig,
+    title: String,
+    shaped_title: Option<ShapedTitle>,
     _state: PhantomData<State>,
+}
+
+#[repr(transparent)]
+struct TitleFontConfig(Rc<FontConfiguration>);
+
+impl fmt::Debug for TitleFontConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("TitleFontConfig")
+    }
+}
+
+impl Deref for TitleFontConfig {
+    type Target = FontConfiguration;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+struct ShapedTitle {
+    title: String,
+    glyphs: Vec<ShapedGlyph>,
+    metrics: FontMetrics,
+    is_active: bool,
+    dpi: usize,
+}
+
+impl fmt::Debug for ShapedTitle {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ShapedTitle")
+            .field("title", &self.title)
+            .field("glyph_count", &self.glyphs.len())
+            .field("metrics", &self.metrics)
+            .field("is_active", &self.is_active)
+            .field("dpi", &self.dpi)
+            .finish()
+    }
+}
+
+struct ShapedGlyph {
+    info: GlyphInfo,
+    glyph: RasterizedGlyph,
+}
+
+fn title_tail_start(advances: &[f64], available_width: f64) -> usize {
+    if advances.iter().sum::<f64>() <= available_width {
+        return 0;
+    }
+
+    let mut tail_width = 0.;
+    let mut start = advances.len();
+    for (idx, advance) in advances.iter().enumerate().rev() {
+        if tail_width + advance > available_width {
+            break;
+        }
+        tail_width += advance;
+        start = idx;
+    }
+    start
 }
 
 impl<State> TitleBarFrame<State>
@@ -55,6 +122,7 @@ where
         shm: &Shm,
         subcompositor: Arc<SubcompositorState>,
         queue_handle: QueueHandle<State>,
+        font_config: Rc<FontConfiguration>,
     ) -> Result<Self, Box<dyn Error>> {
         let parent = parent.wl_surface().clone();
         let pool = SlotPool::new(1, shm)?;
@@ -75,8 +143,131 @@ where
             pool,
             subcompositor,
             buttons: Self::supported_buttons(wm_capabilities),
+            font_config: TitleFontConfig(font_config),
+            title: String::new(),
+            shaped_title: None,
             _state: PhantomData,
         })
+    }
+
+    fn reshape_title(&mut self, is_active: bool) -> Option<()> {
+        if self.title.is_empty() {
+            self.shaped_title.take();
+            return Some(());
+        }
+
+        if let Some(existing) = self.shaped_title.as_ref() {
+            if existing.title == self.title
+                && existing.is_active == is_active
+                && existing.dpi == self.font_config.get_dpi()
+            {
+                return Some(());
+            }
+        }
+
+        let font = self.font_config.title_font().ok()?;
+        let metrics = font.metrics();
+        let infos = font
+            .shape(
+                &self.title,
+                || {},
+                |_| {},
+                None,
+                wezterm_bidi::Direction::LeftToRight,
+                None,
+                None,
+            )
+            .ok()?;
+        let color_level = if is_active { 0xcc } else { 0x99 };
+        let mut glyphs = vec![];
+
+        for info in infos {
+            if let Ok(mut glyph) = font.rasterize_glyph(info.glyph_pos, info.font_idx) {
+                if let Some(mut data) =
+                    PixmapMut::from_bytes(&mut glyph.data, glyph.width as u32, glyph.height as u32)
+                {
+                    for pixel in data.pixels_mut() {
+                        let color = pixel.demultiply();
+                        let (red, green, blue, alpha) =
+                            (color.red(), color.green(), color.blue(), color.alpha());
+                        if glyph.has_color {
+                            *pixel = ColorU8::from_rgba(blue, green, red, alpha).premultiply();
+                        } else {
+                            *pixel = ColorU8::from_rgba(
+                                ((blue as f32 / 255.) * color_level as f32) as u8,
+                                ((green as f32 / 255.) * color_level as f32) as u8,
+                                ((red as f32 / 255.) * color_level as f32) as u8,
+                                alpha,
+                            )
+                            .premultiply();
+                        }
+                    }
+                }
+                glyphs.push(ShapedGlyph { info, glyph });
+            }
+        }
+
+        self.shaped_title.replace(ShapedTitle {
+            title: self.title.clone(),
+            glyphs,
+            metrics,
+            is_active,
+            dpi: self.font_config.get_dpi(),
+        });
+        Some(())
+    }
+
+    fn draw_title(
+        shaped_title: Option<&ShapedTitle>,
+        canvas: &mut [u8],
+        width: u32,
+        scale: u32,
+        button_count: usize,
+    ) {
+        let Some(shaped) = shaped_title else {
+            return;
+        };
+        let scaled_width = width * scale;
+        let scaled_height = HEADER_SIZE * scale;
+        let Some(mut pixmap) = PixmapMut::from_bytes(canvas, scaled_width, scaled_height) else {
+            return;
+        };
+        let mut x = f64::from(8 * scale);
+        let reserved = (button_count as u32 + 1) * HEADER_SIZE * scale;
+        let limit = scaled_width.saturating_sub(reserved) as f64;
+        let paint = PixmapPaint::default();
+        let baseline =
+            ((f64::from(scaled_height) + shaped.metrics.cell_height.get()) / 2.).round() as i32;
+        let advances = shaped
+            .glyphs
+            .iter()
+            .map(|item| item.info.x_advance.get())
+            .collect::<Vec<_>>();
+        let start = title_tail_start(&advances, (limit - x).max(0.));
+
+        for item in &shaped.glyphs[start..] {
+            if let Some(data) = PixmapRef::from_bytes(
+                &item.glyph.data,
+                item.glyph.width as u32,
+                item.glyph.height as u32,
+            ) {
+                pixmap.draw_pixmap(
+                    (x + item.info.x_offset.get() + item.glyph.bearing_x.get()) as i32,
+                    baseline
+                        + (shaped.metrics.descender - (item.info.y_offset + item.glyph.bearing_y))
+                            .get() as i32,
+                    data,
+                    &paint,
+                    Transform::identity(),
+                    None,
+                );
+            }
+
+            x += item.info.x_advance.get();
+            if x >= limit {
+                break;
+            }
+        }
     }
 
     fn supported_buttons(wm_capabilities: WindowManagerCapabilities) -> [Option<UIButton>; 3] {
@@ -384,6 +575,11 @@ where
     fn set_resizable(&mut self, _resizable: bool) {}
 
     fn draw(&mut self) -> bool {
+        if self.render_data.is_none() {
+            return false;
+        }
+        let is_active = self.state.contains(WindowState::ACTIVATED);
+        self.reshape_title(is_active);
         let render_data = match self.render_data.as_mut() {
             Some(render_data) => render_data,
             None => return false,
@@ -398,7 +594,6 @@ where
             return should_sync;
         }
 
-        let is_active = self.state.contains(WindowState::ACTIVATED);
         let fill_color = if is_active {
             PRIMARY_COLOR_ACTIVE
         } else {
@@ -423,6 +618,13 @@ where
             pixel.copy_from_slice(&fill_color);
         }
 
+        Self::draw_title(
+            self.shaped_title.as_ref(),
+            canvas,
+            width,
+            scale as u32,
+            self.buttons.iter().flatten().count(),
+        );
         Self::draw_buttons(
             &self.buttons,
             canvas,
@@ -460,7 +662,14 @@ where
         should_sync
     }
 
-    fn set_title(&mut self, _title: impl Into<String>) {}
+    fn set_title(&mut self, title: impl Into<String>) {
+        let title = title.into();
+        if self.title != title {
+            self.title = title;
+            self.shaped_title.take();
+            self.dirty = true;
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -527,5 +736,17 @@ enum UIButton {
     Close,
     Maximize,
     Minimize,
+}
+
+#[cfg(test)]
+mod test {
+    use super::title_tail_start;
+
+    #[test]
+    fn title_overflow_keeps_the_trailing_glyphs() {
+        assert_eq!(title_tail_start(&[4., 4., 4., 4.], 16.), 0);
+        assert_eq!(title_tail_start(&[4., 4., 4., 4.], 9.), 2);
+        assert_eq!(title_tail_start(&[12., 4.], 4.), 1);
+    }
 }
 // --- end weezterm remote features ---

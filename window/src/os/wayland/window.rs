@@ -281,9 +281,13 @@ impl WaylandWindow {
             let wayland_state = &conn.wayland_state.borrow();
             let shm = &wayland_state.shm;
             let subcompositor = wayland_state.subcompositor.clone();
-            TitleBarFrame::new(&window, shm, subcompositor, qh.clone())
+            // --- weezterm remote features ---
+            TitleBarFrame::new(&window, shm, subcompositor, qh.clone(), _font_config)
                 .expect("failed to create csd frame")
+            // --- end weezterm remote features ---
         };
+        // --- weezterm remote features ---
+        window_frame.set_title(name.to_string());
         let hidden = match decor_mode {
             Some(DecorationMode::Client) => false,
             _ => true,
@@ -1169,6 +1173,8 @@ impl WaylandWindowInner {
         if let Some(window) = self.window.as_ref() {
             window.set_title(title.clone());
         }
+        // --- weezterm remote features ---
+        self.window_frame.set_title(title.clone());
         self.refresh_frame();
         self.title = Some(title);
     }

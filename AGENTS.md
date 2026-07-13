@@ -16,6 +16,7 @@ working on this codebase.
 | Test specific crate | `cargo nextest run -p <crate>` |
 | Test escape parser (no_std) | `cargo nextest run -p wezterm-escape-parser` |
 | **UX tests (Windows)** | **`cd tests/ux && pip install -r requirements.txt && python -m pytest -v -s`** |
+| **Title UX (Linux/Wayland)** | **`nix develop .#wayland-title --command bash ./tests/wayland-title/run.sh --target <target>`** |
 | Lint | `cargo clippy` |
 
 ## Project Structure
@@ -406,6 +407,7 @@ git merge upstream/main          # or rebase, per preference
 | Window resize/DPI handling | `wezterm-gui/src/termwindow/resize.rs`, `window/src/os/windows/window.rs` |
 | Window state persistence | `wezterm-gui/src/window_state_persistence.rs` |
 | UX tests (automated) | `tests/ux/` (see UX Testing section below) |
+| Wayland title UX | `tests/wayland-title/` |
 | UX tests (manual) | `tests/ux/MANUAL_TESTS.md` |
 
 ## UX Testing
@@ -451,6 +453,26 @@ Test suites:
   (connects to `jvicondo-a7` with an isolated workspace; requires SSH access)
 
 Failed tests save screenshots to `tests/ux/test-results/` for debugging.
+
+### Linux Wayland title test
+
+`tests/wayland-title/` starts a private headless Weston parent and a dedicated
+nested Niri compositor. It never uses the logged-in desktop, lock screen, or
+host Niri IPC. The test drives a source-built WeezTerm through its private mux
+socket, captures the client-side title bar with `grim`, and checks foreground
+and background OSC title updates across repeated tab switches.
+
+```bash
+cargo build -p wezterm -p wezterm-gui
+nix develop .#wayland-title --command bash \
+  ./tests/wayland-title/run.sh \
+  --target tools.host.d2b \
+  --second-local
+```
+
+Use `--second-local` for providers that intentionally allow only one attached
+shell. See `tests/wayland-title/README.md` for disposable shell names, artifacts,
+and the compositor-only smoke mode.
 
 ### Manual Tests
 

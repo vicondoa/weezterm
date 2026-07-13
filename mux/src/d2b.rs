@@ -1,6 +1,8 @@
 use d2b_toolkit_core::WorkloadTarget;
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
+use termwiz::cell::unicode_column_width;
+use termwiz_funcs::{truncate_left, truncate_right};
 
 pub use d2b_toolkit_core::{
     IsolationPosture, KnownFeatureFlag, ShellSessionState, WorkloadAvailability,
@@ -123,12 +125,46 @@ pub fn friendly_session_name(target: &str, existing: &[String]) -> String {
 pub fn d2b_tab_title(target: &str, session: &str, guest_osc_title: &str) -> String {
     let target = sanitize_display_label(target);
     let session = sanitize_display_label(session);
-    let prefix = format!("[{target}:{session}]");
+    let suffix = format!("[{target}:{session}]");
     let guest_osc_title = sanitize_display_text(guest_osc_title);
     if guest_osc_title.is_empty() || guest_osc_title == "wezterm" {
-        prefix
+        suffix
+    } else if guest_osc_title == suffix || guest_osc_title.ends_with(&format!(" {suffix}")) {
+        guest_osc_title
     } else {
-        format!("{prefix} {guest_osc_title}")
+        format!("{guest_osc_title} {suffix}")
+    }
+}
+
+pub fn d2b_tab_title_for_width(
+    target: &str,
+    session: &str,
+    guest_osc_title: &str,
+    max_width: usize,
+) -> String {
+    let target = sanitize_display_label(target);
+    let session = sanitize_display_label(session);
+    let suffix = format!("[{target}:{session}]");
+    let suffix_width = unicode_column_width(&suffix, None);
+    if max_width <= suffix_width {
+        return truncate_left(&suffix, max_width);
+    }
+
+    let guest_osc_title = sanitize_display_text(guest_osc_title);
+    if guest_osc_title.is_empty() || guest_osc_title == "wezterm" || guest_osc_title == suffix {
+        return suffix;
+    }
+
+    let suffix_marker = format!(" {suffix}");
+    let guest_osc_title = guest_osc_title
+        .strip_suffix(&suffix_marker)
+        .unwrap_or(&guest_osc_title);
+    let guest_width = max_width - suffix_width - 1;
+    let guest_osc_title = truncate_right(guest_osc_title, guest_width);
+    if guest_osc_title.is_empty() {
+        suffix
+    } else {
+        format!("{guest_osc_title} {suffix}")
     }
 }
 
@@ -277,7 +313,8 @@ mod imp {
     use url::Url;
     use wezterm_term::color::ColorPalette;
     use wezterm_term::{
-        KeyCode, KeyModifiers, MouseEvent, StableRowIndex, TerminalConfiguration, TerminalSize,
+        Alert, AlertHandler, KeyCode, KeyModifiers, MouseEvent, StableRowIndex,
+        TerminalConfiguration, TerminalSize,
     };
 
     const DEFAULT_SOCKET: &str = "/run/d2b/public.sock";
@@ -1685,6 +1722,28 @@ mod imp {
         detached: AtomicBool,
     }
 
+    struct D2bPaneNotifHandler {
+        pane_id: PaneId,
+    }
+
+    impl AlertHandler for D2bPaneNotifHandler {
+        fn alert(&mut self, alert: Alert) {
+            let pane_id = self.pane_id;
+            promise::spawn::spawn_into_main_thread(async move {
+                let mux = Mux::get();
+                if let Alert::TabTitleChanged(title) = &alert {
+                    if let Some((_domain, _window_id, tab_id)) = mux.resolve_pane_id(pane_id) {
+                        if let Some(tab) = mux.get_tab(tab_id) {
+                            tab.set_title(title.as_deref().unwrap_or(""));
+                        }
+                    }
+                }
+                mux.notify(MuxNotification::Alert { pane_id, alert });
+            })
+            .detach();
+        }
+    }
+
     impl D2bPane {
         pub fn new(
             domain_id: DomainId,
@@ -1692,7 +1751,7 @@ mod imp {
             attached: D2bAttachedPane,
         ) -> Arc<Self> {
             let pane_id = alloc_pane_id();
-            let terminal = wezterm_term::Terminal::new(
+            let mut terminal = wezterm_term::Terminal::new(
                 size,
                 Arc::new(config::TermConfig::new()),
                 config::branding::APP_NAME_DISPLAY,
@@ -1702,6 +1761,7 @@ mod imp {
                     correlation_id: attached.handle.correlation_id.clone(),
                 }),
             );
+            terminal.set_notification_handler(Box::new(D2bPaneNotifHandler { pane_id }));
 
             let pane = Arc::new(Self {
                 pane_id,
@@ -1867,6 +1927,14 @@ mod imp {
 
         fn trusted_d2b_target(&self) -> Option<&str> {
             Some(&self.handle.target)
+        }
+
+        fn trusted_d2b_session(&self) -> Option<&str> {
+            Some(&self.handle.session_id)
+        }
+
+        fn d2b_guest_title(&self) -> Option<String> {
+            Some(self.terminal.lock().get_title().to_string())
         }
 
         fn can_close_without_prompting(&self, _reason: CloseReason) -> bool {
@@ -2558,23 +2626,48 @@ mod imp {
         }
 
         #[test]
-        fn d2b_title_format_prefixes_target_and_session() {
+        fn d2b_title_format_suffixes_target_and_session_once() {
             assert_eq!(
                 super::super::d2b_tab_title("work", "build", ""),
                 "[work:build]"
             );
             assert_eq!(
                 super::super::d2b_tab_title("work", "build", "nvim"),
-                "[work:build] nvim"
+                "nvim [work:build]"
             );
             assert_eq!(
                 super::super::d2b_tab_title("work", "build", "wezterm"),
                 "[work:build]"
             );
             assert_eq!(
-                super::super::d2b_tab_title("work\x1b[31m", "\x07", "nvim\x1b]0;secret\x07"),
-                "[work:unnamed] nvim"
+                super::super::d2b_tab_title("work", "build", "nvim [work:build]"),
+                "nvim [work:build]"
             );
+            assert_eq!(
+                super::super::d2b_tab_title("work\x1b[31m", "\x07", "nvim\x1b]0;secret\x07"),
+                "nvim [work:unnamed]"
+            );
+        }
+
+        #[test]
+        fn d2b_title_width_truncates_only_the_untrusted_guest_title() {
+            let title = super::super::d2b_tab_title_for_width(
+                "work",
+                "build",
+                "[fake:admin] malicious title padded to hide identity",
+                28,
+            );
+            assert!(title.ends_with(" [work:build]"), "{title}");
+            assert!(termwiz::cell::unicode_column_width(&title, None) <= 28);
+
+            let repeated = super::super::d2b_tab_title_for_width(
+                "work",
+                "build",
+                "[fake:admin] padded [work:build]",
+                20,
+            );
+            assert!(repeated.ends_with(" [work:build]"), "{repeated}");
+            assert_eq!(repeated.matches("[work:build]").count(), 1);
         }
 
         #[test]
@@ -2710,6 +2803,7 @@ mod imp {
             );
             assert_eq!(pane.get_title(), "[tools.host.d2b:session-1]");
             assert_eq!(pane.trusted_d2b_target(), Some("tools.host.d2b"));
+            assert_eq!(pane.trusted_d2b_session(), Some("session-1"));
 
             let first = D2bCorrelationId::from_target_session(
                 "attached-shell",

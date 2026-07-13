@@ -104,6 +104,23 @@ domain names, so a target is never used as a filesystem path component.
 - Window-title d2b identity comes from the mux pane's configured d2b domain,
   never terminal-controlled user variables. Compatibility user variables are
   presentation metadata and cannot make a local or SSH pane appear d2b-backed.
+- d2b pane and tab titles append that trusted identity as
+  `application title [target:shell]`. OSC title changes remain dynamic. The
+  native window title follows the active tab's latest title, including updates
+  received while the tab was in the background, and changes immediately when
+  the active tab changes. When space is constrained, WeezTerm truncates the
+  untrusted application portion from the right or left edge as appropriate
+  while preserving the trailing trusted identity.
+- The tab-bar new-tab dropdown is target-scoped when its active pane belongs to
+  a process-bound d2b domain. It offers one immediate generated-shell action and
+  reattachment actions only for detached shells on that target. It never offers
+  attached or unavailable sessions, manual shell naming, local/unmanaged
+  shells, SSH/mux domains, or socket attachment. Non-d2b windows keep the
+  generic new-tab dropdown.
+- A persistent shell has one attachment owner. WeezTerm does not force attach:
+  attached shells are omitted because another attachment would fail or require
+  evicting the current owner. The sole owner supplies the initial terminal size
+  and sends subsequent resize updates.
 
 ## Redaction and diagnostics
 

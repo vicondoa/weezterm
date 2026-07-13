@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A reproducible Linux Wayland title-bar harness using an isolated headless
+  Weston parent and dedicated nested Niri compositor.
+
+### Fixed
+
+- d2b window titles now follow the active tab's latest OSC or explicit title
+  immediately when switching tabs and append the trusted `[target:shell]`
+  identity as a suffix.
+- Wayland client-side title bars now render the current window title instead of
+  showing a blank frame when the compositor does not draw server-side titles.
+- The new-tab dropdown in a d2b-bound window now offers only immediate shell
+  creation and detached shells from the current target; regular windows retain
+  the generic launcher.
+
 ## [0.7.0] - 2026-07-11
 
 ### Added
