@@ -199,7 +199,8 @@
           name = "weezterm";
           # --- end weezterm remote features ---
           src = ./..;
-          version = "0.7.0";
+          # --- weezterm remote features ---
+          version = "0.7.1";
 
           cargoLock = {
             lockFile = ../Cargo.lock;
