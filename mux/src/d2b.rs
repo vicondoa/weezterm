@@ -693,7 +693,7 @@ mod imp {
         pub connect_timeout: Duration,
         pub write_timeout: Duration,
         pub read_timeout: Duration,
-        pub shell_management_timeout: Duration,
+        pub shell_attach_timeout: Duration,
         pub command_queue_depth: usize,
         pub event_queue_depth: usize,
         pub output_read_max: u64,
@@ -707,7 +707,7 @@ mod imp {
                 connect_timeout: Duration::from_secs(2),
                 write_timeout: Duration::from_secs(2),
                 read_timeout: Duration::from_secs(2),
-                shell_management_timeout: Duration::from_secs(15),
+                shell_attach_timeout: Duration::from_secs(15),
                 command_queue_depth: DEFAULT_QUEUE_DEPTH,
                 event_queue_depth: DEFAULT_EVENT_DEPTH,
                 output_read_max: DEFAULT_READ_MAX,
@@ -1107,7 +1107,7 @@ mod imp {
                 let result = client_op(
                     "listing d2b shells",
                     None,
-                    self.config.shell_management_timeout,
+                    self.config.write_timeout,
                     client.shell_list(status.target().to_string()),
                 )
                 .await?;
@@ -1162,7 +1162,7 @@ mod imp {
                 let shell = client_op(
                     "attaching d2b shell",
                     None,
-                    self.config.shell_management_timeout,
+                    self.config.shell_attach_timeout,
                     client.attach_shell(status.target().to_string(), name, false, size),
                 )
                 .await?;
@@ -1396,7 +1396,7 @@ mod imp {
                     let _ = client_op(
                         "closing d2b shell attach",
                         Some(correlation_id.clone()),
-                        config.shell_management_timeout,
+                        config.write_timeout,
                         shell.close_attach(),
                     )
                     .await;
@@ -1409,7 +1409,7 @@ mod imp {
                 let _ = client_op(
                     "closing detached d2b shell",
                     Some(correlation_id.clone()),
-                    config.shell_management_timeout,
+                    config.write_timeout,
                     shell.close_attach(),
                 )
                 .await;
@@ -2265,11 +2265,11 @@ mod imp {
         }
 
         #[test]
-        fn shell_management_timeout_covers_daemon_guest_control_budget() {
+        fn shell_attach_timeout_covers_daemon_guest_control_budget() {
             let config = D2bRuntimeConfig::default();
-            assert_eq!(config.shell_management_timeout, Duration::from_secs(15));
-            assert!(config.shell_management_timeout > config.read_timeout);
-            assert!(config.shell_management_timeout > config.write_timeout);
+            assert_eq!(config.shell_attach_timeout, Duration::from_secs(15));
+            assert!(config.shell_attach_timeout > config.read_timeout);
+            assert!(config.shell_attach_timeout > config.write_timeout);
         }
 
         #[test]
