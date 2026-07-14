@@ -1722,14 +1722,27 @@ mod imp {
         handle: D2bPaneHandle,
         command_tx: Sender<D2bPaneCommand>,
         detached: AtomicBool,
+        latest_title: Arc<Mutex<String>>,
     }
 
     struct D2bPaneNotifHandler {
         pane_id: PaneId,
+        latest_title: Arc<Mutex<String>>,
+    }
+
+    fn title_from_alert(alert: &Alert) -> Option<String> {
+        match alert {
+            Alert::WindowTitleChanged(title) => Some(title.clone()),
+            Alert::IconTitleChanged(title) => Some(title.clone().unwrap_or_default()),
+            _ => None,
+        }
     }
 
     impl AlertHandler for D2bPaneNotifHandler {
         fn alert(&mut self, alert: Alert) {
+            if let Some(title) = title_from_alert(&alert) {
+                *self.latest_title.lock() = title;
+            }
             let pane_id = self.pane_id;
             promise::spawn::spawn_into_main_thread(async move {
                 let mux = Mux::get();
@@ -1753,6 +1766,7 @@ mod imp {
             attached: D2bAttachedPane,
         ) -> Arc<Self> {
             let pane_id = alloc_pane_id();
+            let latest_title = Arc::new(Mutex::new(String::new()));
             let mut terminal = wezterm_term::Terminal::new(
                 size,
                 Arc::new(config::TermConfig::new()),
@@ -1763,7 +1777,10 @@ mod imp {
                     correlation_id: attached.handle.correlation_id.clone(),
                 }),
             );
-            terminal.set_notification_handler(Box::new(D2bPaneNotifHandler { pane_id }));
+            terminal.set_notification_handler(Box::new(D2bPaneNotifHandler {
+                pane_id,
+                latest_title: Arc::clone(&latest_title),
+            }));
 
             let pane = Arc::new(Self {
                 pane_id,
@@ -1776,6 +1793,7 @@ mod imp {
                 handle: attached.handle,
                 command_tx: attached.command_tx,
                 detached: AtomicBool::new(false),
+                latest_title,
             });
             spawn_event_forwarder(Arc::downgrade(&pane), attached.event_rx);
             pane
@@ -1797,6 +1815,15 @@ mod imp {
 
         pub fn close_non_destructive(&self) {
             self.detach_non_destructive(D2bDetachReason::PaneClose)
+        }
+
+        fn guest_title(&self) -> String {
+            let latest_title = self.latest_title.lock().clone();
+            if latest_title.is_empty() {
+                self.terminal.lock().get_title().to_string()
+            } else {
+                latest_title
+            }
         }
     }
 
@@ -1854,7 +1881,7 @@ mod imp {
         }
 
         fn get_title(&self) -> String {
-            let guest_title = self.terminal.lock().get_title().to_string();
+            let guest_title = self.guest_title();
             super::d2b_tab_title(&self.handle.target, &self.handle.session_id, &guest_title)
         }
 
@@ -1936,7 +1963,7 @@ mod imp {
         }
 
         fn d2b_guest_title(&self) -> Option<String> {
-            Some(self.terminal.lock().get_title().to_string())
+            Some(self.guest_title())
         }
 
         fn can_close_without_prompting(&self, _reason: CloseReason) -> bool {
@@ -2667,7 +2694,7 @@ mod imp {
                 "[fake:admin] malicious title padded to hide identity",
                 28,
             );
-            assert!(title.ends_with(" [work:build]"), "{title}");
+            assert!(title.ends_with(" [work:build]"), "{}", title);
             assert!(termwiz::cell::unicode_column_width(&title, None) <= 28);
 
             let repeated = super::super::d2b_tab_title_for_width(
@@ -2676,8 +2703,25 @@ mod imp {
                 "[fake:admin] padded [work:build]",
                 20,
             );
-            assert!(repeated.ends_with(" [work:build]"), "{repeated}");
+            assert!(repeated.ends_with(" [work:build]"), "{}", repeated);
             assert_eq!(repeated.matches("[work:build]").count(), 1);
+        }
+
+        #[test]
+        fn latest_window_or_icon_title_alert_wins() {
+            assert_eq!(
+                title_from_alert(&Alert::IconTitleChanged(Some("shell".to_string()))),
+                Some("shell".to_string())
+            );
+            assert_eq!(
+                title_from_alert(&Alert::WindowTitleChanged("copilot".to_string())),
+                Some("copilot".to_string())
+            );
+            assert_eq!(
+                title_from_alert(&Alert::IconTitleChanged(None)),
+                Some(String::new())
+            );
+            assert_eq!(title_from_alert(&Alert::Bell), None);
         }
 
         #[test]

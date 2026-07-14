@@ -21,11 +21,12 @@ use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::slot::SlotPool;
 use smithay_client_toolkit::shm::Shm;
 use smithay_client_toolkit::subcompositor::{SubcompositorState, SubsurfaceData};
-use tiny_skia::{ColorU8, PixmapMut, PixmapPaint, PixmapRef, Transform};
+use tiny_skia::{ColorU8, FilterQuality, PixmapMut, PixmapPaint, PixmapRef, Transform};
 use wayland_backend::client::ObjectId;
 use wezterm_font::{FontConfiguration, FontMetrics, GlyphInfo, RasterizedGlyph};
 
 const HEADER_SIZE: u32 = 24;
+const TITLE_VERTICAL_PADDING: u32 = 3;
 
 const BTN_ICON_COLOR: u32 = 0xFFCCCCCC;
 const BTN_HOVER_BG: u32 = 0xFF808080;
@@ -111,6 +112,15 @@ fn title_tail_start(advances: &[f64], available_width: f64) -> usize {
         start = idx;
     }
     start
+}
+
+fn title_scale(cell_height: f64, buffer_height: u32, buffer_scale: u32) -> f64 {
+    if cell_height <= 0. {
+        return 1.;
+    }
+    let padding = TITLE_VERTICAL_PADDING * buffer_scale * 2;
+    let available_height = buffer_height.saturating_sub(padding);
+    (f64::from(available_height) / cell_height).min(1.)
 }
 
 impl<State> TitleBarFrame<State>
@@ -235,13 +245,17 @@ where
         let mut x = f64::from(8 * scale);
         let reserved = (button_count as u32 + 1) * HEADER_SIZE * scale;
         let limit = scaled_width.saturating_sub(reserved) as f64;
-        let paint = PixmapPaint::default();
-        let baseline =
-            ((f64::from(scaled_height) + shaped.metrics.cell_height.get()) / 2.).round() as i32;
+        let mut paint = PixmapPaint::default();
+        paint.quality = FilterQuality::Bilinear;
+        // Match compact GTK header-bar typography by retaining three logical
+        // pixels of vertical breathing room and scaling oversized configured fonts.
+        let title_scale = title_scale(shaped.metrics.cell_height.get(), scaled_height, scale);
+        let scaled_cell_height = shaped.metrics.cell_height.get() * title_scale;
+        let baseline = ((f64::from(scaled_height) + scaled_cell_height) / 2.).round() as i32;
         let advances = shaped
             .glyphs
             .iter()
-            .map(|item| item.info.x_advance.get())
+            .map(|item| item.info.x_advance.get() * title_scale)
             .collect::<Vec<_>>();
         let start = title_tail_start(&advances, (limit - x).max(0.));
 
@@ -251,19 +265,18 @@ where
                 item.glyph.width as u32,
                 item.glyph.height as u32,
             ) {
-                pixmap.draw_pixmap(
-                    (x + item.info.x_offset.get() + item.glyph.bearing_x.get()) as i32,
-                    baseline
-                        + (shaped.metrics.descender - (item.info.y_offset + item.glyph.bearing_y))
-                            .get() as i32,
-                    data,
-                    &paint,
-                    Transform::identity(),
-                    None,
-                );
+                let final_x =
+                    x + (item.info.x_offset.get() + item.glyph.bearing_x.get()) * title_scale;
+                let final_y = f64::from(baseline)
+                    + (shaped.metrics.descender - (item.info.y_offset + item.glyph.bearing_y))
+                        .get()
+                        * title_scale;
+                let transform = Transform::from_scale(title_scale as f32, title_scale as f32)
+                    .post_translate(final_x as f32, final_y as f32);
+                pixmap.draw_pixmap(0, 0, data, &paint, transform, None);
             }
 
-            x += item.info.x_advance.get();
+            x += item.info.x_advance.get() * title_scale;
             if x >= limit {
                 break;
             }
@@ -740,13 +753,20 @@ enum UIButton {
 
 #[cfg(test)]
 mod test {
-    use super::title_tail_start;
+    use super::{title_scale, title_tail_start};
 
     #[test]
     fn title_overflow_keeps_the_trailing_glyphs() {
         assert_eq!(title_tail_start(&[4., 4., 4., 4.], 16.), 0);
         assert_eq!(title_tail_start(&[4., 4., 4., 4.], 9.), 2);
         assert_eq!(title_tail_start(&[12., 4.], 4.), 1);
+    }
+
+    #[test]
+    fn title_font_is_scaled_to_fit_the_header_padding() {
+        assert_eq!(title_scale(18., 24, 1), 1.);
+        assert!((title_scale(30., 24, 1) - 0.6).abs() < f64::EPSILON);
+        assert!((title_scale(60., 48, 2) - 0.6).abs() < f64::EPSILON);
     }
 }
 // --- end weezterm remote features ---

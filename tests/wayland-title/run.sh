@@ -467,13 +467,18 @@ D2B_IDENTITY=$(
 [[ -n "$D2B_IDENTITY" ]] ||
   die "first pane did not expose a trusted [target:shell] title in panes.json"
 
-send_osc_title() {
+send_osc_code() {
   local pane=$1
-  local title=$2
+  local code=$2
+  local title=$3
   local payload
-  payload="printf '\\033]0;${title}\\007'"$'\r'
+  payload="printf '\\033]${code};${title}\\007'"$'\r'
   wezterm_cli send-text --pane-id "$pane" --no-paste "$payload" \
     >>"$ARTIFACT_DIR/wezterm-cli.log" 2>&1
+}
+
+send_osc_title() {
+  send_osc_code "$1" 0 "$2"
 }
 
 wait_for_pane_title() {
@@ -496,7 +501,7 @@ wait_for_pane_title() {
 
 normalize_text() {
   tr '[:upper:]' '[:lower:]' |
-    sed -E 's/[^a-z0-9]+/ /g; s/^ +//; s/ +$//; s/ +/ /g'
+    sed -E 's/[^a-z0-9]+/ /g; s/^ +//; s/ +$//; s/ +/ /g; s/(^| )d(zb|2h)( |$)/\1d2b\3/g; s/(^| )asc2( |$)/\1osc2\2/g; s/(^| )tocls( |$)/\1tools\2/g'
 }
 
 capture_until_title() {
@@ -517,8 +522,8 @@ capture_until_title() {
     WAYLAND_DISPLAY="$WAYLAND_DISPLAY" grim "$raw"
     magick "$raw" -strip -define png:compression-level=9 "$full"
     width=$(identify -format '%w' "$full")
-    magick "$full" -gravity North -crop "${width}x32+0+0" +repage \
-      -colorspace Gray -contrast-stretch 1%x1% -filter Lanczos -resize 400% \
+    magick "$full" -gravity North -crop "${width}x24+0+0" +repage \
+      -colorspace Gray -threshold 65% -filter Lanczos -resize 800% \
       -strip -define png:compression-level=9 "$crop"
     tesseract "$crop" stdout --psm 7 2>>"$ARTIFACT_DIR/tesseract.log" >"$ocr" || true
     actual_normalized=$(normalize_text <"$ocr")
@@ -570,6 +575,12 @@ send_osc_title "$PANE_ONE" "$TITLE_LONG"
 wait_for_pane_title "$PANE_ONE" "fake-admin-padding"
 wezterm_cli activate-tab --tab-id "$TAB_ONE" >>"$ARTIFACT_DIR/wezterm-cli.log" 2>&1
 capture_until_title "05-long-title-keeps-identity" "[$D2B_IDENTITY]"
+
+send_osc_code "$PANE_ONE" 1 "shell-icon-title"
+wait_for_pane_title "$PANE_ONE" "shell-icon-title"
+send_osc_code "$PANE_ONE" 2 "copilot-osc2-title"
+wait_for_pane_title "$PANE_ONE" "copilot-osc2-title"
+capture_until_title "06-osc2-overrides-icon-title" "copilot-osc2-title [$D2B_IDENTITY]"
 
 {
   printf 'target=%s\n' "$TARGET"

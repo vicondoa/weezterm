@@ -97,6 +97,8 @@ background tab, and captures this sequence without desktop input automation:
 - second tab again.
 - a long untrusted background title activated with the trailing trusted d2b
   identity still visible.
+- an OSC 2 title update replacing an earlier OSC 1 icon title, matching
+  applications such as Copilot CLI that update the window title independently.
 
 Each state has a full screenshot, an upscaled title crop, raw/normalized OCR,
 and the expected visible `title [target:shell]`. OCR failure fails the run.

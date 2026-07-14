@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Kept Wayland client-side title text within the compact header height and
+  honored the most recent OSC 1/OSC 2 title update for native d2b panes.
+
 ## [0.7.1] - 2026-07-13
 
 ### Added

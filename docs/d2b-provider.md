@@ -106,11 +106,14 @@ domain names, so a target is never used as a filesystem path component.
   presentation metadata and cannot make a local or SSH pane appear d2b-backed.
 - d2b pane and tab titles append that trusted identity as
   `application title [target:shell]`. OSC title changes remain dynamic. The
-  native window title follows the active tab's latest title, including updates
-  received while the tab was in the background, and changes immediately when
-  the active tab changes. When space is constrained, WeezTerm truncates the
-  untrusted application portion from the right or left edge as appropriate
-  while preserving the trailing trusted identity.
+  most recent OSC 0, OSC 1, or OSC 2 title wins, so an OSC 2 update is not
+  masked by an older icon title. The native window title follows the active
+  tab's latest title, including updates received while the tab was in the
+  background, and changes immediately when the active tab changes. When space
+  is constrained, WeezTerm truncates the untrusted application portion from the
+  right or left edge as appropriate while preserving the trailing trusted
+  identity. Wayland client-side decorations scale configured title fonts down
+  to fit the compact header with desktop-standard vertical padding.
 - The tab-bar new-tab dropdown is target-scoped when its active pane belongs to
   a process-bound d2b domain. It offers one immediate generated-shell action and
   reattachment actions only for detached shells on that target. It never offers
