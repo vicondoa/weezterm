@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The new-tab dropdown in a d2b-bound window now offers only immediate shell
   creation and detached shells from the current target; regular windows retain
   the generic launcher.
+- Allowed native d2b shell management operations enough time to complete the
+  daemon's guest-control health and attach path instead of aborting functional
+  VM shells at the generic two-second socket I/O deadline.
 
 ## [0.7.0] - 2026-07-11
 
