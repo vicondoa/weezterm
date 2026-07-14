@@ -115,6 +115,40 @@
           rustc = pkgs.rust-bin.stable."1.96.0".minimal;
         };
 
+        # --- weezterm remote features ---
+        waylandTitleTools = with pkgs; [
+          coreutils
+          findutils
+          grim
+          imagemagick
+          jq
+          niri
+          gnugrep
+          gnused
+          shellcheck
+          tesseract
+          weston
+        ];
+        waylandTitleLibPath = lib.makeLibraryPath [ pkgs.mesa ] + ":${runtimeLibPath}";
+        waylandTitleEglVendor = "${pkgs.mesa}/share/glvnd/egl_vendor.d/50_mesa.json";
+        waylandTitleTest =
+          if stdenv.isLinux then
+            pkgs.writeShellApplication {
+              name = "niri-title-test";
+              runtimeInputs = waylandTitleTools;
+              text = ''
+                export WEEZTERM_TITLE_REPO_ROOT="''${WEEZTERM_TITLE_REPO_ROOT:-$PWD}"
+                export WEEZTERM_TITLE_NIRI_CONFIG=${../tests/wayland-title/niri.kdl}
+                export LD_LIBRARY_PATH="${waylandTitleLibPath}:''${LD_LIBRARY_PATH:-}"
+                export __EGL_VENDOR_LIBRARY_FILENAMES="${waylandTitleEglVendor}"
+                export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
+                exec ${../tests/wayland-title/run.sh} "$@"
+              '';
+            }
+          else
+            null;
+        # --- end weezterm remote features ---
+
         prebuiltManifest = builtins.fromJSON (builtins.readFile ./prebuilt.json);
         hasPrebuilt =
           prebuiltManifest.version != null
@@ -324,9 +358,17 @@
         packages.source = sourcePackage;
 
         # --- weezterm remote features ---
-        apps.default = {
-          type = "app";
-          program = "${self.packages.${system}.default}/bin/weezterm";
+        apps = {
+          default = {
+            type = "app";
+            program = "${self.packages.${system}.default}/bin/weezterm";
+          };
+        }
+        // lib.optionalAttrs stdenv.isLinux {
+          niri-title-test = {
+            type = "app";
+            program = "${waylandTitleTest}/bin/niri-title-test";
+          };
         };
         # --- end weezterm remote features ---
 
@@ -351,7 +393,18 @@
         };
 
         # --- weezterm remote features ---
-        devShells.default = self.devShell.${system};
+        devShells = {
+          default = self.devShell.${system};
+        }
+        // lib.optionalAttrs stdenv.isLinux {
+          wayland-title = pkgs.mkShell {
+            packages = waylandTitleTools;
+            LD_LIBRARY_PATH = waylandTitleLibPath;
+            __EGL_VENDOR_LIBRARY_FILENAMES = waylandTitleEglVendor;
+            LIBGL_DRIVERS_PATH = "${pkgs.mesa}/lib/dri";
+          };
+        };
+        # --- end weezterm remote features ---
 
         formatter = pkgs.nixfmt-rfc-style;
       }

@@ -1,0 +1,16 @@
+hotkey-overlay {
+    skip-at-startup
+}
+
+animations {
+    off
+}
+
+layout {
+    gaps 0
+    center-focused-column "never"
+
+    default-column-width {
+        proportion 1.0
+    }
+}

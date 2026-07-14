@@ -3,7 +3,7 @@ use crate::termwindow::TermWindowNotif;
 use config::keyassignment::KeyAssignment;
 use mux::d2b::{
     friendly_session_name, sanitize_display_label, validate_shell_name, D2bDomain, D2bSession,
-    D2bTargetStatus,
+    D2bTargetStatus, ShellSessionState,
 };
 use mux::domain::Domain;
 use mux::termwiztermtab::TermWizTerminal;
@@ -18,6 +18,18 @@ use window::WindowOps;
 
 const ROW_OVERHEAD: usize = 3;
 const ALPHABET: &str = "1234567890abcdefghilmnopqrstuvwxyz";
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct D2bTargetScope {
+    pub domain_name: String,
+    pub target: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PickerKind {
+    AllTargets,
+    CurrentTarget,
+}
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct D2bTargetPickerEntry {
@@ -70,10 +82,19 @@ struct Entry {
 pub struct D2bLauncherArgs {
     pane_id: mux::pane::PaneId,
     targets: Vec<D2bTargetPickerEntry>,
+    kind: PickerKind,
 }
 
 impl D2bLauncherArgs {
     pub async fn new(pane_id: mux::pane::PaneId) -> Self {
+        Self::collect(pane_id, None).await
+    }
+
+    pub async fn new_scoped(pane_id: mux::pane::PaneId, scope: D2bTargetScope) -> Self {
+        Self::collect(pane_id, Some(scope)).await
+    }
+
+    async fn collect(pane_id: mux::pane::PaneId, scope: Option<D2bTargetScope>) -> Self {
         let mux = Mux::get();
         let mut targets = vec![];
         for domain in mux.iter_domains() {
@@ -81,6 +102,12 @@ impl D2bLauncherArgs {
                 continue;
             };
             let domain_name = d2b.domain_name().to_string();
+            if scope
+                .as_ref()
+                .is_some_and(|scope| scope.domain_name != domain_name)
+            {
+                continue;
+            }
             let configured_target = d2b.target().to_string();
             match d2b.discover().await {
                 Ok(discovery) => {
@@ -90,6 +117,23 @@ impl D2bLauncherArgs {
                         .map(|session| session.id.clone())
                         .collect::<Vec<_>>();
                     let target = discovery.status.target().to_string();
+                    if scope.as_ref().is_some_and(|scope| scope.target != target) {
+                        let trusted_target = scope
+                            .as_ref()
+                            .map(|scope| scope.target.clone())
+                            .unwrap_or(configured_target);
+                        targets.push(D2bTargetPickerEntry {
+                            domain_name,
+                            generated_name: friendly_session_name(&trusted_target, &names),
+                            target: trusted_target,
+                            status: None,
+                            unavailable_reason: Some(
+                                "trusted target identity mismatch".to_string(),
+                            ),
+                            sessions: vec![],
+                        });
+                        continue;
+                    }
                     let generated_name = friendly_session_name(&target, &names);
                     targets.push(D2bTargetPickerEntry {
                         domain_name,
@@ -102,15 +146,31 @@ impl D2bLauncherArgs {
                 }
                 Err(err) => {
                     log::debug!("d2b discovery failed: {err:#}");
+                    let target = scope
+                        .as_ref()
+                        .map(|scope| scope.target.clone())
+                        .unwrap_or(configured_target);
                     targets.push(D2bTargetPickerEntry {
                         domain_name,
-                        target: configured_target.clone(),
+                        generated_name: friendly_session_name(&target, &[]),
+                        target,
                         status: None,
                         unavailable_reason: Some(sanitize_display_label(&err.to_string())),
                         sessions: vec![],
-                        generated_name: friendly_session_name(&configured_target, &[]),
                     });
                 }
+            }
+        }
+        if let Some(scope) = &scope {
+            if targets.is_empty() {
+                targets.push(D2bTargetPickerEntry {
+                    domain_name: scope.domain_name.clone(),
+                    target: scope.target.clone(),
+                    status: None,
+                    unavailable_reason: Some("trusted d2b domain is unavailable".to_string()),
+                    sessions: vec![],
+                    generated_name: friendly_session_name(&scope.target, &[]),
+                });
             }
         }
         targets.sort_by(|a, b| {
@@ -118,7 +178,15 @@ impl D2bLauncherArgs {
                 .cmp(&b.target)
                 .then(a.domain_name.cmp(&b.domain_name))
         });
-        Self { pane_id, targets }
+        Self {
+            pane_id,
+            targets,
+            kind: if scope.is_some() {
+                PickerKind::CurrentTarget
+            } else {
+                PickerKind::AllTargets
+            },
+        }
     }
 }
 
@@ -147,7 +215,7 @@ struct State {
 impl State {
     fn new(args: D2bLauncherArgs, window: ::window::Window) -> Self {
         Self {
-            entries: build_entries(&args.targets),
+            entries: build_entries(&args.targets, args.kind),
             args,
             window,
             active_idx: 0,
@@ -184,7 +252,12 @@ impl State {
                 x: Position::Absolute(0),
                 y: Position::Absolute(0),
             },
-            Change::Text("d2b sessions: Enter=open  n=name new  Esc=cancel\r\n".to_string()),
+            Change::Text(match self.args.kind {
+                PickerKind::AllTargets => {
+                    "d2b sessions: Enter=open  n=name new  Esc=cancel\r\n".to_string()
+                }
+                PickerKind::CurrentTarget => "d2b shells: Enter=open  Esc=cancel\r\n".to_string(),
+            }),
             Change::AllAttributes(CellAttributes::default()),
         ];
         let max_label_len = self.labels.iter().map(|s| s.len()).max().unwrap_or(0);
@@ -460,7 +533,7 @@ impl State {
     }
 }
 
-fn build_entries(targets: &[D2bTargetPickerEntry]) -> Vec<Entry> {
+fn build_entries(targets: &[D2bTargetPickerEntry], kind: PickerKind) -> Vec<Entry> {
     let mut entries = vec![];
     for target in targets {
         let target_label = sanitize_display_label(&target.target);
@@ -478,6 +551,42 @@ fn build_entries(targets: &[D2bTargetPickerEntry]) -> Vec<Entry> {
             .as_deref()
             .map(|warning| format!(" — {warning}"))
             .unwrap_or_default();
+
+        if kind == PickerKind::CurrentTarget {
+            entries.push(Entry {
+                label: format!(
+                    "New d2b shell `[{target_label}:{}]`{posture}",
+                    sanitize_display_label(&target.generated_name)
+                ),
+                disabled: false,
+                action: EntryAction::Open {
+                    domain: target.domain_name.clone(),
+                    name: target.generated_name.clone(),
+                },
+            });
+
+            let mut sessions = target
+                .sessions
+                .iter()
+                .filter(|session| !session.attached && session.state == ShellSessionState::Detached)
+                .cloned()
+                .collect::<Vec<_>>();
+            sessions.sort_by(|a, b| b.is_default.cmp(&a.is_default).then(a.id.cmp(&b.id)));
+            for session in sessions {
+                let session_label = sanitize_display_label(&session.id);
+                entries.push(Entry {
+                    label: format!(
+                        "Reattach d2b shell `[{target_label}:{session_label}]`{posture}"
+                    ),
+                    disabled: false,
+                    action: EntryAction::Open {
+                        domain: target.domain_name.clone(),
+                        name: session.id,
+                    },
+                });
+            }
+            continue;
+        }
 
         entries.push(Entry {
             label: format!(
@@ -571,14 +680,17 @@ mod test {
 
     #[test]
     fn entries_disable_offline_targets_without_open_actions() {
-        let entries = build_entries(&[D2bTargetPickerEntry {
-            domain_name: "d2b-work".to_string(),
-            target: "work".to_string(),
-            status: None,
-            unavailable_reason: Some("offline".to_string()),
-            sessions: vec![],
-            generated_name: "work-shell".to_string(),
-        }]);
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "d2b-work".to_string(),
+                target: "work".to_string(),
+                status: None,
+                unavailable_reason: Some("offline".to_string()),
+                sessions: vec![],
+                generated_name: "work-shell".to_string(),
+            }],
+            PickerKind::AllTargets,
+        );
         assert_eq!(entries.len(), 1);
         assert!(entries[0].disabled);
         assert_eq!(entries[0].action, EntryAction::Disabled);
@@ -586,14 +698,17 @@ mod test {
 
     #[test]
     fn entries_include_generated_manual_and_existing_sessions() {
-        let entries = build_entries(&[D2bTargetPickerEntry {
-            domain_name: "d2b-work".to_string(),
-            target: "work".to_string(),
-            status: Some(ready_status("work")),
-            unavailable_reason: None,
-            sessions: vec![session("default", true), session("build", false)],
-            generated_name: "work-shell".to_string(),
-        }]);
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "d2b-work".to_string(),
+                target: "work".to_string(),
+                status: Some(ready_status("work")),
+                unavailable_reason: None,
+                sessions: vec![session("default", true), session("build", false)],
+                generated_name: "work-shell".to_string(),
+            }],
+            PickerKind::AllTargets,
+        );
         assert!(entries
             .iter()
             .any(|entry| entry.label.contains("work-shell")));
@@ -608,14 +723,17 @@ mod test {
 
     #[test]
     fn entries_sanitize_target_and_session_labels() {
-        let entries = build_entries(&[D2bTargetPickerEntry {
-            domain_name: "d2b-work".to_string(),
-            target: "work\x1b[31m".to_string(),
-            status: Some(ready_status("work")),
-            unavailable_reason: None,
-            sessions: vec![session("bad\x07\x1b[31m", false)],
-            generated_name: "work-shell".to_string(),
-        }]);
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "d2b-work".to_string(),
+                target: "work\x1b[31m".to_string(),
+                status: Some(ready_status("work")),
+                unavailable_reason: None,
+                sessions: vec![session("bad\x07\x1b[31m", false)],
+                generated_name: "work-shell".to_string(),
+            }],
+            PickerKind::AllTargets,
+        );
         let combined = entries
             .iter()
             .map(|entry| entry.label.as_str())
@@ -636,14 +754,17 @@ mod test {
             true,
         )
         .unwrap();
-        let entries = build_entries(&[D2bTargetPickerEntry {
-            domain_name: "host-tools".to_string(),
-            target: "tools.host.d2b".to_string(),
-            status: Some(status),
-            unavailable_reason: None,
-            sessions: vec![],
-            generated_name: "d2b-tools-shell".to_string(),
-        }]);
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "host-tools".to_string(),
+                target: "tools.host.d2b".to_string(),
+                status: Some(status),
+                unavailable_reason: None,
+                sessions: vec![],
+                generated_name: "d2b-tools-shell".to_string(),
+            }],
+            PickerKind::AllTargets,
+        );
 
         assert!(entries.iter().all(|entry| !entry.disabled));
         assert!(entries
@@ -661,18 +782,65 @@ mod test {
             true,
         )
         .unwrap();
-        let entries = build_entries(&[D2bTargetPickerEntry {
-            domain_name: "host-tools".to_string(),
-            target: "tools.host.d2b".to_string(),
-            status: Some(status),
-            unavailable_reason: None,
-            sessions: vec![],
-            generated_name: "d2b-tools-shell".to_string(),
-        }]);
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "host-tools".to_string(),
+                target: "tools.host.d2b".to_string(),
+                status: Some(status),
+                unavailable_reason: None,
+                sessions: vec![],
+                generated_name: "d2b-tools-shell".to_string(),
+            }],
+            PickerKind::AllTargets,
+        );
 
         assert_eq!(entries.len(), 1);
         assert!(entries[0].disabled);
         assert!(entries[0].label.contains("UNSAFE LOCAL — NO ISOLATION"));
         assert!(entries[0].label.contains("helper unavailable"));
+    }
+
+    #[test]
+    fn scoped_entries_create_immediately_and_only_reattach_detached_shells() {
+        let mut attached = session("attached", false);
+        attached.state = ShellSessionState::Attached;
+        attached.attached = true;
+        let mut killed = session("killed", false);
+        killed.state = ShellSessionState::Killed;
+        let entries = build_entries(
+            &[D2bTargetPickerEntry {
+                domain_name: "host-tools".to_string(),
+                target: "tools.host.d2b".to_string(),
+                status: Some(ready_status("tools.host.d2b")),
+                unavailable_reason: None,
+                sessions: vec![
+                    session("detached", false),
+                    attached,
+                    killed,
+                    session("default", true),
+                ],
+                generated_name: "new-shell".to_string(),
+            }],
+            PickerKind::CurrentTarget,
+        );
+
+        assert_eq!(entries.len(), 3);
+        assert!(entries[0].label.contains("[tools.host.d2b:new-shell]"));
+        assert!(matches!(
+            &entries[0].action,
+            EntryAction::Open { name, .. } if name == "new-shell"
+        ));
+        assert!(entries
+            .iter()
+            .all(|entry| !matches!(entry.action, EntryAction::Manual { .. })));
+        let labels = entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(labels.contains("detached"));
+        assert!(labels.contains("default"));
+        assert!(!labels.contains("attached"));
+        assert!(!labels.contains("killed"));
     }
 }

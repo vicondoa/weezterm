@@ -283,7 +283,11 @@ pub struct PaneInformation {
     pub pixel_height: usize,
     pub title: String,
     pub user_vars: HashMap<String, String>,
+    // --- weezterm remote features ---
     pub trusted_d2b_target: Option<String>,
+    pub trusted_d2b_session: Option<String>,
+    pub d2b_guest_title: Option<String>,
+    // --- end weezterm remote features ---
     pub progress: Progress,
 }
 
@@ -353,30 +357,71 @@ impl UserData for PaneInformation {
 }
 
 // --- weezterm remote features ---
-fn d2b_window_title(
-    active_pane: &PaneInformation,
-    tabs: &[TabInformation],
-    num_tabs: usize,
-) -> Option<String> {
-    fn pane_target(pane: &PaneInformation) -> Option<&String> {
-        pane.trusted_d2b_target.as_ref()
-    }
-
-    let target = pane_target(active_pane)?;
-    let same_target = tabs
-        .iter()
-        .filter(|tab| tab.active_pane.as_ref().and_then(pane_target) == Some(target))
-        .count();
-
-    if same_target > 1 {
-        Some(format!(
-            "d2b {target} ({same_target} sessions) - {}",
-            active_pane.title
-        ))
-    } else if num_tabs == 1 {
-        Some(active_pane.title.clone())
+fn effective_tab_title_impl(
+    tab: &TabInformation,
+    default_title: String,
+    max_width: Option<usize>,
+) -> String {
+    let Some(pane) = tab.active_pane.as_ref() else {
+        return default_title;
+    };
+    if let (Some(target), Some(session)) = (
+        pane.trusted_d2b_target.as_deref(),
+        pane.trusted_d2b_session.as_deref(),
+    ) {
+        let guest_title = if tab.tab_title.is_empty() {
+            pane.d2b_guest_title.as_deref().unwrap_or(&default_title)
+        } else {
+            &default_title
+        };
+        if let Some(max_width) = max_width {
+            mux::d2b::d2b_tab_title_for_width(target, session, guest_title, max_width)
+        } else {
+            mux::d2b::d2b_tab_title(target, session, guest_title)
+        }
     } else {
-        None
+        default_title
+    }
+}
+
+pub(crate) fn effective_tab_title(tab: &TabInformation, default_title: String) -> String {
+    effective_tab_title_impl(tab, default_title, None)
+}
+
+pub(crate) fn effective_tab_title_for_width(
+    tab: &TabInformation,
+    default_title: String,
+    max_width: usize,
+) -> String {
+    effective_tab_title_impl(tab, default_title, Some(max_width))
+}
+
+fn d2b_window_title(active_tab: &TabInformation) -> Option<String> {
+    let pane = active_tab.active_pane.as_ref()?;
+    pane.trusted_d2b_target.as_ref()?;
+    pane.trusted_d2b_session.as_ref()?;
+    let default_title = if active_tab.tab_title.is_empty() {
+        pane.title.clone()
+    } else {
+        active_tab.tab_title.clone()
+    };
+    Some(effective_tab_title(active_tab, default_title))
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum NewTabDropdownTarget {
+    D2b(crate::overlay::d2b_launcher::D2bTargetScope),
+    Generic,
+}
+
+#[cfg(target_os = "linux")]
+fn new_tab_dropdown_target(
+    scope: Option<crate::overlay::d2b_launcher::D2bTargetScope>,
+) -> NewTabDropdownTarget {
+    match scope {
+        Some(scope) => NewTabDropdownTarget::D2b(scope),
+        None => NewTabDropdownTarget::Generic,
     }
 }
 // --- end weezterm remote features ---
@@ -385,7 +430,7 @@ fn d2b_window_title(
 mod d2b_title_tests {
     use super::*;
 
-    fn pane_with_untrusted_target() -> PaneInformation {
+    fn pane_with_untrusted_target(title: &str) -> PaneInformation {
         PaneInformation {
             pane_id: 999_999,
             pane_index: 0,
@@ -398,23 +443,101 @@ mod d2b_title_tests {
             height: 24,
             pixel_width: 800,
             pixel_height: 600,
-            title: "shell".to_owned(),
+            title: title.to_owned(),
             user_vars: HashMap::from([(
                 "weezterm.d2b.target".to_owned(),
                 "spoofed.host.d2b".to_owned(),
             )]),
             trusted_d2b_target: None,
+            trusted_d2b_session: None,
+            d2b_guest_title: None,
             progress: Progress::default(),
+        }
+    }
+
+    fn tab_with_pane(pane: PaneInformation, tab_title: &str) -> TabInformation {
+        TabInformation {
+            tab_id: 999_999,
+            tab_index: 0,
+            is_active: true,
+            is_last_active: false,
+            active_pane: Some(pane),
+            window_id: 999_999,
+            tab_title: tab_title.to_owned(),
         }
     }
 
     #[test]
     fn terminal_user_vars_cannot_claim_d2b_window_identity() {
-        let mut pane = pane_with_untrusted_target();
-        assert_eq!(d2b_window_title(&pane, &[], 1), None);
+        let mut pane = pane_with_untrusted_target("shell");
+        assert_eq!(d2b_window_title(&tab_with_pane(pane.clone(), "")), None);
 
         pane.trusted_d2b_target = Some("tools.host.d2b".to_owned());
-        assert_eq!(d2b_window_title(&pane, &[], 1), Some("shell".to_owned()));
+        assert_eq!(d2b_window_title(&tab_with_pane(pane.clone(), "")), None);
+
+        pane.trusted_d2b_session = Some("handy-kingbird".to_owned());
+        assert_eq!(
+            d2b_window_title(&tab_with_pane(pane, "")),
+            Some("shell [tools.host.d2b:handy-kingbird]".to_owned())
+        );
+    }
+
+    #[test]
+    fn explicit_tab_title_gets_the_trusted_d2b_suffix() {
+        let mut pane = pane_with_untrusted_target("copilot [tools.host.d2b:handy-kingbird]");
+        pane.trusted_d2b_target = Some("tools.host.d2b".to_owned());
+        pane.trusted_d2b_session = Some("handy-kingbird".to_owned());
+        pane.d2b_guest_title = Some("copilot".to_owned());
+
+        assert_eq!(
+            d2b_window_title(&tab_with_pane(pane, "reviewing")),
+            Some("reviewing [tools.host.d2b:handy-kingbird]".to_owned())
+        );
+    }
+
+    #[test]
+    fn switching_tabs_uses_each_tabs_latest_title() {
+        let mut first = pane_with_untrusted_target("first-new [tools.host.d2b:first]");
+        first.trusted_d2b_target = Some("tools.host.d2b".to_owned());
+        first.trusted_d2b_session = Some("first".to_owned());
+        first.d2b_guest_title = Some("first-new".to_owned());
+        let mut second = pane_with_untrusted_target("second-old [tools.host.d2b:second]");
+        second.trusted_d2b_target = Some("tools.host.d2b".to_owned());
+        second.trusted_d2b_session = Some("second".to_owned());
+        second.d2b_guest_title = Some("second-old".to_owned());
+
+        let first_tab = tab_with_pane(first, "");
+        second.title = "second-new [tools.host.d2b:second]".to_owned();
+        second.d2b_guest_title = Some("second-new".to_owned());
+        let second_tab = tab_with_pane(second, "");
+
+        assert_eq!(
+            d2b_window_title(&first_tab),
+            Some("first-new [tools.host.d2b:first]".to_owned())
+        );
+        assert_eq!(
+            d2b_window_title(&second_tab),
+            Some("second-new [tools.host.d2b:second]".to_owned())
+        );
+        assert_eq!(
+            d2b_window_title(&first_tab),
+            Some("first-new [tools.host.d2b:first]".to_owned())
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn new_tab_dropdown_routes_only_trusted_d2b_scopes_to_the_d2b_picker() {
+        assert_eq!(new_tab_dropdown_target(None), NewTabDropdownTarget::Generic);
+
+        let scope = crate::overlay::d2b_launcher::D2bTargetScope {
+            domain_name: "host-tools".to_owned(),
+            target: "tools.host.d2b".to_owned(),
+        };
+        assert_eq!(
+            new_tab_dropdown_target(Some(scope.clone())),
+            NewTabDropdownTarget::D2b(scope)
+        );
     }
 }
 
@@ -2841,7 +2964,7 @@ impl TermWindow {
             None => {
                 if let (Some(pos), Some(tab)) = (active_pane, active_tab) {
                     // --- weezterm remote features ---
-                    if let Some(title) = d2b_window_title(&pos, &tabs, num_tabs) {
+                    if let Some(title) = d2b_window_title(&tab) {
                         title
                     } else if num_tabs == 1 {
                         format!("{}{}", if pos.is_zoomed { "[Z] " } else { "" }, pos.title)
@@ -3467,6 +3590,17 @@ impl TermWindow {
 
     // --- weezterm remote features ---
     fn show_new_tab_dropdown(&mut self) {
+        #[cfg(target_os = "linux")]
+        {
+            match new_tab_dropdown_target(self.active_d2b_target_scope()) {
+                NewTabDropdownTarget::D2b(scope) => {
+                    self.show_d2b_launcher_impl(Some(scope));
+                    return;
+                }
+                NewTabDropdownTarget::Generic => {}
+            }
+        }
+
         let title = "New Tab".to_string();
         let args = LauncherActionArgs {
             title: Some(title),
@@ -3476,6 +3610,21 @@ impl TermWindow {
             alphabet: None,
         };
         self.show_launcher_impl(args, 0);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn active_d2b_target_scope(&self) -> Option<crate::overlay::d2b_launcher::D2bTargetScope> {
+        let mux = Mux::get();
+        let tab = mux.get_active_tab_for_window(self.mux_window_id)?;
+        let pane = tab.get_active_pane()?;
+        let target = pane.trusted_d2b_target()?.to_string();
+        pane.trusted_d2b_session()?;
+        let domain = mux.get_domain(pane.domain_id())?;
+        let d2b = domain.downcast_ref::<mux::d2b::D2bDomain>()?;
+        Some(crate::overlay::d2b_launcher::D2bTargetScope {
+            domain_name: mux::domain::Domain::domain_name(d2b).to_string(),
+            target,
+        })
     }
     // --- end weezterm remote features ---
 
@@ -3581,13 +3730,21 @@ impl TermWindow {
     // --- weezterm remote features ---
     #[cfg(target_os = "linux")]
     fn show_d2b_launcher(&mut self) {
+        self.show_d2b_launcher_impl(None);
+    }
+
+    #[cfg(target_os = "linux")]
+    fn show_d2b_launcher_impl(
+        &mut self,
+        scope: Option<crate::overlay::d2b_launcher::D2bTargetScope>,
+    ) {
         let window = self.window.as_ref().unwrap().clone();
         let mux = Mux::get();
         let tab = match mux.get_active_tab_for_window(self.mux_window_id) {
             Some(tab) => tab,
             None => return,
         };
-        let pane = match self.get_active_pane_or_overlay() {
+        let pane = match tab.get_active_pane() {
             Some(pane) => pane,
             None => return,
         };
@@ -3595,7 +3752,12 @@ impl TermWindow {
         let tab_id = tab.tab_id();
 
         promise::spawn::spawn(async move {
-            let args = crate::overlay::d2b_launcher::D2bLauncherArgs::new(pane_id).await;
+            let args = match scope {
+                Some(scope) => {
+                    crate::overlay::d2b_launcher::D2bLauncherArgs::new_scoped(pane_id, scope).await
+                }
+                None => crate::overlay::d2b_launcher::D2bLauncherArgs::new(pane_id).await,
+            };
             let win = window.clone();
             win.notify(TermWindowNotif::Apply(Box::new(move |term_window| {
                 let mux = Mux::get();
@@ -4633,7 +4795,11 @@ impl TermWindow {
             pixel_height: pos.pixel_height,
             title: pos.pane.get_title(),
             user_vars: pos.pane.copy_user_vars(),
+            // --- weezterm remote features ---
             trusted_d2b_target: pos.pane.trusted_d2b_target().map(str::to_owned),
+            trusted_d2b_session: pos.pane.trusted_d2b_session().map(str::to_owned),
+            d2b_guest_title: pos.pane.d2b_guest_title(),
+            // --- end weezterm remote features ---
             progress: pos.pane.get_progress(),
         }
     }

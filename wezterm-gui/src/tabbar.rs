@@ -155,7 +155,6 @@ fn compute_tab_title(
                 } else {
                     tab.tab_title.clone()
                 };
-
                 let classic_spacing = if config.use_fancy_tab_bar { "" } else { " " };
                 if config.show_tab_index_in_tab_bar {
                     let index = format!(
@@ -191,6 +190,14 @@ fn compute_tab_title(
                         // TODO: Decide what to do here to indicate this
                     }
                 }
+
+                // --- weezterm remote features ---
+                title = crate::termwindow::effective_tab_title_for_width(
+                    tab,
+                    title,
+                    tab_max_width.saturating_sub(len),
+                );
+                // --- end weezterm remote features ---
 
                 // We have a preferred soft minimum on tab width to make it
                 // easier to click on tab titles, but we'll still go below
