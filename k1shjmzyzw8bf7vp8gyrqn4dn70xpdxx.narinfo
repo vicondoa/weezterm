@@ -6,6 +6,6 @@ FileSize: 334700
 NarHash: sha256:0nm0h8wzlljvy8q6psil84lqjfqx2qz2hxk5qada1nqdqr7g2pca
 NarSize: 984976
 References: 57iz36553175g3178pvxjij8z5rcsd4n-glibc-2.42-61 k1shjmzyzw8bf7vp8gyrqn4dn70xpdxx-brotli-1.2.0-lib
-Sig: cache.flakehub.com-3:y0tVqKzRGUBkcs4xxbkbsurmPKzDlnZYylG6ktO5RXkU0Dlgp4UuJmVn1yH4aPX41XMdtd+rgcyG/Q7OjMVVDA==
-Sig: cache.flakehub.com-4:TvuyjqFZreKj1dkSXYOk9IAvPtw49+VBgYZI2rDoyCyCIG9JcqeXG+x5NaCc/tyLXLKVyD0MYfAJ6ZRiZ59ACQ==
+Deriver: al1hk8nxqjm207npmjm88xgpc6h681ps-brotli-1.2.0.drv
+Sig: cache.nixos.org-1:9kInUCpI4b4e6z5pKrdOP8udiI6AD63jVCd75hgUZHI1NNKAGaqY00mU6SbVzM0dAli814iuWgZBDCpCunlfDw==
 Sig: vicondoa-weezterm:nrzAeMmFIETqmpUoOuKgk0SZ7QrweHk6Zz3CQXAy5Z1kyQvAOOsRGAycZ7+dMd4Ba8jk0WzoYzPQ5h/as8dlBA==
