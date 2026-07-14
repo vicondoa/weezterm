@@ -6,6 +6,4 @@ FileSize: 72780
 NarHash: sha256:09myb8jiscr644s4ypsavqs4jlzzcj4vyvvfr1ja2kn2mi106s5v
 NarSize: 197672
 References: 
-Deriver: wzhb336rh5z7c4fmp4fgf0hl6akn539r-xgcc-15.2.0.drv
-Sig: cache.nixos.org-1:CBjvqaI4eCILfBYBnRbxNHIZw1pmnfg4xlFRSLTWTFCkOOeIVIRZCI1r+BSLdQ5P7sTJfZi5SP/1Rl94KiuMAw==
 Sig: vicondoa-weezterm:/oXGf+hvFWpp0Cij6xnVmPSrvDWbYR7DCq9nEu66zoUQ5iYTpv6BvByK9eutF77AEnY9ztZjyEqx+5xaciBGDw==

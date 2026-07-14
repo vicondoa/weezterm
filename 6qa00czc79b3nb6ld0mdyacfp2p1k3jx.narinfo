@@ -6,6 +6,4 @@ FileSize: 91268
 NarHash: sha256:03qm43d81sfk4cpjj1laqjg4l0kcda6wrknpb517qfh59hq7q4ql
 NarSize: 368176
 References: 6qa00czc79b3nb6ld0mdyacfp2p1k3jx-libidn2-2.3.8 bf6wgamqnl3c91iamlb1branrfcwwy7x-libunistring-1.4.2
-Deriver: dl4wsj8kpyb1whdhhibqvqqx3c6rc60g-libidn2-2.3.8.drv
-Sig: cache.nixos.org-1:+EgPYxT420sb5A9CqIwcFLZ+vTFsoUvXEBjzqpZlzibdCbOTx1csH5qEF2Apsn31OPEmS5/JuLW5kh6hdsmCBw==
 Sig: vicondoa-weezterm:0DEq2xJs7bbKhIxd+e5Q7NDj5zyRSsF3YpmFkLuiaC/Z4NRIitlEynhLPLJr+muTbWUBobnI5EeowucQh38zBQ==
