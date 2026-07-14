@@ -21,7 +21,7 @@ Pin WeezTerm and d2b to one `nixpkgs` revision:
     };
 
     weezterm = {
-      url = "github:vicondoa/weezterm/v0.7.1";
+      url = "github:vicondoa/weezterm/v0.7.2";
       inputs.nixpkgs.follows = "nixpkgs";
     };
   };
