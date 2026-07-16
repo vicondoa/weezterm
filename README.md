@@ -17,13 +17,13 @@ WeezTerm extends WezTerm with VS Code Remote SSH-style features:
 - **Config overlay** — A built-in TUI (`Ctrl+Shift+,`) for browsing and editing ~80 config settings, managing SSH domains, DevContainer domains, and per-monitor overrides
 - **Window state persistence** — Window position, size, and maximized/fullscreen state saved and restored across restarts, with correct multi-monitor support
 - **DevContainer domains** — First-class Docker devcontainer support with auto-discovery, a manager overlay (`Ctrl+Shift+D`), and full SSH domain integration
-- **Native d2b provider** — Linux persistent shell panes for canonical d2b
-  workload targets through one provider-neutral public-socket transport, with
-  explicit unsafe-local/no-isolation posture.
+- **d2b client seam** — Canonical v2 workload target configuration backed by
+  d2b's exact pinned client and identity types. Runtime session integration
+  remains disabled until the owning d2b service contracts are finalized.
 
 See [docs/remote-extensions.md](docs/remote-extensions.md) for detailed documentation of all features and configuration options.
-See [docs/d2b-provider.md](docs/d2b-provider.md) for d2b provider packaging,
-runtime, and security details.
+See [docs/d2b-provider.md](docs/d2b-provider.md) for the d2b source pin,
+configuration contract, and current runtime boundary.
 
 ## Credits
 

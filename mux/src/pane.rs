@@ -254,20 +254,6 @@ pub trait Pane: Downcast + Send + Sync {
     fn palette(&self) -> ColorPalette;
     fn domain_id(&self) -> DomainId;
 
-    // --- weezterm remote features ---
-    fn trusted_d2b_target(&self) -> Option<&str> {
-        None
-    }
-
-    fn trusted_d2b_session(&self) -> Option<&str> {
-        None
-    }
-
-    fn d2b_guest_title(&self) -> Option<String> {
-        None
-    }
-    // --- end weezterm remote features ---
-
     fn get_keyboard_encoding(&self) -> KeyboardEncoding {
         KeyboardEncoding::Xterm
     }

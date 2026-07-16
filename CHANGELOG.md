@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Migrated d2b configuration to the canonical v2 `TargetInput` workload type
+  and pinned `d2b-client` plus `d2b-contracts` to d2b revision
+  `9183b45c6505cfd496e5d537bf6376f884fb16c7`.
+
+### Removed
+
+- Removed the legacy public-socket hello, JSON shell DTO, seqpacket framing,
+  target-alias, session-picker, and terminal-bridge integration. Native d2b
+  discovery and persistent-shell attachment remain unavailable until their
+  owning v2 service contracts are finalized.
+
 ## [0.7.2] - 2026-07-13
 
 ### Fixed

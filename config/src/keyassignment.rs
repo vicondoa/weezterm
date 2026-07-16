@@ -651,12 +651,6 @@ pub enum KeyAssignment {
     ShowPortForwardOverlay,
     ShowConfigOverlay,
     ShowDevContainerManager,
-    ShowD2bLauncher,
-    D2bOpenSession {
-        domain: String,
-        #[dynamic(default)]
-        name: Option<String>,
-    },
     // --- end weezterm remote features ---
 }
 impl_lua_conversion_dynamic!(KeyAssignment);

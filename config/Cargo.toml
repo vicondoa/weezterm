@@ -43,7 +43,8 @@ wezterm-input-types.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace = true, features=["use_serde"] }
 # --- weezterm remote features ---
-d2b-toolkit-core.workspace = true
+d2b-client.workspace = true
+d2b-contracts.workspace = true
 # --- end weezterm remote features ---
 
 [target."cfg(unix)".dependencies]
