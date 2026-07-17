@@ -5,12 +5,14 @@ It consumes `d2b-client` and `d2b-contracts` directly from the exact d2b source
 revision:
 
 ```text
-9183b45c6505cfd496e5d537bf6376f884fb16c7
+4018d9c9652bd826c2e6a9abccdcdcafb832d944
 ```
 
-The Cargo lockfile binds the same revision. WeezTerm defines no d2b handshake,
-frame codec, request or response type, shell record, error envelope, or target
-parser.
+The Cargo lockfile binds the same revision. It corresponds to client-toolkit
+distribution fingerprint
+`c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`.
+WeezTerm defines no d2b handshake, frame codec, request or response type, shell
+record, error envelope, or target parser.
 
 ## Configure a target
 

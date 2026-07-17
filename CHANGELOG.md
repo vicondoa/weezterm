@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Migrated d2b configuration to the canonical v2 `TargetInput` workload type
   and pinned `d2b-client` plus `d2b-contracts` to d2b revision
-  `9183b45c6505cfd496e5d537bf6376f884fb16c7`.
+  `4018d9c9652bd826c2e6a9abccdcdcafb832d944`.
 
 ### Removed
 

@@ -293,8 +293,8 @@ zbus = "4.2"
 zstd = "0.11"
 zvariant = "4.0"
 # --- weezterm remote features ---
-d2b-client = { git = "https://github.com/vicondoa/d2b", rev = "9183b45c6505cfd496e5d537bf6376f884fb16c7", default-features = false }
-d2b-contracts = { git = "https://github.com/vicondoa/d2b", rev = "9183b45c6505cfd496e5d537bf6376f884fb16c7", default-features = false, features = ["v2-services"] }
+d2b-client = { git = "https://github.com/vicondoa/d2b", rev = "4018d9c9652bd826c2e6a9abccdcdcafb832d944", default-features = false }
+d2b-contracts = { git = "https://github.com/vicondoa/d2b", rev = "4018d9c9652bd826c2e6a9abccdcdcafb832d944", default-features = false, features = ["v2-services"] }
 # --- end weezterm remote features ---
 
 [patch.crates-io]
