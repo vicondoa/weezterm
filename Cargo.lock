@@ -1378,12 +1378,13 @@ dependencies = [
 [[package]]
 name = "d2b-client"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
+source = "git+https://github.com/vicondoa/d2b?rev=9dc902243cdd7aba7ef269988b96f0aae6e037da#9dc902243cdd7aba7ef269988b96f0aae6e037da"
 dependencies = [
  "async-trait",
  "d2b-contracts",
  "d2b-session",
  "protobuf",
+ "sha2",
  "tokio",
  "ttrpc",
 ]
@@ -1391,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "d2b-client-toolkit"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b-toolkit?rev=800c2878533f600d8f085b3d2aafcddb970232b2#800c2878533f600d8f085b3d2aafcddb970232b2"
+source = "git+https://github.com/vicondoa/d2b-toolkit?rev=3d6b75d47c8df66c1722ea324d64334a127d43ec#3d6b75d47c8df66c1722ea324d64334a127d43ec"
 dependencies = [
  "d2b-client",
  "d2b-contracts",
@@ -1403,7 +1404,7 @@ dependencies = [
 [[package]]
 name = "d2b-contracts"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
+source = "git+https://github.com/vicondoa/d2b?rev=9dc902243cdd7aba7ef269988b96f0aae6e037da#9dc902243cdd7aba7ef269988b96f0aae6e037da"
 dependencies = [
  "async-trait",
  "protobuf",
@@ -1411,15 +1412,17 @@ dependencies = [
  "serde",
  "sha2",
  "ttrpc",
+ "zeroize",
 ]
 
 [[package]]
 name = "d2b-session"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b?rev=4018d9c9652bd826c2e6a9abccdcdcafb832d944#4018d9c9652bd826c2e6a9abccdcdcafb832d944"
+source = "git+https://github.com/vicondoa/d2b?rev=9dc902243cdd7aba7ef269988b96f0aae6e037da#9dc902243cdd7aba7ef269988b96f0aae6e037da"
 dependencies = [
  "async-trait",
  "d2b-contracts",
+ "futures-util",
  "protobuf",
  "sha2",
  "snow",

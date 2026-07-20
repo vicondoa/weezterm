@@ -122,6 +122,28 @@ mod test {
     }
 
     #[test]
+    fn canonical_service_client_inventory_is_pinned() {
+        assert_eq!(
+            d2b_client_toolkit::D2B_SOURCE_REVISION,
+            "9dc902243cdd7aba7ef269988b96f0aae6e037da"
+        );
+        assert_eq!(
+            d2b_client_toolkit::D2B_SOURCE_FINGERPRINT,
+            "5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043"
+        );
+        let _ = std::any::TypeId::of::<d2b_client_toolkit::DaemonClient>();
+        for service in [
+            ServiceKind::Daemon,
+            ServiceKind::User,
+            ServiceKind::Shell,
+            ServiceKind::Notify,
+            ServiceKind::Wayland,
+        ] {
+            assert!(ServiceKind::ALL.contains(&service));
+        }
+    }
+
+    #[test]
     fn canonical_workload_target_round_trips() {
         let config = decode(serde_json::json!({
             "name": "work",

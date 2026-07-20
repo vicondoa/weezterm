@@ -5,12 +5,12 @@ It consumes the `d2b-client-toolkit` 2.0.0 facade from the exact distribution
 revision:
 
 ```text
-800c2878533f600d8f085b3d2aafcddb970232b2
+3d6b75d47c8df66c1722ea324d64334a127d43ec
 ```
 
 That distribution re-exports canonical d2b source revision
-`4018d9c9652bd826c2e6a9abccdcdcafb832d944`, with source fingerprint
-`c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`.
+`9dc902243cdd7aba7ef269988b96f0aae6e037da`, with source fingerprint
+`5a20cef3a64281df819eeb76bdfe385999755479b467b559653011582fb9c043`.
 The Cargo lockfile binds both revisions through the facade. WeezTerm defines no
 d2b handshake, frame codec, request or response type, shell record, error
 envelope, or target parser.
@@ -54,11 +54,13 @@ String targets, VM aliases, and direct socket-path overrides are not accepted.
 
 The configuration seam derives a canonical
 `TargetInput::Service { service: ServiceKind::Shell, ... }` from each workload
-target. Configured d2b domains are currently reported as unavailable and are
-not added to the mux because workload-to-shell routing is not integrated.
-WeezTerm does not infer a local VM name, read root-owned state, or connect to a
-caller-selected socket. There is no legacy public-socket fallback, shell
-command fallback, SSH mapping, or direct host-terminal bridge.
+target. The facade also exposes the frozen typed `DaemonClient`, guest terminal
+client, and generated user/desktop service clients without local wrappers.
+Configured d2b domains are currently reported as unavailable and are not added
+to the mux because canonical endpoint acquisition and workload-to-shell routing
+are not integrated. WeezTerm does not infer a local VM name, read root-owned
+state, or connect to a caller-selected socket. There is no legacy public-socket
+fallback, shell command fallback, SSH mapping, or direct host-terminal bridge.
 
 Runtime integration must consume canonical client routing and terminal streams
 through an explicit Tokio runtime boundary because WeezTerm's UI and mux use

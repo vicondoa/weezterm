@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Migrated d2b configuration to the canonical v2 `TargetInput` workload type
   re-exported by `d2b-client-toolkit` 2.0.0. Workload domains now retain the
   canonical shell-service target without defining a local service DTO.
+- Pinned the toolkit facade to the frozen daemon, guest, terminal, and user
+  service client inventory while keeping endpoint acquisition and integrated
+  workload routing disabled.
 - Aligned the d2b client distribution name and packaged source layout with
   `share/d2b-client-toolkit/{distribution,d2b}`.
 
