@@ -12,9 +12,9 @@
 
 This record describes the retired d2b 1.x integration. The current seam follows
 [d2b ADR 0045](https://github.com/vicondoa/d2b/blob/main/docs/adr/0045-provider-and-transport-framework.md):
-configuration stores canonical v2 client target types, while daemon discovery
-and persistent-shell transport remain absent until their owning service
-contracts are finalized.
+configuration stores the canonical v2 client target and shell-service target
+re-exported by `d2b-client-toolkit`. Daemon discovery and persistent-shell
+transport remain absent until workload-to-shell routing is integrated.
 
 The first native d2b domain treated every shell endpoint as a local VM name.
 d2b now exposes provider-neutral canonical workload targets and typed provider,

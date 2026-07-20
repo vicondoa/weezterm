@@ -92,7 +92,7 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
     // --- weezterm remote features ---
     for d2b_dom in &config.d2b_domains {
         log::warn!(
-            "Ignoring d2b domain {}: d2b v2 session setup is not available yet",
+            "Ignoring d2b domain {}: workload-to-shell routing is not available yet",
             d2b_dom.name
         );
     }

@@ -1,22 +1,35 @@
 # d2b client seam
 
 WeezTerm carries a configuration seam for canonical d2b v2 workload targets.
-It consumes `d2b-client` and `d2b-contracts` directly from the exact d2b source
+It consumes the `d2b-client-toolkit` 2.0.0 facade from the exact distribution
 revision:
 
 ```text
-4018d9c9652bd826c2e6a9abccdcdcafb832d944
+800c2878533f600d8f085b3d2aafcddb970232b2
 ```
 
-The Cargo lockfile binds the same revision. It corresponds to client-toolkit
-distribution fingerprint
+That distribution re-exports canonical d2b source revision
+`4018d9c9652bd826c2e6a9abccdcdcafb832d944`, with source fingerprint
 `c2c99bdd77ba66948fce81161dcc3efde608eefefb96f28fa934c9f58d96d838`.
-WeezTerm defines no d2b handshake, frame codec, request or response type, shell
-record, error envelope, or target parser.
+The Cargo lockfile binds both revisions through the facade. WeezTerm defines no
+d2b handshake, frame codec, request or response type, shell record, error
+envelope, or target parser.
+
+The toolkit flake package is named `d2b-client-toolkit`. Its immutable source
+layout is:
+
+```text
+share/d2b-client-toolkit/
+├── distribution/
+└── d2b/
+```
+
+There is no `d2b-toolkit` package, crate, or share path in the current seam.
 
 ## Configure a target
 
-Each domain uses the canonical `d2b_client::TargetInput::Workload` type.
+Each domain uses the canonical
+`d2b_client_toolkit::TargetInput::Workload` type.
 Configuration supplies the exact canonical realm and workload IDs:
 
 ```lua
@@ -39,13 +52,16 @@ String targets, VM aliases, and direct socket-path overrides are not accepted.
 
 ## Runtime boundary
 
-Configured d2b domains are currently reported as unavailable and are not added
-to the mux. WeezTerm does not guess the pending endpoint bootstrap, route
-resolution, daemon discovery, session setup, or persistent-shell stream APIs.
-There is no legacy public-socket fallback, shell command fallback, SSH mapping,
-or direct host-terminal bridge.
+The configuration seam derives a canonical
+`TargetInput::Service { service: ServiceKind::Shell, ... }` from each workload
+target. Configured d2b domains are currently reported as unavailable and are
+not added to the mux because workload-to-shell routing is not integrated.
+WeezTerm does not infer a local VM name, read root-owned state, or connect to a
+caller-selected socket. There is no legacy public-socket fallback, shell
+command fallback, SSH mapping, or direct host-terminal bridge.
 
-Runtime integration can return only after the canonical control and
-user-session service APIs are finalized. It must use an explicit Tokio runtime
-boundary because WeezTerm's UI and mux use smol; copying protocol or transport
-code into this repository is not an acceptable adapter.
+Runtime integration must consume canonical client routing and terminal streams
+through an explicit Tokio runtime boundary because WeezTerm's UI and mux use
+smol. Copying protocol or transport code into this repository is not an
+acceptable adapter, and missing integrated routing remains a fail-closed
+condition.

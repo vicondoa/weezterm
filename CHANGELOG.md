@@ -10,15 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Migrated d2b configuration to the canonical v2 `TargetInput` workload type
-  and pinned `d2b-client` plus `d2b-contracts` to d2b revision
-  `4018d9c9652bd826c2e6a9abccdcdcafb832d944`.
+  re-exported by `d2b-client-toolkit` 2.0.0. Workload domains now retain the
+  canonical shell-service target without defining a local service DTO.
+- Aligned the d2b client distribution name and packaged source layout with
+  `share/d2b-client-toolkit/{distribution,d2b}`.
 
 ### Removed
 
 - Removed the legacy public-socket hello, JSON shell DTO, seqpacket framing,
   target-alias, session-picker, and terminal-bridge integration. Native d2b
-  discovery and persistent-shell attachment remain unavailable until their
-  owning v2 service contracts are finalized.
+  discovery and persistent-shell attachment remain unavailable until canonical
+  workload-to-shell routing is integrated.
 
 ## [0.7.2] - 2026-07-13
 

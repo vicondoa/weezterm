@@ -62,8 +62,5 @@ winapi = { workspace=true, features = [
     "tlhelp32",
 ]}
 
-[target."cfg(target_os = \"linux\")".dependencies]
-d2b-client.workspace = true
-
 [dev-dependencies]
 k9.workspace = true

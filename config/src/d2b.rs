@@ -1,6 +1,6 @@
 use crate::config::validate_domain_name;
-use d2b_client::TargetInput;
-use d2b_contracts::v2_identity::{RealmId, WorkloadId};
+use d2b_client_toolkit::contracts::v2_identity::{RealmId, WorkloadId};
+use d2b_client_toolkit::{ServiceKind, ServiceOwner, TargetInput};
 use std::convert::TryFrom;
 use wezterm_dynamic::{FromDynamic, ToDynamic};
 
@@ -23,6 +23,17 @@ impl D2bDomainConfig {
         match &self.target {
             TargetInput::Workload { realm, workload } => (realm, workload),
             _ => unreachable!("D2bDomainConfig accepts only workload targets"),
+        }
+    }
+
+    pub fn shell_service_target(&self) -> TargetInput {
+        let (realm, workload) = self.workload_ids();
+        TargetInput::Service {
+            owner: ServiceOwner::Workload {
+                realm: realm.clone(),
+                workload: workload.clone(),
+            },
+            service: ServiceKind::Shell,
         }
     }
 }
@@ -101,6 +112,13 @@ mod test {
         assert_eq!(realm.as_str(), REALM_ID);
         assert_eq!(workload.as_str(), WORKLOAD_ID);
         assert!(matches!(config.target(), TargetInput::Workload { .. }));
+        assert!(matches!(
+            config.shell_service_target(),
+            TargetInput::Service {
+                owner: ServiceOwner::Workload { .. },
+                service: ServiceKind::Shell,
+            }
+        ));
     }
 
     #[test]
