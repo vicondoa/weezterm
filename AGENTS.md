@@ -162,6 +162,12 @@ cargo nextest run -p wezterm-escape-parser
 
 Prefer `ci/build-cross.sh` which covers both platforms.
 
+**In a `nix develop` shell**, `make precommit` is hermetic: the dev shell
+pins `cargo-nextest` directly, and `make fmt` falls back to bare `cargo fmt`
+(which resolves to that same pinned nightly rustfmt) because there is no
+`rustup` to satisfy the `+nightly` toolchain selector. Rustup-based
+checkouts are unaffected and keep using `cargo +nightly fmt`.
+
 **Important**: The Linux/WSL build uses a separate Rust toolchain and can
 surface warnings/errors that don't appear on Windows (e.g., unused code
 warnings that trigger rustc ICEs on certain Linux compiler versions). Always

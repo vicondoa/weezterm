@@ -388,7 +388,13 @@
               })
               nightly."2026-06-06".rustfmt
               nightly."2026-06-06".rust-analyzer
-            ]);
+            ])
+            # --- weezterm remote features ---
+            # `make precommit`/`make test` need `cargo nextest`; there is no
+            # rustup in this shell to `cargo install` it on demand, so pin it
+            # from nixpkgs alongside the rest of the toolchain.
+            ++ [ pkgs.cargo-nextest ];
+          # --- end weezterm remote features ---
 
           LD_LIBRARY_PATH = libPath;
         };

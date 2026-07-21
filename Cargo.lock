@@ -1392,7 +1392,7 @@ dependencies = [
 [[package]]
 name = "d2b-client-toolkit"
 version = "2.0.0"
-source = "git+https://github.com/vicondoa/d2b-toolkit?rev=3d6b75d47c8df66c1722ea324d64334a127d43ec#3d6b75d47c8df66c1722ea324d64334a127d43ec"
+source = "git+https://github.com/vicondoa/d2b-toolkit?rev=926de54e7320599c373524a10b65aaf13b6ff422#926de54e7320599c373524a10b65aaf13b6ff422"
 dependencies = [
  "d2b-client",
  "d2b-contracts",
@@ -2833,7 +2833,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.1",
+ "socket2 0.5.10",
  "system-configuration",
  "tokio",
  "tower-service",

@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   workload routing disabled.
 - Aligned the d2b client distribution name and packaged source layout with
   `share/d2b-client-toolkit/{distribution,d2b}`.
+- Advanced the pinned `d2b-client-toolkit` distribution revision to
+  `926de54e7320599c373524a10b65aaf13b6ff422`. The canonical d2b source
+  revision and fingerprint the facade re-exports are unchanged.
+- Made `nix develop --command make precommit` hermetic: the pinned Nix dev
+  shell now provides `cargo-nextest` directly, and `make fmt` falls back to
+  bare `cargo fmt` (which resolves to that same pinned nightly rustfmt) when
+  no `rustup` is present instead of failing on `cargo +nightly fmt`.
 
 ### Removed
 

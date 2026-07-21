@@ -5,7 +5,7 @@ It consumes the `d2b-client-toolkit` 2.0.0 facade from the exact distribution
 revision:
 
 ```text
-3d6b75d47c8df66c1722ea324d64334a127d43ec
+926de54e7320599c373524a10b65aaf13b6ff422
 ```
 
 That distribution re-exports canonical d2b source revision
