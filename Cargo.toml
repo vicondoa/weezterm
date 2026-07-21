@@ -293,8 +293,7 @@ zbus = "4.2"
 zstd = "0.11"
 zvariant = "4.0"
 # --- weezterm remote features ---
-d2b-client = { version = "=0.2.0", git = "https://github.com/vicondoa/d2b-toolkit", tag = "v0.2.0" }
-d2b-toolkit-core = { version = "=0.2.0", git = "https://github.com/vicondoa/d2b-toolkit", tag = "v0.2.0" }
+d2b-client-toolkit = { git = "https://github.com/vicondoa/d2b-toolkit", rev = "926de54e7320599c373524a10b65aaf13b6ff422", default-features = false }
 # --- end weezterm remote features ---
 
 [patch.crates-io]

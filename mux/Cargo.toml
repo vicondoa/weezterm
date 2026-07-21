@@ -48,13 +48,6 @@ termwiz.workspace = true
 textwrap.workspace = true
 thiserror.workspace = true
 url.workspace = true
-# --- weezterm remote features ---
-async-channel.workspace = true
-async-io.workspace = true
-d2b-toolkit-core.workspace = true
-futures.workspace = true
-socket2.workspace = true
-# --- end weezterm remote features ---
 wezterm-dynamic.workspace = true
 wezterm-ssh.workspace = true
 wezterm-term = { workspace=true, features=["use_serde"] }
@@ -68,9 +61,6 @@ winapi = { workspace=true, features = [
     "processthreadsapi",
     "tlhelp32",
 ]}
-
-[target."cfg(target_os = \"linux\")".dependencies]
-d2b-client.workspace = true
 
 [dev-dependencies]
 k9.workspace = true

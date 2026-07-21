@@ -40,6 +40,19 @@
       url = "github:madler/zlib/v1.3.1";
       flake = false;
     };
+    # --- weezterm remote features ---
+    # Keep these two in sync with the root flake.nix; see the comment there
+    # for why they are pinned as `flake = false` inputs instead of relying on
+    # `cargoLock.allowBuiltinFetchGit`.
+    d2b = {
+      url = "github:vicondoa/d2b/9dc902243cdd7aba7ef269988b96f0aae6e037da";
+      flake = false;
+    };
+    d2b-toolkit = {
+      url = "github:vicondoa/d2b-toolkit/926de54e7320599c373524a10b65aaf13b6ff422";
+      flake = false;
+    };
+    # --- end weezterm remote features ---
   };
 
   outputs =
@@ -204,7 +217,28 @@
 
           cargoLock = {
             lockFile = ../Cargo.lock;
+            # --- weezterm remote features ---
+            # `allowBuiltinFetchGit` remains only as the fallback path for the
+            # other git dependencies in Cargo.lock (xcb-imdkit, finl_unicode)
+            # that this fix does not pin. The four d2b/d2b-toolkit crates
+            # below get an explicit `outputHashes` entry instead, so their
+            # vendoring goes through the hermetic `fetchgit` fixed-output
+            # derivation path rather than the impure, unlocked
+            # `builtins.fetchGit` fallback. The hash is the pinned `d2b` /
+            # `d2b-toolkit` flake input's own `narHash`, which is byte-for-
+            # byte identical to what `fetchgit` (default `leaveDotGit =
+            # false`) computes for the same url+rev -- verified empirically
+            # before wiring this in. This makes flake.lock the narHash
+            # authority for these revisions instead of an ad-hoc unbound
+            # fetch, without needing a second, divergent content fetch.
+            outputHashes = {
+              "d2b-client-2.0.0" = inputs.d2b.narHash;
+              "d2b-contracts-2.0.0" = inputs.d2b.narHash;
+              "d2b-session-2.0.0" = inputs.d2b.narHash;
+              "d2b-client-toolkit-2.0.0" = inputs.d2b-toolkit.narHash;
+            };
             allowBuiltinFetchGit = true;
+            # --- end weezterm remote features ---
           };
 
           prePatch = ''
@@ -359,6 +393,68 @@
         packages.source = sourcePackage;
 
         # --- weezterm remote features ---
+        # Hermetic lint/format coverage for `nix build .#source`. Both reuse
+        # `sourcePackage`'s src/patch/cargoLock (so the same vendored,
+        # hash-pinned d2b/d2b-toolkit sources are linted, not a second
+        # fetch), but replace buildPhase/installPhase so neither runs the
+        # full install (icons, completions, terminfo, etc.) -- they only
+        # need to fail the build on a format or lint violation.
+        checks = {
+          cargo-fmt = sourcePackage.overrideAttrs (old: {
+            name = "wezterm-cargo-fmt-check";
+            nativeBuildInputs = old.nativeBuildInputs ++ [ pkgs.rust-bin.nightly."2026-06-06".rustfmt ];
+            doCheck = false;
+            # No binaries get installed, so there is nothing for the
+            # inherited preFixup/postFixup patchelf steps to act on.
+            dontFixup = true;
+            buildPhase = ''
+              runHook preBuild
+              cargo fmt --all -- --check
+              runHook postBuild
+            '';
+            installPhase = "touch $out";
+          });
+
+          cargo-clippy = sourcePackage.overrideAttrs (old: {
+            name = "wezterm-cargo-clippy-check";
+            nativeBuildInputs = old.nativeBuildInputs ++ [
+              (pkgs.rust-bin.stable."1.96.0".minimal.override { extensions = [ "clippy" ]; })
+              pkgs.jq
+            ];
+            doCheck = false;
+            dontFixup = true;
+            buildPhase = ''
+              runHook preBuild
+              # The vendored upstream wezterm/config tree carries pre-existing
+              # clippy findings this seam does not own and must not "fix" as
+              # a side effect (see AGENTS.md: never reformat/rewrite upstream
+              # files). Some of those pre-existing findings are deny-by-
+              # default clippy lints, so merely dropping `-D warnings` is not
+              # enough to keep cargo from failing on them; `--cap-lints=warn`
+              # caps every lint (however it was originally set) to at most a
+              # warning, so only a genuine compilation/tooling failure -- not
+              # lint severity -- can make this `cargo clippy` invocation
+              # itself fail. Its exit status is therefore preserved (no
+              # `|| true`): a nonzero exit here is a real failure.
+              #
+              # Scope to just the `config` crate with `--no-deps` (so
+              # upstream workspace deps like wezterm-char-props aren't
+              # linted either), capture full diagnostics as JSON, and hard-
+              # fail only on findings inside config/src/d2b.rs -- the file
+              # this seam wholly owns and maintains. clippy-scope-filter.sh
+              # also fails if the JSON itself can't be parsed/filtered,
+              # rather than silently treating that as "no findings".
+              cargo clippy -p config --all-targets --no-deps --offline \
+                --message-format=json -- --cap-lints=warn > clippy-config.json
+              bash nix/clippy-scope-filter.sh clippy-config.json config/src/d2b.rs
+              runHook postBuild
+            '';
+            installPhase = "touch $out";
+          });
+        };
+        # --- end weezterm remote features ---
+
+        # --- weezterm remote features ---
         apps = {
           default = {
             type = "app";
@@ -388,7 +484,13 @@
               })
               nightly."2026-06-06".rustfmt
               nightly."2026-06-06".rust-analyzer
-            ]);
+            ])
+            # --- weezterm remote features ---
+            # `make precommit`/`make test` need `cargo nextest`; there is no
+            # rustup in this shell to `cargo install` it on demand, so pin it
+            # from nixpkgs alongside the rest of the toolchain.
+            ++ [ pkgs.cargo-nextest ];
+          # --- end weezterm remote features ---
 
           LD_LIBRARY_PATH = libPath;
         };
