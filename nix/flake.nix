@@ -428,29 +428,25 @@
               # The vendored upstream wezterm/config tree carries pre-existing
               # clippy findings this seam does not own and must not "fix" as
               # a side effect (see AGENTS.md: never reformat/rewrite upstream
-              # files). A blanket `--workspace -D warnings` run fails on code
-              # this seam never touched (even without `-D warnings`, some
-              # upstream files trip deny-by-default lints). Run clippy for
-              # just the `config` crate with `--no-deps` (so upstream
-              # workspace deps like wezterm-char-props aren't linted
-              # either), capture full diagnostics, and hard-fail only on
-              # findings inside config/src/d2b.rs -- the file this seam
-              # wholly owns and maintains.
-              cargo clippy -p config --all-targets --no-deps --offline --message-format=json > clippy-config.json || true
-              if jq -e '
-                  select(.reason == "compiler-message")
-                  | .message.spans[]?
-                  | select(.file_name == "config/src/d2b.rs")
-                ' clippy-config.json > /dev/null
-              then
-                echo "clippy findings in config/src/d2b.rs:" >&2
-                jq -r '
-                    select(.reason == "compiler-message")
-                    | select(.message.spans[]?.file_name == "config/src/d2b.rs")
-                    | .message.rendered
-                  ' clippy-config.json >&2
-                exit 1
-              fi
+              # files). Some of those pre-existing findings are deny-by-
+              # default clippy lints, so merely dropping `-D warnings` is not
+              # enough to keep cargo from failing on them; `--cap-lints=warn`
+              # caps every lint (however it was originally set) to at most a
+              # warning, so only a genuine compilation/tooling failure -- not
+              # lint severity -- can make this `cargo clippy` invocation
+              # itself fail. Its exit status is therefore preserved (no
+              # `|| true`): a nonzero exit here is a real failure.
+              #
+              # Scope to just the `config` crate with `--no-deps` (so
+              # upstream workspace deps like wezterm-char-props aren't
+              # linted either), capture full diagnostics as JSON, and hard-
+              # fail only on findings inside config/src/d2b.rs -- the file
+              # this seam wholly owns and maintains. clippy-scope-filter.sh
+              # also fails if the JSON itself can't be parsed/filtered,
+              # rather than silently treating that as "no findings".
+              cargo clippy -p config --all-targets --no-deps --offline \
+                --message-format=json -- --cap-lints=warn > clippy-config.json
+              bash nix/clippy-scope-filter.sh clippy-config.json config/src/d2b.rs
               runHook postBuild
             '';
             installPhase = "touch $out";

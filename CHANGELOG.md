@@ -24,12 +24,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   second fetch), giving `nix build .#source`/`nix flake check` attached
   lint/format coverage without changing the existing full source build.
   `cargo-fmt` checks `cargo fmt --all -- --check` across the whole tree.
-  `cargo-clippy` runs `cargo clippy -p config --all-targets --no-deps` and
+  `cargo-clippy` runs `cargo clippy -p config --all-targets --no-deps --
+  --cap-lints=warn` (no `|| true`, so a genuine compilation or tooling
+  failure fails the check), which caps every lint severity to at most a
+  warning so only that kind of real failure — never lint severity — can
+  make the `cargo clippy` invocation itself fail. The resulting
+  `--message-format=json` diagnostics are then filtered by the new
+  `nix/clippy-scope-filter.sh` helper (with a `--self-test` regression
+  mode covering finding/no-finding/malformed/empty-input cases), which
   hard-fails only on findings inside `config/src/d2b.rs`, the file this
-  seam wholly owns; the vendored upstream `wezterm`/`config` tree carries
-  pre-existing clippy findings outside this seam's ownership that this
-  check intentionally does not enforce, consistent with never reformatting
-  or rewriting upstream files.
+  seam wholly owns, and also hard-fails if the diagnostics can't be
+  parsed/filtered rather than silently treating that as "no findings".
+  The vendored upstream `wezterm`/`config` tree carries pre-existing
+  clippy findings outside this seam's ownership that this check
+  intentionally does not enforce, consistent with never reformatting or
+  rewriting upstream files.
 
 ### Changed
 
