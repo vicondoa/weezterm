@@ -61,12 +61,33 @@ impl TryFrom<RawD2bDomainConfig> for D2bDomainConfig {
     type Error = String;
 
     fn try_from(raw: RawD2bDomainConfig) -> Result<Self, Self::Error> {
-        let realm = RealmId::parse(raw.target.realm_id)
-            .map_err(|_| "d2b target has an invalid canonical realm id".to_string())?;
-        let workload = WorkloadId::parse(raw.target.workload_id)
-            .map_err(|_| "d2b target has an invalid canonical workload id".to_string())?;
+        // Include the configured domain name so a multi-domain config makes
+        // it obvious which `[[d2b_domains]]` entry failed. The rejected
+        // realm_id/workload_id value itself is never echoed back: it may be
+        // an operator typo, but it is still target-identity material we
+        // don't want to round-trip into error text or logs.
+        //
+        // `name` is captured into a local up front (rather than read via
+        // `raw.name` inside the error closures below) because this crate is
+        // on the 2018 edition, which captures whole variables rather than
+        // disjoint fields; reading `raw.name` after `raw.target.realm_id` /
+        // `raw.target.workload_id` are moved out would otherwise be a
+        // partial-move borrow error.
+        let name = raw.name;
+        let realm = RealmId::parse(raw.target.realm_id).map_err(|_| {
+            format!(
+                "d2b domain \"{}\" has a target with an invalid canonical realm id",
+                name
+            )
+        })?;
+        let workload = WorkloadId::parse(raw.target.workload_id).map_err(|_| {
+            format!(
+                "d2b domain \"{}\" has a target with an invalid canonical workload id",
+                name
+            )
+        })?;
         Ok(Self {
-            name: raw.name,
+            name,
             target: TargetInput::Workload { realm, workload },
         })
     }
@@ -186,13 +207,31 @@ mod test {
         let err = decode(serde_json::json!({
             "name": "work",
             "target": {
-                "realm_id": "work",
+                "realm_id": "Not-Canonical",
                 "workload_id": WORKLOAD_ID
             }
         }))
         .unwrap_err()
         .to_string();
         assert!(err.contains("canonical realm id"));
+        assert!(err.contains("\"work\""));
+        assert!(!err.contains("Not-Canonical"));
         assert!(!err.contains(WORKLOAD_ID));
+    }
+
+    #[test]
+    fn invalid_workload_id_names_the_domain_without_echoing_the_value() {
+        let err = decode(serde_json::json!({
+            "name": "personal",
+            "target": {
+                "realm_id": REALM_ID,
+                "workload_id": "not a canonical workload id"
+            }
+        }))
+        .unwrap_err()
+        .to_string();
+        assert!(err.contains("canonical workload id"));
+        assert!(err.contains("\"personal\""));
+        assert!(!err.contains("not a canonical workload id"));
     }
 }

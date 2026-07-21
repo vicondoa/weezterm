@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Pinned explicit `d2b` and `d2b-toolkit` `flake = false` inputs (matching
+  the exact `Cargo.lock` git revisions) in `flake.nix`/`nix/flake.nix`, and
+  threaded their locked `narHash` into `sourcePackage.cargoLock.outputHashes`
+  for the `d2b-client`, `d2b-contracts`, `d2b-session`, and
+  `d2b-client-toolkit` crates. `nix build .#source` now vendors those four
+  crates through the hermetic `fetchgit` fixed-output-derivation path with
+  `flake.lock` as the narHash authority, instead of relying solely on
+  `cargoLock.allowBuiltinFetchGit`'s impure fallback for them.
+  `allowBuiltinFetchGit` remains set for the seam's other, unrelated git
+  dependencies (`xcb-imdkit`, `finl_unicode`).
+- Added hermetic `checks.cargo-fmt` and `checks.cargo-clippy` flake outputs
+  that reuse `sourcePackage`'s pinned src/patches/vendored `cargoLock` (no
+  second fetch), giving `nix build .#source`/`nix flake check` attached
+  lint/format coverage without changing the existing full source build.
+  `cargo-fmt` checks `cargo fmt --all -- --check` across the whole tree.
+  `cargo-clippy` runs `cargo clippy -p config --all-targets --no-deps` and
+  hard-fails only on findings inside `config/src/d2b.rs`, the file this
+  seam wholly owns; the vendored upstream `wezterm`/`config` tree carries
+  pre-existing clippy findings outside this seam's ownership that this
+  check intentionally does not enforce, consistent with never reformatting
+  or rewriting upstream files.
+
 ### Changed
 
 - Migrated d2b configuration to the canonical v2 `TargetInput` workload type
@@ -24,6 +48,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   shell now provides `cargo-nextest` directly, and `make fmt` falls back to
   bare `cargo fmt` (which resolves to that same pinned nightly rustfmt) when
   no `rustup` is present instead of failing on `cargo +nightly fmt`.
+- d2b domain configuration errors for an invalid canonical `realm_id` or
+  `workload_id` now name the configured domain (`name`), so a multi-domain
+  config points at the right `[[d2b_domains]]` entry. The rejected
+  `realm_id`/`workload_id` value itself is still never echoed back.
 
 ### Removed
 

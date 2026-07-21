@@ -15,6 +15,19 @@ The Cargo lockfile binds both revisions through the facade. WeezTerm defines no
 d2b handshake, frame codec, request or response type, shell record, error
 envelope, or target parser.
 
+`nix build .#source` pins the same two revisions as explicit `flake = false`
+inputs (`d2b`, `d2b-toolkit`) in `flake.nix`/`nix/flake.nix`. Their `narHash`
+values (captured in `flake.lock`) are threaded into
+`sourcePackage.cargoLock.outputHashes` for the `d2b-client`, `d2b-contracts`,
+`d2b-session`, and `d2b-client-toolkit` crates, so vendoring those four
+crates goes through the hermetic `fetchgit` fixed-output-derivation path
+instead of `cargoLock.allowBuiltinFetchGit`'s impure fallback.
+`allowBuiltinFetchGit` remains set only for the seam's other, unrelated git
+dependencies (`xcb-imdkit`, `finl_unicode`). Bumping either revision requires
+updating the `Cargo.toml`/`Cargo.lock` git rev *and* the matching flake input
+URL, then re-running `nix flake lock` (both the root and `nix/` lockfiles) to
+refresh the pinned `narHash`.
+
 The toolkit flake package is named `d2b-client-toolkit`. Its immutable source
 layout is:
 
@@ -47,7 +60,10 @@ return {
 ```
 
 Both IDs use d2b's 20-character lowercase unpadded base32 short-ID grammar.
-Invalid IDs fail configuration without echoing the submitted identity.
+Invalid IDs fail configuration without echoing the submitted identity; the
+error names the configured `name` (the WeezTerm domain), not the rejected
+`realm_id`/`workload_id` value, so a multi-domain config still points at the
+right `[[d2b_domains]]` entry.
 String targets, VM aliases, and direct socket-path overrides are not accepted.
 
 ## Runtime boundary
