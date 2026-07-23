@@ -150,13 +150,6 @@ The following checks run in CI on every PR to `main`. All must pass before merge
 The **`windows`** job is the required status check for merge. The other jobs
 are informational but should also pass.
 
-`nix flake check` (or `nix build .#checks.<system>.cargo-fmt` /
-`.#checks.<system>.cargo-clippy` individually) additionally runs hermetic
-format/lint checks against `nix build .#source`'s exact pinned src, patches,
-and vendored `Cargo.lock` (including the `d2b`/`d2b-toolkit` git dependencies
-pinned via the `d2b`/`d2b-toolkit` flake inputs) -- no ambient rustup or
-cargo-nextest assumed.
-
 ### If `make` is available
 
 `make precommit` runs format + check + tests but does NOT cross-build for Linux:
@@ -168,12 +161,6 @@ cargo nextest run -p wezterm-escape-parser
 ```
 
 Prefer `ci/build-cross.sh` which covers both platforms.
-
-**In a `nix develop` shell**, `make precommit` is hermetic: the dev shell
-pins `cargo-nextest` directly, and `make fmt` falls back to bare `cargo fmt`
-(which resolves to that same pinned nightly rustfmt) because there is no
-`rustup` to satisfy the `+nightly` toolchain selector. Rustup-based
-checkouts are unaffected and keep using `cargo +nightly fmt`.
 
 **Important**: The Linux/WSL build uses a separate Rust toolchain and can
 surface warnings/errors that don't appear on Windows (e.g., unused code

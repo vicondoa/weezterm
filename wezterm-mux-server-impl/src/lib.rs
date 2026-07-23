@@ -90,13 +90,39 @@ fn update_mux_domains_impl(config: &ConfigHandle, is_standalone_mux: bool) -> an
     }
 
     // --- weezterm remote features ---
+    #[cfg(target_os = "linux")]
+    let bound_target = mux::d2b::bound_target_from_env().map_err(anyhow::Error::msg)?;
+
+    #[cfg(target_os = "linux")]
+    for d2b_dom in &config.d2b_domains {
+        if let Some(bound_target) = bound_target.as_deref() {
+            if bound_target != d2b_dom.target.as_str() {
+                continue;
+            }
+        }
+        if mux.get_domain_by_name(&d2b_dom.name).is_some() {
+            continue;
+        }
+
+        let mut runtime = mux::d2b::D2bRuntimeConfig::default();
+        if let Some(socket_path) = &d2b_dom.socket_path {
+            runtime.socket_path = socket_path.clone();
+        }
+        let domain: Arc<dyn Domain> = Arc::new(mux::d2b::native_domain_with_name(
+            d2b_dom.name.clone(),
+            d2b_dom.target.clone(),
+            runtime,
+        )?);
+        mux.add_domain(&domain);
+    }
+
+    #[cfg(not(target_os = "linux"))]
     for d2b_dom in &config.d2b_domains {
         log::warn!(
-            "Ignoring d2b domain {}: workload-to-shell routing is not available yet",
+            "Ignoring d2b domain {}: native d2b domains are only supported on Linux",
             d2b_dom.name
         );
     }
-    // --- end weezterm remote features ---
 
     for dc_dom in &config.devcontainer_domains {
         if mux.get_domain_by_name(&dc_dom.name).is_some() {

@@ -17,6 +17,8 @@ pub mod selector;
 
 // --- weezterm remote features ---
 pub mod config_overlay;
+#[cfg(target_os = "linux")]
+pub mod d2b_launcher;
 pub mod devcontainer;
 pub mod port_forward;
 

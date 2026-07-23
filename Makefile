@@ -26,19 +26,7 @@ build:
 	cargo build $(BUILD_OPTS) -p strip-ansi-escapes
 
 fmt:
-	@# --- weezterm remote features ---
-	@# `nix develop` shells put a pinned nightly rustfmt directly on PATH and
-	@# have no rustup, so `cargo +nightly fmt` fails there with "no such
-	@# command: `+nightly`". Rustup-based checkouts keep selecting the
-	@# nightly toolchain explicitly; only fall back to bare `cargo fmt` (which
-	@# cargo resolves to that same pinned nightly rustfmt) when rustup is
-	@# absent, so non-Nix contributor behavior is unchanged.
-	@if command -v rustup >/dev/null 2>&1; then \
-		cargo +nightly fmt; \
-	else \
-		cargo fmt; \
-	fi
-	@# --- end weezterm remote features ---
+	cargo +nightly fmt
 
 docs:
 	ci/build-docs.sh
