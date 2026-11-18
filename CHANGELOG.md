@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Derived tab-bar colors (when no explicit `colors.tab_bar` is configured) now
+  enforce a minimum WCAG contrast ratio between every label and its background,
+  so inactive tabs on dark schemes no longer render as unreadable gray-on-gray.
+  (#51)
+
 ## [0.7.2] - 2026-07-13
 
 ### Fixed
