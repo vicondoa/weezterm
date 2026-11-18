@@ -12,27 +12,83 @@ use wezterm_term::color::{ColorPalette, SrgbaTuple};
 use window::{IntegratedTitleButtonAlignment, IntegratedTitleButtonStyle};
 
 // --- weezterm remote features ---
+/// Convert an sRGB palette color to the 8-bit `RgbaColor` the tab bar
+/// configuration uses.
+fn to_rgba_color(c: SrgbaTuple) -> RgbaColor {
+    let (r, g, b, _a) = c.as_rgba_u8();
+    RgbaColor::from((r, g, b))
+}
+
+/// Lighten (positive) or darken (negative) a color by a uniform amount.
+fn adjust_color(c: SrgbaTuple, amount: i16) -> SrgbaTuple {
+    let (r, g, b, a) = c.as_rgba_u8();
+    SrgbaTuple::from((
+        (r as i16 + amount).clamp(0, 255) as u8,
+        (g as i16 + amount).clamp(0, 255) as u8,
+        (b as i16 + amount).clamp(0, 255) as u8,
+    ))
+}
+
+/// Relative luminance of an sRGB color per WCAG 2.x, using the 8-bit
+/// components that the tab bar colors carry.
+fn relative_luminance(c: SrgbaTuple) -> f64 {
+    fn channel(v: u8) -> f64 {
+        let v = v as f64 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let (r, g, b, _) = c.as_rgba_u8();
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// Contrast ratio between two colors per WCAG 2.x (range 1..=21).
+fn contrast_ratio(a: SrgbaTuple, b: SrgbaTuple) -> f64 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    let (hi, lo) = (la.max(lb), la.min(lb));
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Nudge `text` toward white (on dark backgrounds) or black (on light
+/// backgrounds) in 10-unit steps until it reaches at least `min_ratio`
+/// contrast against `bg`. Stops early if the channel saturates, so the
+/// result is always returned even for pathological palettes.
+fn ensure_contrast(text: SrgbaTuple, bg: SrgbaTuple, min_ratio: f64) -> RgbaColor {
+    const STEP: i16 = 10;
+    const MAX_STEPS: usize = 24;
+
+    if contrast_ratio(text, bg) >= min_ratio {
+        return to_rgba_color(text);
+    }
+
+    let is_light_bg = {
+        let (r, g, b, _) = bg.as_rgba_u8();
+        (r as u16 + g as u16 + b as u16) / 3 > 128
+    };
+    let step = if is_light_bg { -STEP } else { STEP };
+
+    let mut current = text;
+    for _ in 0..MAX_STEPS {
+        current = adjust_color(current, step);
+        if contrast_ratio(current, bg) >= min_ratio {
+            break;
+        }
+    }
+    to_rgba_color(current)
+}
+
 /// Derive sensible tab bar colors from a terminal color palette.
 /// This is used when no explicit `tab_bar` colors are configured, so
 /// the tab bar follows the active color scheme automatically.
+///
+/// Every derived text/background pair is passed through `ensure_contrast`
+/// so the labels stay readable on any palette; dimmed inactive-tab text in
+/// particular used to end up as gray-on-gray on several dark schemes.
 fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
     let bg = palette.background;
     let fg = palette.foreground;
-
-    // Helper to convert SrgbaTuple to RgbaColor
-    let to_rgba = |c: SrgbaTuple| -> RgbaColor {
-        let (r, g, b, _a) = c.as_rgba_u8();
-        RgbaColor::from((r, g, b))
-    };
-
-    // Helper to lighten or darken a color for visual hierarchy
-    let adjust = |c: SrgbaTuple, amount: i16| -> RgbaColor {
-        let (r, g, b, _a) = c.as_rgba_u8();
-        let r = (r as i16 + amount).clamp(0, 255) as u8;
-        let g = (g as i16 + amount).clamp(0, 255) as u8;
-        let b = (b as i16 + amount).clamp(0, 255) as u8;
-        RgbaColor::from((r, g, b))
-    };
 
     // Detect if this is a "light" scheme (bright background)
     let (br, bg_g, bb, _) = bg.as_rgba_u8();
@@ -42,42 +98,184 @@ fn derive_tab_bar_colors_from_palette(palette: &ColorPalette) -> TabBarColors {
     // For light themes, darken for contrast; for dark themes, lighten
     let step = if is_light { -25i16 } else { 25i16 };
 
+    let bar_bg = adjust_color(bg, step);
+
     // Active tab should visually pop against the bar background.
     // Always invert: use fg as bg and bg as fg so the active tab
     // stands out regardless of whether the scheme is light or dark.
-    let (active_bg, active_fg) = (to_rgba(fg), to_rgba(bg));
+    let active_bg = to_rgba_color(fg);
+    let active_fg = ensure_contrast(bg, fg, 3.0);
+
+    // Inactive tabs keep a de-emphasized label, but the text is nudged
+    // toward contrast so the dimming can never make it unreadable.
+    let inactive_fg_src = adjust_color(fg, if is_light { 80 } else { -80 });
+    let inactive_fg = ensure_contrast(inactive_fg_src, bar_bg, 3.0);
 
     TabBarColors {
-        background: Some(adjust(bg, step)),
+        background: Some(to_rgba_color(bar_bg)),
         active_tab: Some(TabBarColor {
             bg_color: active_bg,
             fg_color: active_fg,
             ..TabBarColor::default()
         }),
         inactive_tab: Some(TabBarColor {
-            bg_color: adjust(bg, step),
-            fg_color: adjust(fg, if is_light { 80 } else { -80 }),
+            bg_color: to_rgba_color(bar_bg),
+            fg_color: inactive_fg,
             ..TabBarColor::default()
         }),
         inactive_tab_hover: Some(TabBarColor {
-            bg_color: adjust(bg, step * 2),
-            fg_color: to_rgba(fg),
+            bg_color: to_rgba_color(adjust_color(bg, step * 2)),
+            fg_color: ensure_contrast(fg, adjust_color(bg, step * 2), 3.0),
             ..TabBarColor::default()
         }),
         new_tab: Some(TabBarColor {
-            bg_color: adjust(bg, step),
-            fg_color: adjust(fg, if is_light { 80 } else { -80 }),
+            bg_color: to_rgba_color(bar_bg),
+            fg_color: inactive_fg,
             ..TabBarColor::default()
         }),
         new_tab_hover: Some(TabBarColor {
-            bg_color: adjust(bg, step * 2),
-            fg_color: to_rgba(fg),
+            bg_color: to_rgba_color(adjust_color(bg, step * 2)),
+            fg_color: ensure_contrast(fg, adjust_color(bg, step * 2), 3.0),
             ..TabBarColor::default()
         }),
-        inactive_tab_edge: Some(to_rgba(fg)),
-        inactive_tab_edge_hover: Some(to_rgba(fg)),
+        inactive_tab_edge: Some(to_rgba_color(fg)),
+        inactive_tab_edge_hover: Some(to_rgba_color(fg)),
     }
 }
+
+#[cfg(test)]
+mod tab_color_tests {
+    use super::*;
+
+    fn palette(background: (u8, u8, u8), foreground: (u8, u8, u8)) -> ColorPalette {
+        ColorPalette {
+            background: SrgbaTuple::from(background),
+            foreground: SrgbaTuple::from(foreground),
+            ..ColorPalette::default()
+        }
+    }
+
+    fn assert_min_contrast(fg: RgbaColor, bg: RgbaColor, min: f64, context: &str) {
+        let (fr, fgc, fb, _) = fg.as_rgba_u8();
+        let (br, bgc, bb, _) = bg.as_rgba_u8();
+        let ratio = contrast_ratio(
+            SrgbaTuple::from((fr, fgc, fb)),
+            SrgbaTuple::from((br, bgc, bb)),
+        );
+        assert!(
+            ratio >= min,
+            "{}: contrast {} < {} (fg {:?}, bg {:?})",
+            context,
+            ratio,
+            min,
+            fg,
+            bg
+        );
+    }
+
+    #[test]
+    fn dark_scheme_with_dim_foreground_stays_readable() {
+        // Regression for issue #51: a dark scheme whose foreground is
+        // already fairly dim produced gray-on-gray inactive tabs.
+        let p = palette((0x1a, 0x1b, 0x26), (0x88, 0x99, 0xaa));
+        let colors = derive_tab_bar_colors_from_palette(&p);
+
+        let inactive = colors.inactive_tab();
+        assert_min_contrast(
+            inactive.fg_color,
+            inactive.bg_color,
+            3.0,
+            "inactive tab on dark scheme",
+        );
+        assert_min_contrast(
+            colors.new_tab().fg_color,
+            colors.new_tab().bg_color,
+            3.0,
+            "new tab button on dark scheme",
+        );
+    }
+
+    #[test]
+    fn light_scheme_stays_readable() {
+        let p = palette((0xfa, 0xfa, 0xfa), (0x66, 0x77, 0x88));
+        let colors = derive_tab_bar_colors_from_palette(&p);
+
+        let inactive = colors.inactive_tab();
+        assert_min_contrast(
+            inactive.fg_color,
+            inactive.bg_color,
+            3.0,
+            "inactive tab on light scheme",
+        );
+    }
+
+    #[test]
+    fn active_tab_pair_meets_contrast() {
+        let p = palette((0x1a, 0x1b, 0x26), (0x88, 0x99, 0xaa));
+        let colors = derive_tab_bar_colors_from_palette(&p);
+
+        let active = colors.active_tab();
+        assert_min_contrast(
+            active.fg_color,
+            active.bg_color,
+            3.0,
+            "active tab on dark scheme",
+        );
+    }
+}
+// --- end weezterm remote features ---
+
+// --- weezterm remote features ---
+/// Relative luminance of an sRGB color per WCAG 2.x, using the 8-bit
+/// components that the tab bar colors carry.
+fn relative_luminance(c: SrgbaTuple) -> f64 {
+    fn channel(v: u8) -> f64 {
+        let v = v as f64 / 255.0;
+        if v <= 0.04045 {
+            v / 12.92
+        } else {
+            ((v + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    let (r, g, b, _) = c.as_rgba_u8();
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+/// Contrast ratio between two colors per WCAG 2.x (range 1..=21).
+fn contrast_ratio(a: SrgbaTuple, b: SrgbaTuple) -> f64 {
+    let (la, lb) = (relative_luminance(a), relative_luminance(b));
+    let (hi, lo) = (la.max(lb), la.min(lb));
+    (hi + 0.05) / (lo + 0.05)
+}
+
+/// Nudge `text` toward white (on dark backgrounds) or black (on light
+/// backgrounds) in 10-unit steps until it reaches at least `min_ratio`
+/// contrast against `bg`. Stops early if the channel saturates, so the
+/// result is always returned even for pathological palettes.
+fn ensure_contrast(text: SrgbaTuple, bg: SrgbaTuple, min_ratio: f64) -> RgbaColor {
+    const STEP: i16 = 10;
+    const MAX_STEPS: usize = 24;
+
+    if contrast_ratio(text, bg) >= min_ratio {
+        return to_rgba_color(text);
+    }
+
+    let is_light_bg = {
+        let (r, g, b, _) = bg.as_rgba_u8();
+        (r as u16 + g as u16 + b as u16) / 3 > 128
+    };
+    let step = if is_light_bg { -STEP } else { STEP };
+
+    let mut current = text;
+    for _ in 0..MAX_STEPS {
+        current = adjust_color(current, step);
+        if contrast_ratio(current, bg) >= min_ratio {
+            break;
+        }
+    }
+    to_rgba_color(current)
+}
+
 // --- end weezterm remote features ---
 
 const X_BUTTON: &[Poly] = &[
